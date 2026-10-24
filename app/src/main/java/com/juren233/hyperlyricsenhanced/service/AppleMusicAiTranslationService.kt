@@ -55,6 +55,18 @@ class AppleMusicAiTranslationService : Service() {
     override fun onBind(intent: Intent?): IBinder = endpoint
 
     private val endpoint = object : IAppleMusicAiTranslator.Stub() {
+        override fun cancel() {
+            if (!AppleMusicAiTranslationPolicy.isAuthorizedCaller(
+                    packageManager.getPackagesForUid(Binder.getCallingUid())
+                )
+            ) return
+            generation.incrementAndGet()
+            synchronized(requestLock) {
+                requestJob?.cancel()
+                requestJob = null
+            }
+        }
+
         override fun translate(compressedSong: ByteArray?, receiver: IAppleMusicTranslationReceiver?) {
             val callingUid = Binder.getCallingUid()
             val allowed = AppleMusicAiTranslationPolicy.isAuthorizedCaller(

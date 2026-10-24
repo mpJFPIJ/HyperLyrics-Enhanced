@@ -6,6 +6,7 @@ import android.content.SharedPreferences
 import android.os.Binder
 import android.os.IBinder
 import android.util.Log
+import com.juren233.hyperlyricsenhanced.utils.LogManager
 import com.juren233.hyperlyricsenhanced.IAppleMusicAiTranslator
 import com.juren233.hyperlyricsenhanced.IAppleMusicTranslationReceiver
 import com.juren233.hyperlyricsenhanced.common.RootConstants
@@ -49,10 +50,15 @@ class AppleMusicAiTranslationService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        AITranslator.init(applicationContext)
+        LogManager.i(TAG, "stage=service_created")
+        runCatching { AITranslator.init(applicationContext) }
+            .onFailure { LogManager.w(TAG, "stage=service_init_failed type=${it.javaClass.simpleName}") }
     }
 
-    override fun onBind(intent: Intent?): IBinder = endpoint
+    override fun onBind(intent: Intent?): IBinder {
+        LogManager.i(TAG, "stage=service_bound")
+        return endpoint
+    }
 
     private val endpoint = object : IAppleMusicAiTranslator.Stub() {
         override fun cancel() {
@@ -61,6 +67,7 @@ class AppleMusicAiTranslationService : Service() {
                 )
             ) return
             generation.incrementAndGet()
+            LogManager.i(TAG, "stage=request_cancelled")
             synchronized(requestLock) {
                 requestJob?.cancel()
                 requestJob = null
@@ -73,12 +80,16 @@ class AppleMusicAiTranslationService : Service() {
                 packageManager.getPackagesForUid(callingUid)
             )
             if (!allowed) {
-                Log.w(TAG, "Rejected translation request: caller is not Apple Music")
+                LogManager.w(TAG, "stage=caller_rejected")
                 return
             }
             if (receiver == null || compressedSong == null ||
                 compressedSong.isEmpty() || compressedSong.size > MAX_COMPRESSED_BYTES
-            ) return
+            ) {
+                LogManager.w(TAG, "stage=invalid_request")
+                return
+            }
+            LogManager.i(TAG, "stage=request_received bytes=${compressedSong.size}")
 
             val serial = generation.incrementAndGet()
             synchronized(requestLock) {
@@ -89,6 +100,7 @@ class AppleMusicAiTranslationService : Service() {
                         val song = json.decodeFromString<Song>(
                             compressedSong.inflate().toString(Charsets.UTF_8)
                         )
+                        LogManager.i(TAG, "stage=song_decoded lines=${song.lyrics.orEmpty().size}")
                         val forceOverride = prefs.getBoolean(
                             RootConstants.KEY_HOOK_AI_TRANS_FORCE_OVERRIDE,
                             RootConstants.DEFAULT_HOOK_AI_TRANS_FORCE_OVERRIDE
@@ -97,25 +109,50 @@ class AppleMusicAiTranslationService : Service() {
                             RootConstants.KEY_HOOK_AI_TRANS_SKIP_EXISTING_TRANSLATION,
                             RootConstants.DEFAULT_HOOK_AI_TRANS_SKIP_EXISTING_TRANSLATION
                         )
+                        val enabled = prefs.getBoolean(
+                            RootConstants.KEY_HOOK_AI_TRANS_ENABLE,
+                            RootConstants.DEFAULT_HOOK_AI_TRANS_ENABLE
+                        )
+                        val hasExisting = song.lyrics.orEmpty()
+                            .any { !it.translation.isNullOrBlank() }
                         if (!AppleMusicAiTranslationPolicy.shouldTranslate(
-                                enabled = prefs.getBoolean(
-                                    RootConstants.KEY_HOOK_AI_TRANS_ENABLE,
-                                    RootConstants.DEFAULT_HOOK_AI_TRANS_ENABLE
-                                ),
+                                enabled = enabled,
                                 hasLyrics = !song.lyrics.isNullOrEmpty(),
-                                hasExistingTranslation = song.lyrics.orEmpty()
-                                    .any { !it.translation.isNullOrBlank() },
+                                hasExistingTranslation = hasExisting,
                                 skipExisting = skipExisting,
                                 forceOverride = forceOverride,
                             )
-                        ) return@launch
+                        ) {
+                            LogManager.i(
+                                TAG, "stage=request_skipped enabled=$enabled " +
+                                    "hasLyrics=${!song.lyrics.isNullOrEmpty()} " +
+                                    "hasExisting=$hasExisting skipExisting=$skipExisting"
+                            )
+                            return@launch
+                        }
 
+                        val config = translationConfig(prefs)
+                        if (!config.isUsable) {
+                            LogManager.w(TAG, "stage=config_incomplete")
+                            return@launch
+                        }
+                        LogManager.i(TAG, "stage=translation_started")
                         val translated = AITranslator.translateSongSync(
                             song = song,
-                            configs = translationConfig(prefs),
+                            configs = config,
                             forceOverride = forceOverride,
                         )
-                        if (translated === song || serial != generation.get()) return@launch
+                        if (serial != generation.get()) {
+                            LogManager.i(TAG, "stage=result_stale")
+                            return@launch
+                        }
+                        val translatedLines = translated.lyrics.orEmpty()
+                            .count { !it.translation.isNullOrBlank() }
+                        if (translated === song || translatedLines == 0) {
+                            LogManager.w(TAG, "stage=no_translation_result")
+                            return@launch
+                        }
+                        LogManager.i(TAG, "stage=translation_completed lines=$translatedLines")
 
                         val result = json.encodeToString(translated)
                             .toByteArray(Charsets.UTF_8).deflate()
@@ -123,11 +160,13 @@ class AppleMusicAiTranslationService : Service() {
                             serial != generation.get()
                         ) return@launch
                         receiver.onOnlineTranslationResult(result)
+                        LogManager.i(TAG, "stage=result_sent bytes=${result.size}")
                     } catch (cancelled: CancellationException) {
+                        LogManager.i(TAG, "stage=request_cancelled_inflight")
                         throw cancelled
                     } catch (error: Exception) {
                         // Never log the lyrics, request body, or private API credentials.
-                        Log.w(TAG, "AI translation failed: ${error.javaClass.simpleName}")
+                        LogManager.w(TAG, "stage=translation_failed type=${error.javaClass.simpleName}")
                     }
                 }
             }

@@ -71,6 +71,12 @@
             </intent-filter>
         </activity-alias>
 
+        <!-- Single-process NPatch fallback: exported for the patched Apple Music UID.
+             Every Binder request verifies the Android calling UID; no API keys are returned. -->
+        <service
+            android:name=".service.AppleMusicAiTranslationService"
+            android:exported="true" />
+
         <service
             android:name=".service.LiveLyricService"
             android:label="@string/label_lyric_listener_service"

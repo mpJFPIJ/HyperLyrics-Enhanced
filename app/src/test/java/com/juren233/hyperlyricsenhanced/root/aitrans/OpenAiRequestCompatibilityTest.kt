@@ -21,7 +21,7 @@ class OpenAiRequestCompatibilityTest {
         val request = OpenAiChatRequest(
             model = "gemini-3.8-flash",
             messages = listOf(ChatMessage("user", "Example")),
-            responseFormat = ResponseFormat("json_object"),
+            responseFormat = null, // Gemini uses prompt-only JSON for compatibility
             temperature = null, topP = null,
             presencePenalty = null, frequencyPenalty = null,
         )
@@ -31,6 +31,7 @@ class OpenAiRequestCompatibilityTest {
         assertFalse(encoded.contains("top_p"))
         assertFalse(encoded.contains("presence_penalty"))
         assertFalse(encoded.contains("frequency_penalty"))
+        assertFalse(encoded.contains("response_format"))
     }
 
     @Test fun errorClassificationDoesNotEchoRemotePayload() {

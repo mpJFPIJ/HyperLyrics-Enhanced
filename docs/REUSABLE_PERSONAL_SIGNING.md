@@ -58,3 +58,10 @@ same package when the signing identities differ.
 - CI artifact starts with `temporary-debug-`: the secret is missing or
   unavailable for that PR; not safe to use as a repeatable update.
 - CI fails the signature verification step: do not install the APK.
+
+## First secret-enabled verification
+
+After registering `HLE_SIGNING_BUNDLE`, a new push to this branch triggers
+PR #1's build. Verify the run produced the artifact prefix
+`personal-updatable-signed-`, rather than the temporary-debug prefix.
+Only the former is appropriate for seamless future updates.

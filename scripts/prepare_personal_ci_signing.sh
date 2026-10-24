@@ -43,6 +43,17 @@ if ! keytool -list -storetype PKCS12 -keystore "$keystore_path" \
     exit 1
 fi
 
+# Pin this installation's certificate. A changed keystore must never be
+# uploaded as another "seamlessly updatable" artifact by accident.
+expected_sha256="56:CA:78:66:A4:66:1F:A8:48:C5:49:D2:C9:7B:4C:3A:8F:06:E3:46:DA:83:F1:EA:3E:FE:89:89:87:A9:F7:72"
+actual_sha256="$(keytool -list -v -storetype PKCS12 -keystore "$keystore_path" \
+    -storepass "$store_password" -alias hle 2>/dev/null \
+    | sed -nE 's/^[[:space:]]*SHA256: (.*)$/\1/p' | head -1)"
+if [[ "$actual_sha256" != "$expected_sha256" ]]; then
+    echo "::error::Signing certificate changed. Refusing to publish an APK that would break updates."
+    exit 1
+fi
+
 # Gradle's existing signing config reads these variables, so both debug and
 # release APKs can use the SAME signature on every subsequent PR run.
 {

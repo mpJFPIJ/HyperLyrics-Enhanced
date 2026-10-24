@@ -8,4 +8,5 @@ import com.juren233.hyperlyricsenhanced.IAppleMusicTranslationReceiver;
  */
 oneway interface IAppleMusicAiTranslator {
     void translate(in byte[] compressedSong, IAppleMusicTranslationReceiver receiver);
+    void cancel();
 }

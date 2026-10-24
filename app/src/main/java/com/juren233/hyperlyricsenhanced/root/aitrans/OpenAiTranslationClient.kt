@@ -1,6 +1,7 @@
 ﻿package com.juren233.hyperlyricsenhanced.root.aitrans
 
 import com.juren233.hyperlyricsenhanced.root.utils.HookLogger
+import com.juren233.hyperlyricsenhanced.utils.LogManager
 import com.juren233.hyperlyricsenhanced.common.extensions.json
 import com.juren233.hyperlyricsenhanced.common.extensions.toJson
 import com.juren233.hyperlyricsenhanced.lyric.model.Song
@@ -21,6 +22,7 @@ internal object OpenAiTranslationClient {
         texts: List<String>
     ): List<TranslationItem>? = withContext(Dispatchers.IO) {
         if (configs.apiKey.isNullOrBlank()) {
+            LogManager.w("AppleMusicAiService", "stage=http_skipped reason=missing_api_key")
             HookLogger.w("OpenAiTranslationClient", "跳过翻译请求: reason=missing_api_key")
             return@withContext null
         }
@@ -75,6 +77,7 @@ internal object OpenAiTranslationClient {
 
             val responseCode = connection.responseCode
             if (responseCode == HttpURLConnection.HTTP_OK) {
+                LogManager.i("AppleMusicAiService", "stage=http_success code=$responseCode")
                 val responseBody = connection.inputStream.bufferedReader().use { it.readText() }
                 val responseObj = json.decodeFromString<OpenAiChatResponse>(responseBody)
                 val content = responseObj.choices.firstOrNull()?.message?.content ?: run {
@@ -84,16 +87,20 @@ internal object OpenAiTranslationClient {
             HookLogger.d("OpenAiTranslationClient", "翻译请求完成: code=$responseCode")
                 AITranslationResponseParser.parse(content, requestIndices)
             } else {
-                val errorBody = connection.errorStream?.bufferedReader()?.use { it.readText() } ?: "无错误信息"
+                // Do not persist the API's response body: it can echo private
+                // prompts, credentials, or copyrighted lyric fragments.
+                LogManager.w("AppleMusicAiService", "stage=http_rejected code=$responseCode")
             HookLogger.e("OpenAiTranslationClient", "翻译请求失败: code=$responseCode")
                 null
             }
         } catch (e: CancellationException) {
             throw e
         } catch (_: EOFException) {
+            LogManager.w("AppleMusicAiService", "stage=http_io_failed type=EOFException")
             HookLogger.w("OpenAiTranslationClient", "翻译连接意外关闭: reason=EOF")
             null
         } catch (e: Exception) {
+            LogManager.w("AppleMusicAiService", "stage=http_io_failed type=${e.javaClass.simpleName}")
             HookLogger.e(
                 "OpenAiTranslationClient",
                 "翻译网络请求异常: type=${e.javaClass.simpleName}",

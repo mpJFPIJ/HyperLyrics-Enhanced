@@ -38,7 +38,6 @@ import java.util.concurrent.atomic.AtomicLong
 class AppleMusicAiTranslationService : Service() {
     private companion object {
         const val TAG = "AppleMusicAiService"
-        const val APPLE_MUSIC_PACKAGE = "com.apple.android.music"
         const val MAX_COMPRESSED_BYTES = 768 * 1024
     }
 
@@ -58,8 +57,9 @@ class AppleMusicAiTranslationService : Service() {
     private val endpoint = object : IAppleMusicAiTranslator.Stub() {
         override fun translate(compressedSong: ByteArray?, receiver: IAppleMusicTranslationReceiver?) {
             val callingUid = Binder.getCallingUid()
-            val allowed = packageManager.getPackagesForUid(callingUid)
-                ?.contains(APPLE_MUSIC_PACKAGE) == true
+            val allowed = AppleMusicAiTranslationPolicy.isAuthorizedCaller(
+                packageManager.getPackagesForUid(callingUid)
+            )
             if (!allowed) {
                 Log.w(TAG, "Rejected translation request: caller is not Apple Music")
                 return
@@ -74,17 +74,9 @@ class AppleMusicAiTranslationService : Service() {
                 requestJob = scope.launch {
                     try {
                         val prefs = getSharedPreferences(UIConstants.PREF_NAME, MODE_PRIVATE)
-                        if (!prefs.getBoolean(
-                                RootConstants.KEY_HOOK_AI_TRANS_ENABLE,
-                                RootConstants.DEFAULT_HOOK_AI_TRANS_ENABLE
-                            )
-                        ) return@launch
-
                         val song = json.decodeFromString<Song>(
                             compressedSong.inflate().toString(Charsets.UTF_8)
                         )
-                        if (song.lyrics.isNullOrEmpty()) return@launch
-
                         val forceOverride = prefs.getBoolean(
                             RootConstants.KEY_HOOK_AI_TRANS_FORCE_OVERRIDE,
                             RootConstants.DEFAULT_HOOK_AI_TRANS_FORCE_OVERRIDE
@@ -93,8 +85,17 @@ class AppleMusicAiTranslationService : Service() {
                             RootConstants.KEY_HOOK_AI_TRANS_SKIP_EXISTING_TRANSLATION,
                             RootConstants.DEFAULT_HOOK_AI_TRANS_SKIP_EXISTING_TRANSLATION
                         )
-                        if (skipExisting && !forceOverride &&
-                            song.lyrics.orEmpty().any { !it.translation.isNullOrBlank() }
+                        if (!AppleMusicAiTranslationPolicy.shouldTranslate(
+                                enabled = prefs.getBoolean(
+                                    RootConstants.KEY_HOOK_AI_TRANS_ENABLE,
+                                    RootConstants.DEFAULT_HOOK_AI_TRANS_ENABLE
+                                ),
+                                hasLyrics = !song.lyrics.isNullOrEmpty(),
+                                hasExistingTranslation = song.lyrics.orEmpty()
+                                    .any { !it.translation.isNullOrBlank() },
+                                skipExisting = skipExisting,
+                                forceOverride = forceOverride,
+                            )
                         ) return@launch
 
                         val translated = AITranslator.translateSongSync(

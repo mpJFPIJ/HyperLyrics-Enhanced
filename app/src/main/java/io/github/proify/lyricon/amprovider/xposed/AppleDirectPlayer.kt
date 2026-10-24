@@ -329,9 +329,12 @@ internal class AppleDirectPlayer(
         get() = connection.current?.binder?.isBinderAlive == true
 
     override fun setSong(song: Song?): Boolean {
-        val payload = song?.let {
-            json.encodeToString(it).toByteArray(Charsets.UTF_8).deflate()
-        } ?: byteArrayOf()
+        val payload = runCatching {
+            song?.let { json.encodeToString(it).toByteArray(Charsets.UTF_8).deflate() }
+                ?: byteArrayOf()
+        }.onFailure {
+            ProviderLogger.error("standalone_ai stage=song_encode_failed type=${it.javaClass.simpleName}")
+        }.getOrNull() ?: return false
         if (payload.size > MAX_DIRECT_PAYLOAD_BYTES) {
             ProviderLogger.error("直连歌词载荷过大：bytes=${payload.size}")
             return false
@@ -420,7 +423,10 @@ internal class CompositeRemotePlayer(
 
     override fun setSong(song: Song?): Boolean {
         val centralResult = runCatching { central.setSong(song) }.getOrDefault(false)
-        val directResult = runCatching { direct.setSong(song) }.getOrDefault(false)
+        val directResult = runCatching { direct.setSong(song) }
+            .onFailure {
+                ProviderLogger.error("standalone_ai stage=direct_publish_failed type=${it.javaClass.simpleName}")
+            }.getOrDefault(false)
         if (BuildConfig.DEBUG) AppleMetadataFlowDiagnostics.record("provider_fanout") {
             "centralResult=$centralResult directResult=$directResult " +
                 "song=${AppleMetadataFlowDiagnostics.provider(song)}"

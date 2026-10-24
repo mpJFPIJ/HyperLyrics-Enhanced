@@ -89,6 +89,15 @@ jobs:
         if: steps.gate.outputs.skip != 'true'
         run: chmod +x gradlew .github/scripts/resolve-version.sh
 
+      # Private signing is enabled only for pull requests created from branches
+      # inside this repository. External forks never receive signing secrets.
+      - name: Prepare repeatable personal update signature
+        id: personal_signing
+        if: steps.gate.outputs.skip != 'true' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          HLE_SIGNING_BUNDLE: ${{ secrets.HLE_SIGNING_BUNDLE }}
+        run: bash scripts/prepare_personal_ci_signing.sh
+
       - name: 本地逻辑与静态检查 Unit Tests and Lint
         if: steps.gate.outputs.skip != 'true'
         run: |
@@ -120,12 +129,32 @@ jobs:
           test -n "$RELEASE_APK"
           python3 scripts/verify_official_provider_abi.py "$RELEASE_APK"
 
-      - name: 上传 PR 构建产物 Upload PR Artifacts
-        if: github.event_name == 'pull_request' && steps.gate.outputs.skip == 'false'
+      # A successful Gradle build does not prove the installer signature.
+      # Verify it before publishing an APK that is advertised as updatable.
+      - name: Verify repeatable personal update APK signature
+        if: github.event_name == 'pull_request' && steps.personal_signing.outputs.ready == 'true'
+        run: |
+          set -euo pipefail
+          APK=$(find app/build/outputs/apk/debug -maxdepth 1 -type f -name '*-debug.apk' -print -quit)
+          test -n "$APK"
+          "$ANDROID_SDK_ROOT/build-tools/34.0.0/apksigner" verify --verbose --print-certs "$APK"
+
+      - name: Upload updatable signed PR APK
+        if: github.event_name == 'pull_request' && steps.gate.outputs.skip == 'false' && steps.personal_signing.outputs.ready == 'true'
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ steps.gate.outputs.channel }}-debug-v${{ steps.gate.outputs.full_name }}-${{ steps.gate.outputs.code }}
-          path: app/build/outputs/apk/**/*.apk
+          name: personal-updatable-signed-v${{ steps.gate.outputs.full_name }}-${{ github.run_number }}
+          path: app/build/outputs/apk/debug/*-debug.apk
+          if-no-files-found: error
+
+      # Without the repository secret, AGP creates a disposable debug key.
+      # Explicitly name the artifact so users cannot mistake it for an update.
+      - name: Upload temporary diagnostic PR APK
+        if: github.event_name == 'pull_request' && steps.gate.outputs.skip == 'false' && steps.personal_signing.outputs.ready != 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: temporary-debug-signature-not-updatable-v${{ steps.gate.outputs.full_name }}-${{ github.run_number }}
+          path: app/build/outputs/apk/debug/*-debug.apk
           if-no-files-found: error
 
       - name: 解码签名密钥 Decode Keystore

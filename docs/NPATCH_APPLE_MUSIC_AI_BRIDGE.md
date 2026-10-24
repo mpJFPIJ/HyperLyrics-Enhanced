@@ -69,3 +69,35 @@ UID from the installed Enhanced app, and therefore cannot access a private
 service. The IPC implementation verifies the binder caller's package using
 Android's UID/package mapping before any request is accepted. It never serves
 credentials. This is not a general-purpose public translation API.
+
+## Diagnostics added after real NPatch logs (2026-10-24)
+
+The supplied Samsung / Apple Music 6.5.3 diagnostics show the patched module
+initializes and Apple Music publishes **40 synchronized lyric lines** for
+`Lemon`. In the Enhanced app, restored preferences show AI translation enabled,
+the Korean target, a nonempty stored credential, and native Apple Music translation
+enabled. Neither upload proves an AI request succeeded or that a translated result
+was delivered: the original service wrote almost no events to the app's exported
+logs.
+
+The new diagnostic build records safe, credential-free stages:
+
+- In NPatch's Apple Music diagnostics:
+  `standalone_ai stage=module_initialized`, `song_submitted`,
+  `bind_requested`, `service_connected`, `request_dispatched`,
+  `reply_received`, or `ipc_failed`.
+- In Enhanced's **Export All Logs**:
+  `AppleMusicAiService stage=service_created`, `service_bound`,
+  `request_received`, `song_decoded`, `translation_started`,
+  `http_success` / `http_rejected`, `translation_completed`, and
+  `result_sent`. The stage `no_translation_result` indicates that no
+  translated lines were generated; `request_skipped` explains eligibility
+  decisions. No raw song text, API keys, response bodies, or tokens are logged.
+
+The original `com.airbnb.epoxy.s#notifyItemChanged/1` error remains a
+**separate metadata update bug**; its presence alone does not explain the
+AI bridge failure.
+
+The source is updated but the new build must be compiled and tested before
+calling this an end-to-end fix.
+

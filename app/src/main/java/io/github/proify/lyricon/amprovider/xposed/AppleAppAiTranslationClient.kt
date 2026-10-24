@@ -73,6 +73,9 @@ internal class AppleAppAiTranslationClient(
             pending = compressedSong.takeIf { it.isNotEmpty() }?.copyOf()
             if (pending == null || isSystemUiBridgeActive()) {
                 pending = null
+                // Stop spending API tokens on a song that has ended or was
+                // handed back to the regular SystemUI path.
+                runCatching { binder?.cancel() }
                 return@post
             }
             bindIfNeeded()

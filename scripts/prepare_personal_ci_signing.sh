@@ -5,13 +5,14 @@
 # Never print the bundle, keystore, or passwords.
 set -euo pipefail
 
-if [[ -z "${GITHUB_ENV:-}" || -z "${RUNNER_TEMP:-}" ]]; then
+if [[ -z "${GITHUB_ENV:-}" || -z "${GITHUB_OUTPUT:-}" || -z "${RUNNER_TEMP:-}" ]]; then
     echo "GitHub Actions environment is required" >&2
     exit 1
 fi
 
 if [[ -z "${HLE_SIGNING_BUNDLE:-}" ]]; then
     echo "HLE_UPDATE_SIGNED=false" >> "$GITHUB_ENV"
+    echo "ready=false" >> "$GITHUB_OUTPUT"
     echo "::warning::HLE_SIGNING_BUNDLE is not configured. This PR produces a temporary debug APK, NOT an updatable signed APK."
     exit 0
 fi
@@ -51,6 +52,7 @@ fi
     echo "RELEASE_KEY_ALIAS=hle"
     echo "HLE_UPDATE_SIGNED=true"
 } >> "$GITHUB_ENV"
+echo "ready=true" >> "$GITHUB_OUTPUT"
 
 # Erase the secret value from this process after the environment is exported.
 unset encoded_key store_password HLE_SIGNING_BUNDLE

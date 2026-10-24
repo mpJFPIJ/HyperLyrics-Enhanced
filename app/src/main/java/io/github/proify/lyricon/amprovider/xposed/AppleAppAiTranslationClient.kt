@@ -39,11 +39,13 @@ internal class AppleAppAiTranslationClient(
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName, service: IBinder) {
             binder = IAppleMusicAiTranslator.Stub.asInterface(service)
+            ProviderLogger.info("standalone_ai stage=service_connected")
             dispatchPending()
         }
 
         override fun onServiceDisconnected(name: ComponentName) {
             binder = null
+            ProviderLogger.info("standalone_ai stage=service_disconnected")
         }
 
         override fun onBindingDied(name: ComponentName) {
@@ -71,6 +73,10 @@ internal class AppleAppAiTranslationClient(
             previous = compressedSong.copyOf()
             generation += 1
             pending = compressedSong.takeIf { it.isNotEmpty() }?.copyOf()
+            ProviderLogger.info(
+                "standalone_ai stage=song_submitted bytes=${compressedSong.size} " +
+                    "generation=$generation bridgeActive=${isSystemUiBridgeActive()}"
+            )
             if (pending == null || isSystemUiBridgeActive()) {
                 pending = null
                 // Stop spending API tokens on a song that has ended or was
@@ -88,7 +94,10 @@ internal class AppleAppAiTranslationClient(
         val intent = Intent().setClassName(APP_PACKAGE, SERVICE_CLASS)
         binding = runCatching {
             appContext.bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
+        }.onFailure {
+            ProviderLogger.error("standalone_ai stage=bind_exception type=${it.javaClass.simpleName}")
         }.getOrDefault(false)
+        ProviderLogger.info("standalone_ai stage=bind_requested success=$binding")
         if (!binding) {
             // The separately installed app may not be present yet. Do not
             // permanently deduplicate this song if connecting was impossible.
@@ -106,10 +115,18 @@ internal class AppleAppAiTranslationClient(
         val songPayload = pending ?: return
         val requestGeneration = generation
         pending = null
+        ProviderLogger.info(
+            "standalone_ai stage=request_dispatched bytes=${songPayload.size} generation=$requestGeneration"
+        )
 
         val callback = object : IAppleMusicTranslationReceiver.Stub() {
             override fun onOnlineTranslationResult(compressedSong: ByteArray) {
-                if (requestGeneration == generation && !isSystemUiBridgeActive()) {
+                val current = requestGeneration == generation && !isSystemUiBridgeActive()
+                ProviderLogger.info(
+                    "standalone_ai stage=reply_received bytes=${compressedSong.size} " +
+                        "current=$current"
+                )
+                if (current) {
                     onTranslationReceived(compressedSong)
                 }
             }
@@ -133,8 +150,11 @@ internal class AppleAppAiTranslationClient(
             target.translate(songPayload, callback)
         }.onFailure {
             binder = null
+            // The service may have died after connection; allow a later song
+            // publication to retry instead of silently losing the request.
+            previous = null
             ProviderLogger.error(
-                "Apple Music standalone AI request failed: ${it.javaClass.simpleName}"
+                "standalone_ai stage=ipc_failed type=${it.javaClass.simpleName}"
             )
         }
     }

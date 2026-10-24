@@ -50,7 +50,10 @@ internal object OpenAiTranslationClient {
                 ChatMessage("system", AITranslationPrompt.build(configs, song)),
                 ChatMessage("user", payload.toJson())
             ),
-            responseFormat = ResponseFormat("json_object"),
+            // Google's officially documented OpenAI-compatible call requires
+            // only model + messages. The prompt already specifies the JSON
+            // response structure, and our parser accepts fenced JSON as well.
+            responseFormat = ResponseFormat("json_object").takeUnless { isGoogleGemini },
             // Gemini 3.6+ deprecates explicit sampling controls. Google's
             // OpenAI-compatible gateway may also reject OpenAI penalties.
             // Leave these absent so the Gemini endpoint uses safe defaults.

@@ -152,6 +152,14 @@ internal class AppleDirectPlayer(
         }
     }
 
+    // The app process is the sole owner of AI API credentials. In NPatch mode
+    // there is no SystemUI receiver, so request translation through its Binder.
+    private val appAiTranslation = AppleAppAiTranslationClient(
+        context = context,
+        isSystemUiBridgeActive = { isActive },
+        onTranslationReceived = onOnlineTranslationReceived,
+    )
+
     private val registrationReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             if (!registered) return
@@ -329,6 +337,8 @@ internal class AppleDirectPlayer(
             return false
         }
         latestSongPayload = payload
+        // Clear any older fallback request once SystemUI's regular bridge is active.
+        appAiTranslation.submit(if (isActive) byteArrayOf() else payload)
         return send(reconnectIfMissing = true) { target -> target.onSongChanged(payload) }
     }
 

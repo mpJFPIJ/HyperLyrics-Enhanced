@@ -90,6 +90,9 @@ internal class AppleAppAiTranslationClient(
             appContext.bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
         }.getOrDefault(false)
         if (!binding) {
+            // The separately installed app may not be present yet. Do not
+            // permanently deduplicate this song if connecting was impossible.
+            previous = null
             ProviderLogger.info("Apple Music standalone AI service unavailable")
         }
     }

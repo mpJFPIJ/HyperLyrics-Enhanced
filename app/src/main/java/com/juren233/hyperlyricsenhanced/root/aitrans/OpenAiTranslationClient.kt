@@ -43,6 +43,7 @@ internal object OpenAiTranslationClient {
 
         val payload = TranslationRequest(lyrics = requestItems)
         val requestIndices = requestItems.map { it.index }.toSet()
+        val isGoogleGemini = OpenAiRequestCompatibility.isGoogleGemini(configs.model, baseUrl)
         val chatRequest = OpenAiChatRequest(
             model = configs.model.orEmpty(),
             messages = listOf(
@@ -50,12 +51,18 @@ internal object OpenAiTranslationClient {
                 ChatMessage("user", payload.toJson())
             ),
             responseFormat = ResponseFormat("json_object"),
-            temperature = configs.temperature,
-            topP = configs.topP,
+            // Gemini 3.6+ deprecates explicit sampling controls. Google's
+            // OpenAI-compatible gateway may also reject OpenAI penalties.
+            // Leave these absent so the Gemini endpoint uses safe defaults.
+            temperature = configs.temperature.takeUnless { isGoogleGemini },
+            topP = configs.topP.takeUnless { isGoogleGemini },
             maxTokens = configs.maxTokens.takeIf { it > 0 },
-            presencePenalty = configs.presencePenalty,
-            frequencyPenalty = configs.frequencyPenalty
+            presencePenalty = configs.presencePenalty.takeUnless { isGoogleGemini },
+            frequencyPenalty = configs.frequencyPenalty.takeUnless { isGoogleGemini }
         )
+        if (isGoogleGemini) {
+            LogManager.i("AppleMusicAiService", "stage=gemini_request_compat model=${configs.model}")
+        }
 
         var connection: HttpURLConnection? = null
         try {
@@ -87,10 +94,17 @@ internal object OpenAiTranslationClient {
             HookLogger.d("OpenAiTranslationClient", "翻译请求完成: code=$responseCode")
                 AITranslationResponseParser.parse(content, requestIndices)
             } else {
-                // Do not persist the API's response body: it can echo private
-                // prompts, credentials, or copyrighted lyric fragments.
-                LogManager.w("AppleMusicAiService", "stage=http_rejected code=$responseCode")
-            HookLogger.e("OpenAiTranslationClient", "翻译请求失败: code=$responseCode")
+                // The error body is read only for allowlisted failure classification.
+                // Never persist it: providers may echo private lyric/prompt content.
+                val errorBody = runCatching {
+                    connection.errorStream?.bufferedReader()?.use { it.readText().take(8_192) }
+                }.getOrNull()
+                val reason = OpenAiRequestCompatibility.classifyHttpError(errorBody)
+                LogManager.w(
+                    "AppleMusicAiService",
+                    "stage=http_rejected code=$responseCode reason=$reason"
+                )
+                HookLogger.e("OpenAiTranslationClient", "翻译请求失败: code=$responseCode")
                 null
             }
         } catch (e: CancellationException) {

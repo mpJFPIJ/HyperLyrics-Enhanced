@@ -152,7 +152,12 @@ class AppleMusicAiTranslationService : Service() {
                             LogManager.w(TAG, "stage=no_translation_result")
                             return@launch
                         }
-                        LogManager.i(TAG, "stage=translation_completed lines=$translatedLines")
+                        val pronouncedLines = translated.lyrics.orEmpty()
+                            .count { !it.roma.isNullOrBlank() }
+                        LogManager.i(
+                            TAG,
+                            "stage=translation_completed lines=$translatedLines pronouncedLines=$pronouncedLines"
+                        )
 
                         val result = json.encodeToString(translated)
                             .toByteArray(Charsets.UTF_8).deflate()

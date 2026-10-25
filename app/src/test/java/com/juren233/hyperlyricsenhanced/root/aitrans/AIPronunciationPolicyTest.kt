@@ -24,6 +24,14 @@ class AIPronunciationPolicyTest {
         assertFalse(AIPronunciationPolicy.shouldEnrich(song("안녕", "Hello")))
     }
 
+    @Test fun doesNotEnrichSongsWithExistingPronunciationsOnEveryLine() {
+        val existing = Song(lyrics = listOf(
+            RichLyricLine(text = "こんにちは", roma = "konnichiwa"),
+            RichLyricLine(text = "ありがとう", roma = "arigatō"),
+        ))
+        assertFalse(AIPronunciationPolicy.shouldEnrich(existing))
+    }
+
     @Test fun pronunciationCacheDoesNotDestroyLegacyTranslationKey() {
         val item = song("I love you")
         val cfg = AiTranslationConfigs(targetLanguage = "한국어")

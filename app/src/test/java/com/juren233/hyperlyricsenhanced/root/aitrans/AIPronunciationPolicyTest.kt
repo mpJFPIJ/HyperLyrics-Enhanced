@@ -34,4 +34,15 @@ class AIPronunciationPolicyTest {
         assertTrue(old != upgraded)
         assertTrue(old == AITranslationKey.calculate(cfg, item, listOf("I love you")))
     }
+
+    @Test fun promptsForPronunciationOnlyForTargetLyrics() {
+        val cfg = AiTranslationConfigs(targetLanguage = "한국어")
+        val jp = AITranslationPrompt.build(cfg, song("こんにちは"))
+        val english = AITranslationPrompt.build(cfg, song("I miss you"))
+        val korean = AITranslationPrompt.build(cfg, song("안녕하세요"))
+        assertTrue(jp.contains("Hepburn Japanese romanization"))
+        assertTrue(english.contains("Korean Hangul"))
+        assertFalse(korean.contains("Hepburn Japanese romanization"))
+    }
+
 }

@@ -304,6 +304,13 @@ internal class AppleLyricsSupplementHooks(
             RootConstants.DEFAULT_HOOK_APPLE_MUSIC_SIMPLIFY_TRADITIONAL_CONTENT,
         ) == true
 
+    /** Read from the existing configuration bridge; unknown values safely use Hangul-first. */
+    internal fun pronunciationSourcePriority(): Int =
+        contentUiLanguagePrefs?.getInt(
+            RootConstants.KEY_HOOK_APPLE_MUSIC_PRONUNCIATION_SOURCE_PRIORITY,
+            RootConstants.DEFAULT_HOOK_APPLE_MUSIC_PRONUNCIATION_SOURCE_PRIORITY,
+        ) ?: RootConstants.DEFAULT_HOOK_APPLE_MUSIC_PRONUNCIATION_SOURCE_PRIORITY
+
     private val translationPreferenceHitLogged = AtomicBoolean(false)
     private val pronunciationPreferenceHitLogged = AtomicBoolean(false)
 

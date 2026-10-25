@@ -21,39 +21,57 @@ object RomanizationPolicy {
     }
 
     /**
-     * Online supplements can use English-to-Hangul phonetic readings, whereas
-     * Apple-provided CJK pronunciation tracks continue to require Latin text.
+     * Existing providers may still supply Latin romanization. AI-provided
+     * pronunciation uses Korean Hangul for BOTH English and Japanese lyrics.
      */
-    fun sanitizeSupplement(originalText: String?, pronunciation: String?): String? {
-        sanitize(originalText, pronunciation)?.let { return it }
-        val original = visibleText(originalText.orEmpty())
+    fun sanitizeSupplement(originalText: String?, pronunciation: String?): String? =
+        sanitize(originalText, pronunciation)
+            ?: sanitizeHangulSupplement(originalText, pronunciation)
+
+    /** Validate a Korean-script phonetic rendering without changing legacy Latin tracks. */
+    fun sanitizeHangulSupplement(originalText: String?, pronunciation: String?): String? {
         val candidate = pronunciation?.trim()?.takeIf(String::isNotEmpty) ?: return null
         val shown = visibleText(candidate)
-        if (shown.isEmpty() || comparableText(shown) == comparableText(original)) return null
+        if (!isHangulPronunciation(shown)) return null
 
-        var hasLatinOriginal = false
-        var originalIndex = 0
-        while (originalIndex < original.length) {
-            val code = original.codePointAt(originalIndex)
-            if (Character.isLetter(code)) {
-                if (Character.UnicodeScript.of(code) != Character.UnicodeScript.LATIN) return null
-                hasLatinOriginal = true
-            }
-            originalIndex += Character.charCount(code)
-        }
-        if (!hasLatinOriginal) return null
+        val original = visibleText(originalText.orEmpty())
+        if (comparableText(original).isEmpty() ||
+            comparableText(original) == comparableText(shown)
+        ) return null
 
-        var hasHangulReading = false
-        var readingIndex = 0
-        while (readingIndex < shown.length) {
-            val code = shown.codePointAt(readingIndex)
+        var hasForeignLetter = false
+        var index = 0
+        while (index < original.length) {
+            val code = original.codePointAt(index)
             if (Character.isLetter(code)) {
-                if (Character.UnicodeScript.of(code) != Character.UnicodeScript.HANGUL) return null
-                hasHangulReading = true
+                when (Character.UnicodeScript.of(code)) {
+                    Character.UnicodeScript.LATIN,
+                    Character.UnicodeScript.HAN,
+                    Character.UnicodeScript.HIRAGANA,
+                    Character.UnicodeScript.KATAKANA -> hasForeignLetter = true
+                    else -> return null // never annotate original Korean lines
+                }
             }
-            readingIndex += Character.charCount(code)
+            index += Character.charCount(code)
         }
-        return candidate.takeIf { hasHangulReading }
+        return candidate.takeIf { hasForeignLetter }
+    }
+
+    fun isHangulPronunciation(pronunciation: String?): Boolean {
+        val shown = visibleText(pronunciation.orEmpty())
+        var hasHangul = false
+        var index = 0
+        while (index < shown.length) {
+            val code = shown.codePointAt(index)
+            if (Character.isLetter(code)) {
+                if (Character.UnicodeScript.of(code) != Character.UnicodeScript.HANGUL) {
+                    return false
+                }
+                hasHangul = true
+            }
+            index += Character.charCount(code)
+        }
+        return hasHangul
     }
 
     fun isLatinLanguageTag(language: String?): Boolean =

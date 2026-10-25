@@ -63,13 +63,14 @@ internal fun AppleLyricsSupplementHooks.hookAppleLyricTextGetter(clazz: Class<*>
                     pronunciation = originalText,
                 )
                 val onlineReading = onlinePronunciationForNativeLine(chain.thisObject)
-                // User-facing Korean phonetics override Latin romanization
-                // without mutating Apple's original pronunciation track.
-                val preferHangul = RomanizationPolicy.isHangulPronunciation(onlineReading)
-                val selection = selectAppleLyricsText(
-                    officialText.takeUnless { preferHangul }
-                ) { onlineReading }
-                val onlineText = selection.text.takeIf { selection.fromFallback }
+                // Keep Apple-native timing intact while allowing a user-selected
+                // overlay preference. Hangul-first retains the previous behavior.
+                val selection = ApplePronunciationSourcePolicy.select(
+                    official = officialText,
+                    supplement = onlineReading,
+                    priority = pronunciationSourcePriority(),
+                )
+                val onlineText = selection.text.takeIf { selection.fromSupplement }
                 if (onlineText != null) {
                     reportApplePronunciationRuntimeDiagnostic(
                         stage = "line_text_overlay",
@@ -259,8 +260,13 @@ private fun AppleLyricsSupplementHooks.hookApplePronunciationWordsGetter(
         } else {
             null
         }
-        val preferHangul = RomanizationPolicy.isHangulPronunciation(onlinePronunciation)
-        val hasValidOfficialWords = !preferHangul && officialPronunciation != null &&
+        val selectedPronunciation = ApplePronunciationSourcePolicy.select(
+            official = officialPronunciation,
+            supplement = onlinePronunciation,
+            priority = pronunciationSourcePriority(),
+        )
+        val hasValidOfficialWords = !selectedPronunciation.fromSupplement &&
+            officialPronunciation != null &&
             RomanizationPolicy.sanitize(
                 originalText = originalText,
                 pronunciation = nativeRawWordVectorText(original),
@@ -278,7 +284,7 @@ private fun AppleLyricsSupplementHooks.hookApplePronunciationWordsGetter(
                 pronunciationWordBegins = nativeRenderableWordBegins(original),
             )
         val mainTimingPronunciation = when {
-            preferHangul -> onlinePronunciation
+            selectedPronunciation.fromSupplement -> selectedPronunciation.text
             officialPronunciation != null && !hasCompatibleOfficialWords -> {
                 reportApplePronunciationRuntimeDiagnostic(
                     stage = "official_word_timing_fallback",

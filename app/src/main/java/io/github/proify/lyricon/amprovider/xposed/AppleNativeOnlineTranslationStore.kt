@@ -61,8 +61,13 @@ internal class AppleNativeOnlineTranslationStore {
      * does not request a full-page presentation (including RACE_FIRST/RACE_FINAL receipts).
      */
     @Synchronized
-    fun receive(song: Song): Receipt {
-        val next = buildOverlay(song)
+    fun receive(song: Song, preserveExistingPronunciation: Boolean = false): Receipt {
+        val candidate = buildOverlay(song)
+        val next = if (preserveExistingPronunciation && candidate != null &&
+            overlay?.songId == candidate.songId
+        ) {
+            preservePronunciation(candidate, requireNotNull(overlay))
+        } else candidate
         val displayChanged = next != null &&
             (overlay == null || overlay?.exactContent != next.exactContent)
         val updated = next != null && overlay != next
@@ -77,12 +82,42 @@ internal class AppleNativeOnlineTranslationStore {
         )
     }
 
+    /**
+     * A translation-only AI callback must not clear pronunciation supplied by
+     * an earlier online provider. Normal source-switch receipts still replace
+     * the overlay, so intentional source changes retain their old semantics.
+     */
+    private fun preservePronunciation(next: Overlay, previous: Overlay): Overlay {
+        val merged = next.exactContent.mapValues { (key, content) ->
+            if (content.pronunciation != null) content else {
+                val existing = previous.exactContent[key]?.pronunciation
+                    ?: previous.translationsByTiming[key.timing]
+                        ?.singleOrNull()?.content?.pronunciation
+                content.copy(pronunciation = existing)
+            }
+        }
+        val hasPronunciation = merged.values.any { it.pronunciation != null }
+        return next.copy(
+            exactContent = merged,
+            translationsByTiming = merged.entries.groupBy(
+                keySelector = { it.key.timing },
+                valueTransform = { Entry(it.key.text, it.value) },
+            ),
+            hasPronunciation = hasPronunciation,
+            pronunciationSource = next.pronunciationSource
+                ?: previous.pronunciationSource.takeIf { hasPronunciation },
+            pronunciationMatchStats = if (next.pronunciationMatchStats.isEmpty() && hasPronunciation) {
+                previous.pronunciationMatchStats
+            } else next.pronunciationMatchStats,
+        )
+    }
+
     private fun buildOverlay(song: Song): Overlay? {
         val songId = song.id?.takeIf(String::isNotBlank) ?: return null
         val entries = song.lyrics.orEmpty().mapNotNull { line ->
             val content = Content(
                 translation = sanitizeContent(line.translation),
-                pronunciation = RomanizationPolicy.sanitize(line.text, line.roma),
+                pronunciation = RomanizationPolicy.sanitizeSupplement(line.text, line.roma),
             )
             if (content.translation == null && content.pronunciation == null) {
                 return@mapNotNull null

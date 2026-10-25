@@ -546,7 +546,8 @@ class AppleNativeOnlineTranslationStoreTest {
 
         store.receive(
             song("100", RichLyricLine(
-                begin = 1_000, end = 2_000, text = "君の名は", translation = "너의 이름은",
+                begin = 1_000, end = 2_000, text = "君の名は",
+                translation = "너의 이름은", roma = "AI imperfect romaji",
             )),
             preserveExistingPronunciation = true,
         )

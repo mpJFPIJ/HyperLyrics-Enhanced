@@ -9,7 +9,9 @@ on:
 
 concurrency:
   group: android-build-${{ github.ref }}
-  cancel-in-progress: false
+  # PR iterations may touch many files rapidly. Keep only the newest build;
+  # stable main releases still run to completion without interruption.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: write

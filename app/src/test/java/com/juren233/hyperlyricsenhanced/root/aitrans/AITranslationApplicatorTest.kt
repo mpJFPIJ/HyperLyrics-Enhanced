@@ -31,4 +31,36 @@ class AITranslationApplicatorTest {
             translated.lyrics?.map { it.translation }
         )
     }
+
+    @Test
+    fun `adds Japanese romaji without replacing an existing pronunciation`() {
+        val song = Song(lyrics = listOf(
+            RichLyricLine(text = "君の名は", roma = "Kimi no na wa"),
+            RichLyricLine(text = "ありがとう")
+        ))
+        val updated = AITranslationApplicator.apply(
+            song,
+            listOf(
+                TranslationItem(0, "너의 이름은", "Wrong reading"),
+                TranslationItem(1, "고마워", "arigatō")
+            ),
+            forceOverride = true
+        )
+        assertEquals("Kimi no na wa", updated.lyrics?.get(0)?.roma)
+        assertEquals("arigatō", updated.lyrics?.get(1)?.roma)
+        assertEquals("너의 이름은", updated.lyrics?.get(0)?.translation)
+    }
+
+    @Test
+    fun `adds English Hangul reading and keeps existing translation when reading only`() {
+        val song = Song(lyrics = listOf(RichLyricLine(
+            text = "I love you", translation = "사랑해",
+        )))
+        val updated = AITranslationApplicator.apply(
+            song,
+            listOf(TranslationItem(index = 0, trans = "", roma = "아이 러브 유"))
+        )
+        assertEquals("사랑해", updated.lyrics?.single()?.translation)
+        assertEquals("아이 러브 유", updated.lyrics?.single()?.roma)
+    }
 }

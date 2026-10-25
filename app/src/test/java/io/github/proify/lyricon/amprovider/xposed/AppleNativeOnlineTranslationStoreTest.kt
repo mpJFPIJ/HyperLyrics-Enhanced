@@ -528,4 +528,62 @@ class AppleNativeOnlineTranslationStoreTest {
         id = id,
         lyrics = lines.toList(),
     )
+
+    @Test
+    fun `standalone AI translation preserves previously available pronunciation`() {
+        val store = AppleNativeOnlineTranslationStore()
+        store.receive(
+            Song(
+                id = "100",
+                metadata = lyricMetadataOf(
+                    LyricMetadataKeys.ONLINE_PRONUNCIATION_SOURCE to "NE",
+                ),
+                lyrics = listOf(RichLyricLine(
+                    begin = 1_000, end = 2_000, text = "君の名は", roma = "Kimi no na wa",
+                )),
+            )
+        )
+
+        store.receive(
+            song("100", RichLyricLine(
+                begin = 1_000, end = 2_000, text = "君の名は", translation = "너의 이름은",
+            )),
+            preserveExistingPronunciation = true,
+        )
+        assertEquals("너의 이름은", store.translation("100", 1_000, 2_000, "君の名は"))
+        assertEquals("Kimi no na wa", store.pronunciation("100", 1_000, 2_000, "君の名は"))
+        assertEquals("NE", store.pronunciationSource("100"))
+    }
+
+    @Test
+    fun `normal source changes still replace pronunciation and AI cannot leak across songs`() {
+        val store = AppleNativeOnlineTranslationStore()
+        store.update(song("100", RichLyricLine(
+            begin = 1_000, end = 2_000, text = "君の名は", roma = "Kimi no na wa",
+        )))
+        store.receive(song("100", RichLyricLine(
+            begin = 1_000, end = 2_000, text = "君の名は", translation = "너의 이름은",
+        )))
+        assertFalse(store.hasPronunciation("100"))
+
+        store.update(song("100", RichLyricLine(
+            begin = 1_000, end = 2_000, text = "君の名は", roma = "Kimi no na wa",
+        )))
+        store.receive(song("200", RichLyricLine(
+            begin = 1_000, end = 2_000, text = "君の名は", translation = "다른 곡",
+        )), preserveExistingPronunciation = true)
+        assertFalse(store.hasPronunciation("200"))
+        assertNull(store.pronunciation("200", 1_000, 2_000, "君の名は"))
+    }
+
+    @Test
+    fun `store exposes validated Korean-script pronunciation for English lines`() {
+        val store = AppleNativeOnlineTranslationStore()
+        store.update(song("english", RichLyricLine(
+            begin = 1_000, end = 2_000, text = "I love you",
+            translation = "사랑해", roma = "아이 러브 유",
+        )))
+        assertTrue(store.hasPronunciation("english"))
+        assertEquals("아이 러브 유", store.pronunciation("english", 1_000, 2_000, "I love you"))
+    }
 }

@@ -107,6 +107,20 @@ jobs:
           ./gradlew --no-daemon --max-workers=2 \
             :app:testDebugUnitTest :app:lintDebug :app:lintRelease
 
+      # Keep the test evidence available even when compilation or lint fails.
+      - name: Upload JVM test and lint reports
+        if: always() && steps.gate.outputs.skip != 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: unit-test-lint-reports-${{ github.run_number }}
+          path: |
+            app/build/test-results/testDebugUnitTest/**/*.xml
+            app/build/reports/tests/testDebugUnitTest/**
+            app/build/reports/lint-results-*.html
+            app/build/reports/lint-results-*.xml
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: 构建 Debug 或 Release Build
         if: steps.gate.outputs.skip != 'true'
         env:

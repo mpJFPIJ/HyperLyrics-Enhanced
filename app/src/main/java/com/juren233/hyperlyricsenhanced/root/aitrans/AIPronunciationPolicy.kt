@@ -1,6 +1,7 @@
 package com.juren233.hyperlyricsenhanced.root.aitrans
 
 import com.juren233.hyperlyricsenhanced.lyric.model.Song
+import com.juren233.hyperlyricsenhanced.common.lyric.RomanizationPolicy
 
 /**
  * Narrow enrichment gate: phonetic supplements for Japanese and English only.
@@ -9,7 +10,7 @@ import com.juren233.hyperlyricsenhanced.lyric.model.Song
 internal object AIPronunciationPolicy {
     fun shouldEnrich(song: Song): Boolean {
         val lines = song.lyrics.orEmpty()
-            .filter { it.roma.isNullOrBlank() }
+            .filter { !RomanizationPolicy.isHangulPronunciation(it.roma) }
             .mapNotNull { it.text?.trim() }
             .filter(String::isNotBlank)
         return lines.any(::hasJapaneseKana) || (lines.isNotEmpty() &&

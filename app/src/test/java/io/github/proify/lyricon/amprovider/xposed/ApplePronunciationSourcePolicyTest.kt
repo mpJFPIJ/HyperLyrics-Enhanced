@@ -84,4 +84,57 @@ class ApplePronunciationSourcePolicyTest {
         assertNull(selection.text)
         assertFalse(selection.fromSupplement)
     }
+
+    @Test
+    fun `Hangul-first still falls back to Apple pronunciation when no supplement exists`() {
+        val selection = ApplePronunciationSourcePolicy.select(
+            official = "Kimi no na wa",
+            supplement = null,
+            priority = RootConstants.APPLE_MUSIC_PRONUNCIATION_HANGUL_FIRST,
+        )
+        assertEquals("Kimi no na wa", selection.text)
+        assertFalse(selection.fromSupplement)
+    }
+
+    @Test
+    fun `supplement-first gracefully falls back to official when overlay disappears`() {
+        val selection = ApplePronunciationSourcePolicy.select(
+            official = "Kimi no na wa",
+            supplement = " ",
+            priority = RootConstants.APPLE_MUSIC_PRONUNCIATION_SUPPLEMENT_FIRST,
+        )
+        assertEquals("Kimi no na wa", selection.text)
+        assertFalse(selection.fromSupplement)
+    }
+
+    @Test
+    fun `selected content and native karaoke word-track owner stay consistent`() {
+        val officialFirst = ApplePronunciationSourcePolicy.select(
+            official = "Kimi no na wa",
+            supplement = "키미노 나와",
+            priority = RootConstants.APPLE_MUSIC_PRONUNCIATION_APPLE_FIRST,
+        )
+        assertEquals(
+            ApplePronunciationWordTrack.OFFICIAL,
+            ApplePronunciationPolicy.wordTrack(
+                hasValidOfficialPronunciation = !officialFirst.fromSupplement &&
+                    officialFirst.text != null,
+                hasOnlinePronunciation = officialFirst.fromSupplement,
+            ),
+        )
+
+        val hangulFirst = ApplePronunciationSourcePolicy.select(
+            official = "Kimi no na wa",
+            supplement = "키미노 나와",
+            priority = RootConstants.APPLE_MUSIC_PRONUNCIATION_HANGUL_FIRST,
+        )
+        assertEquals(
+            ApplePronunciationWordTrack.MAIN_LINE_TIMING,
+            ApplePronunciationPolicy.wordTrack(
+                hasValidOfficialPronunciation = !hangulFirst.fromSupplement &&
+                    hangulFirst.text != null,
+                hasOnlinePronunciation = hangulFirst.fromSupplement,
+            ),
+        )
+    }
 }

@@ -869,4 +869,9 @@
     <string name="island_touch_forward_value">Seek forward %1$d s</string>
     <string name="island_touch_backward_value">Seek backward %1$d s</string>
     <string name="island_touch_seconds_range">1–300 seconds</string>
+    <string name="title_apple_music_pronunciation_priority">Pronunciation source priority</string>
+    <string name="summary_apple_music_pronunciation_priority">Reopen Apple Music lyrics to apply. Uses only available pronunciations.</string>
+    <string name="option_apple_music_pronunciation_hangul_first">Korean phonetics first (current behavior)</string>
+    <string name="option_apple_music_pronunciation_apple_first">Apple native first</string>
+    <string name="option_apple_music_pronunciation_supplement_first">Online / AI supplement first</string>
 </resources>

@@ -10,7 +10,7 @@ internal data class TranslationRequestItem(val index: Int, val text: String)
 internal data class TranslationRequest(val lyrics: List<TranslationRequestItem>)
 
 @Serializable
-data class TranslationItem(val index: Int, val trans: String)
+data class TranslationItem(val index: Int, val trans: String = "", val roma: String? = null)
 
 @Serializable
 internal data class TranslationResponse(val translations: List<TranslationItem>)

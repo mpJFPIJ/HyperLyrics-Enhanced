@@ -83,7 +83,7 @@ internal fun AppleLyricsSupplementHooks.onlinePronunciationForNativeLine(line: A
         lyricsNativeCall(line, AppleMusicRuntimeMember.LYRICS_NATIVE_LINE_TEXT_METHOD)
             as? String
     }
-    return RomanizationPolicy.sanitize(
+    return RomanizationPolicy.sanitizeSupplement(
         originalText = text,
         pronunciation = nativeOnlineTranslationStore.pronunciation(
             songId = currentAppleLyricsSongId,

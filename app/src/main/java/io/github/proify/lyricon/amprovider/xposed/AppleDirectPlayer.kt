@@ -51,6 +51,7 @@ internal class AppleDirectPlayer(
     private val context: Context,
     private val onOriginalMetadataRequested: (String) -> Unit,
     private val onOnlineTranslationReceived: (ByteArray) -> Unit,
+    private val onStandaloneAiTranslationReceived: (ByteArray) -> Unit,
     private val onOnlineTranslationCleared: (String?) -> Unit,
     private val onMissingLyricsSupplementReceived: (ByteArray) -> Unit,
     private val onMissingLyricsSupplementCleared: (String?) -> Unit,
@@ -151,6 +152,14 @@ internal class AppleDirectPlayer(
             )
         }
     }
+
+    // The app process is the sole owner of AI API credentials. In NPatch mode
+    // there is no SystemUI receiver, so request translation through its Binder.
+    private val appAiTranslation = AppleAppAiTranslationClient(
+        context = context,
+        isSystemUiBridgeActive = { isActive },
+        onTranslationReceived = onStandaloneAiTranslationReceived,
+    )
 
     private val registrationReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -321,14 +330,19 @@ internal class AppleDirectPlayer(
         get() = connection.current?.binder?.isBinderAlive == true
 
     override fun setSong(song: Song?): Boolean {
-        val payload = song?.let {
-            json.encodeToString(it).toByteArray(Charsets.UTF_8).deflate()
-        } ?: byteArrayOf()
+        val payload = runCatching {
+            song?.let { json.encodeToString(it).toByteArray(Charsets.UTF_8).deflate() }
+                ?: byteArrayOf()
+        }.onFailure {
+            ProviderLogger.error("standalone_ai stage=song_encode_failed type=${it.javaClass.simpleName}")
+        }.getOrNull() ?: return false
         if (payload.size > MAX_DIRECT_PAYLOAD_BYTES) {
             ProviderLogger.error("直连歌词载荷过大：bytes=${payload.size}")
             return false
         }
         latestSongPayload = payload
+        // Clear any older fallback request once SystemUI's regular bridge is active.
+        appAiTranslation.submit(if (isActive) byteArrayOf() else payload)
         return send(reconnectIfMissing = true) { target -> target.onSongChanged(payload) }
     }
 
@@ -410,7 +424,10 @@ internal class CompositeRemotePlayer(
 
     override fun setSong(song: Song?): Boolean {
         val centralResult = runCatching { central.setSong(song) }.getOrDefault(false)
-        val directResult = runCatching { direct.setSong(song) }.getOrDefault(false)
+        val directResult = runCatching { direct.setSong(song) }
+            .onFailure {
+                ProviderLogger.error("standalone_ai stage=direct_publish_failed type=${it.javaClass.simpleName}")
+            }.getOrDefault(false)
         if (BuildConfig.DEBUG) AppleMetadataFlowDiagnostics.record("provider_fanout") {
             "centralResult=$centralResult directResult=$directResult " +
                 "song=${AppleMetadataFlowDiagnostics.provider(song)}"

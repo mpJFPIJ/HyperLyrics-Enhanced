@@ -95,26 +95,57 @@ object AITranslator {
     ): Song {
         val currentLyrics = song.lyrics ?: return song
         val originalLines = currentLyrics.map { it.text?.trim() ?: "" }
-        val songContentId = AITranslationKey.calculate(configs, song, originalLines)
+        val includePronunciation = AIPronunciationPolicy.shouldEnrich(song)
+        val songContentId = AITranslationKey.calculate(
+            configs, song, originalLines, includePronunciation = includePronunciation,
+        )
+        // Existing translated songs remain usable even when the pronunciation
+        // enrichment request fails or the account is temporarily rate-limited.
+        // Enrichment is a one-time new cache entry; new songs require one call
+        // for Korean translation + Japanese/English pronunciation together.
+        val legacyResults = if (includePronunciation) {
+            val oldKey = AITranslationKey.calculate(configs, song, originalLines)
+            cache.getFromMemory(oldKey) ?: cache.getFromDb(oldKey)
+        } else null
 
         cache.getFromMemory(songContentId)?.let {
             HookLogger.d("AITranslator", "缓存命中：从内存加载了 ${song.name} 的翻译")
-            return AITranslationApplicator.apply(song, it, forceOverride)
+            return AITranslationApplicator.apply(song, mergeWithLegacyTranslations(legacyResults, it), forceOverride)
         }
 
         cache.getFromDb(songContentId)?.let {
             HookLogger.d("AITranslator", "记录命中：从本地存储加载了 ${song.name} 的翻译")
             cache.putMemory(songContentId, it)
-            return AITranslationApplicator.apply(song, it, forceOverride)
+            return AITranslationApplicator.apply(song, mergeWithLegacyTranslations(legacyResults, it), forceOverride)
         }
 
         HookLogger.d("AITranslator", "正在请求 AI：本地无记录，准备发起在线翻译")
         val apiResults = scheduler.getOrEnqueue(songContentId, configs, song, originalLines).await()
         if (apiResults.isNullOrEmpty()) {
             HookLogger.w("AITranslator", "翻译失败：未能获取到 ${song.name} 的 AI 翻译")
-            return song
+            return legacyResults?.let { AITranslationApplicator.apply(song, it, forceOverride) } ?: song
         }
-        return AITranslationApplicator.apply(song, apiResults, forceOverride)
+        return AITranslationApplicator.apply(
+            song, mergeWithLegacyTranslations(legacyResults, apiResults), forceOverride,
+        )
+    }
+
+    private fun mergeWithLegacyTranslations(
+        previous: List<TranslationItem>?,
+        enriched: List<TranslationItem>,
+    ): List<TranslationItem> {
+        if (previous.isNullOrEmpty()) return enriched
+        val merged = linkedMapOf<Int, TranslationItem>()
+        previous.forEach { merged[it.index] = it }
+        enriched.forEach { next ->
+            val previousItem = merged[next.index]
+            merged[next.index] = next.copy(
+                trans = next.trans.takeIf(String::isNotBlank)
+                    ?: previousItem?.trans.orEmpty(),
+                roma = next.roma?.takeIf(String::isNotBlank) ?: previousItem?.roma,
+            )
+        }
+        return merged.values.toList()
     }
 }
 

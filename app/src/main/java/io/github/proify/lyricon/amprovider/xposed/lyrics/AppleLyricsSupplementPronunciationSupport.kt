@@ -62,9 +62,13 @@ internal fun AppleLyricsSupplementHooks.hookAppleLyricTextGetter(clazz: Class<*>
                     originalText = nativeOriginalLineText(chain.thisObject),
                     pronunciation = originalText,
                 )
-                val selection = selectAppleLyricsText(officialText) {
-                    onlinePronunciationForNativeLine(chain.thisObject)
-                }
+                val onlineReading = onlinePronunciationForNativeLine(chain.thisObject)
+                // User-facing Korean phonetics override Latin romanization
+                // without mutating Apple's original pronunciation track.
+                val preferHangul = RomanizationPolicy.isHangulPronunciation(onlineReading)
+                val selection = selectAppleLyricsText(
+                    officialText.takeUnless { preferHangul }
+                ) { onlineReading }
                 val onlineText = selection.text.takeIf { selection.fromFallback }
                 if (onlineText != null) {
                     reportApplePronunciationRuntimeDiagnostic(
@@ -255,7 +259,8 @@ private fun AppleLyricsSupplementHooks.hookApplePronunciationWordsGetter(
         } else {
             null
         }
-        val hasValidOfficialWords = officialPronunciation != null &&
+        val preferHangul = RomanizationPolicy.isHangulPronunciation(onlinePronunciation)
+        val hasValidOfficialWords = !preferHangul && officialPronunciation != null &&
             RomanizationPolicy.sanitize(
                 originalText = originalText,
                 pronunciation = nativeRawWordVectorText(original),
@@ -273,6 +278,7 @@ private fun AppleLyricsSupplementHooks.hookApplePronunciationWordsGetter(
                 pronunciationWordBegins = nativeRenderableWordBegins(original),
             )
         val mainTimingPronunciation = when {
+            preferHangul -> onlinePronunciation
             officialPronunciation != null && !hasCompatibleOfficialWords -> {
                 reportApplePronunciationRuntimeDiagnostic(
                     stage = "official_word_timing_fallback",

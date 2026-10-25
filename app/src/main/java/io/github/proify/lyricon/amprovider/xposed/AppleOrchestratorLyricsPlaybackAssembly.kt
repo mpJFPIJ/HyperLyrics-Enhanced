@@ -465,6 +465,7 @@ internal class AppleOrchestratorLyricsPlaybackAssembly(
             onOriginalMetadataRequested =
                 playbackMetadataCoordinator::resolveOriginalMetadataOnDemand,
             onOnlineTranslationReceived = lyricsHooks::receiveNativeOnlineTranslation,
+            onStandaloneAiTranslationReceived = lyricsHooks::receiveStandaloneAiTranslation,
             onOnlineTranslationCleared = lyricsHooks::clearNativeOnlineTranslation,
             onMissingLyricsSupplementReceived = lyricsHooks::receiveMissingLyricsSupplement,
             onMissingLyricsSupplementCleared = missingLyricsHooks::clearSupplement,
@@ -496,6 +497,7 @@ internal class AppleOrchestratorLyricsPlaybackAssembly(
                 },
         ).also { it.start() }
         this.directPlayer = directPlayer
+        ProviderLogger.info("standalone_ai stage=module_initialized support=app_binder_v2")
         val helper = runCatching {
             ProviderLogger.diagnostic("中央注册诊断: stage=provider_creating")
             LyriconFactory.createProvider(

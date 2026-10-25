@@ -136,6 +136,39 @@ fun AppleMusicOptimizationPage(
             )
         )
     }
+    var lyricsDisplayMode by remember {
+        mutableIntStateOf(
+            prefs.getInt(
+                RootConstants.KEY_HOOK_APPLE_MUSIC_LYRICS_DISPLAY_MODE,
+                RootConstants.DEFAULT_HOOK_APPLE_MUSIC_LYRICS_DISPLAY_MODE,
+            ).coerceIn(
+                RootConstants.APPLE_MUSIC_LYRICS_MODE_APPLE,
+                RootConstants.APPLE_MUSIC_LYRICS_MODE_CUSTOM,
+            )
+        )
+    }
+    var translationVisibility by remember {
+        mutableIntStateOf(
+            prefs.getInt(
+                RootConstants.KEY_HOOK_APPLE_MUSIC_TRANSLATION_DISPLAY_OVERRIDE,
+                RootConstants.DEFAULT_HOOK_APPLE_MUSIC_LYRICS_DISPLAY_OVERRIDE,
+            ).coerceIn(
+                RootConstants.APPLE_MUSIC_LYRICS_DISPLAY_FOLLOW_APPLE,
+                RootConstants.APPLE_MUSIC_LYRICS_DISPLAY_HIDE,
+            )
+        )
+    }
+    var pronunciationVisibility by remember {
+        mutableIntStateOf(
+            prefs.getInt(
+                RootConstants.KEY_HOOK_APPLE_MUSIC_PRONUNCIATION_DISPLAY_OVERRIDE,
+                RootConstants.DEFAULT_HOOK_APPLE_MUSIC_LYRICS_DISPLAY_OVERRIDE,
+            ).coerceIn(
+                RootConstants.APPLE_MUSIC_LYRICS_DISPLAY_FOLLOW_APPLE,
+                RootConstants.APPLE_MUSIC_LYRICS_DISPLAY_HIDE,
+            )
+        )
+    }
     var pronunciationSourcePriority by remember {
         mutableIntStateOf(
             prefs.getInt(
@@ -277,6 +310,24 @@ fun AppleMusicOptimizationPage(
         stringResource(R.string.option_apple_music_pronunciation_hangul_first),
         stringResource(R.string.option_apple_music_pronunciation_apple_first),
         stringResource(R.string.option_apple_music_pronunciation_supplement_first),
+    )
+    val lyricsDisplayModeOptions = if (koreanLocale) listOf(
+        "Apple 기본 표시",
+        "3단 표시 (원문 + 발음 + 번역) · 실험적",
+        "개별 설정",
+    ) else listOf(
+        stringResource(R.string.option_apple_music_lyrics_mode_apple),
+        stringResource(R.string.option_apple_music_lyrics_mode_three_line),
+        stringResource(R.string.option_apple_music_lyrics_mode_custom),
+    )
+    val lyricsVisibilityOptions = if (koreanLocale) listOf(
+        "Apple 설정 따르기",
+        "항상 표시",
+        "숨기기",
+    ) else listOf(
+        stringResource(R.string.option_apple_music_lyrics_visibility_apple),
+        stringResource(R.string.option_apple_music_lyrics_visibility_show),
+        stringResource(R.string.option_apple_music_lyrics_visibility_hide),
     )
     val lyricsBlurEffectOptions = listOf(
         stringResource(R.string.option_apple_music_lyrics_blur_effect_off),
@@ -525,6 +576,65 @@ fun AppleMusicOptimizationPage(
                         )
                     },
                 )
+                OverlayDropdownPreference(
+                    title = if (koreanLocale) "가사 표시 방식"
+                        else stringResource(R.string.title_apple_music_lyrics_display_mode),
+                    summary = if (koreanLocale)
+                        "3단 표시는 발음·번역이 모두 있을 때만 가능합니다. Apple 원본 가사와 싱크는 유지합니다."
+                        else stringResource(R.string.summary_apple_music_lyrics_display_mode),
+                    items = lyricsDisplayModeOptions,
+                    selectedIndex = lyricsDisplayMode,
+                    onSelectedIndexChange = { selected ->
+                        val value = selected.coerceIn(
+                            RootConstants.APPLE_MUSIC_LYRICS_MODE_APPLE,
+                            RootConstants.APPLE_MUSIC_LYRICS_MODE_CUSTOM,
+                        )
+                        lyricsDisplayMode = value
+                        saveConfig(RootConstants.KEY_HOOK_APPLE_MUSIC_LYRICS_DISPLAY_MODE, value)
+                    },
+                )
+                AnimatedVisibility(
+                    visible = lyricsDisplayMode == RootConstants.APPLE_MUSIC_LYRICS_MODE_CUSTOM
+                ) {
+                    OverlayDropdownPreference(
+                        title = if (koreanLocale) "한국어 번역 표시"
+                            else stringResource(R.string.title_apple_music_translation_visibility),
+                        items = lyricsVisibilityOptions,
+                        selectedIndex = translationVisibility,
+                        onSelectedIndexChange = { selected ->
+                            val value = selected.coerceIn(
+                                RootConstants.APPLE_MUSIC_LYRICS_DISPLAY_FOLLOW_APPLE,
+                                RootConstants.APPLE_MUSIC_LYRICS_DISPLAY_HIDE,
+                            )
+                            translationVisibility = value
+                            saveConfig(
+                                RootConstants.KEY_HOOK_APPLE_MUSIC_TRANSLATION_DISPLAY_OVERRIDE,
+                                value,
+                            )
+                        },
+                    )
+                }
+                AnimatedVisibility(
+                    visible = lyricsDisplayMode == RootConstants.APPLE_MUSIC_LYRICS_MODE_CUSTOM
+                ) {
+                    OverlayDropdownPreference(
+                        title = if (koreanLocale) "한글 발음 표시"
+                            else stringResource(R.string.title_apple_music_pronunciation_visibility),
+                        items = lyricsVisibilityOptions,
+                        selectedIndex = pronunciationVisibility,
+                        onSelectedIndexChange = { selected ->
+                            val value = selected.coerceIn(
+                                RootConstants.APPLE_MUSIC_LYRICS_DISPLAY_FOLLOW_APPLE,
+                                RootConstants.APPLE_MUSIC_LYRICS_DISPLAY_HIDE,
+                            )
+                            pronunciationVisibility = value
+                            saveConfig(
+                                RootConstants.KEY_HOOK_APPLE_MUSIC_PRONUNCIATION_DISPLAY_OVERRIDE,
+                                value,
+                            )
+                        },
+                    )
+                }
                 OverlayDropdownPreference(
                     title = if (koreanLocale) "발음 출처 우선순위"
                         else stringResource(R.string.title_apple_music_pronunciation_priority),

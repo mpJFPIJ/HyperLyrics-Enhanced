@@ -110,13 +110,13 @@ object AITranslator {
 
         cache.getFromMemory(songContentId)?.let {
             HookLogger.d("AITranslator", "缓存命中：从内存加载了 ${song.name} 的翻译")
-            return AITranslationApplicator.apply(song, it, forceOverride)
+            return AITranslationApplicator.apply(song, mergeWithLegacyTranslations(legacyResults, it), forceOverride)
         }
 
         cache.getFromDb(songContentId)?.let {
             HookLogger.d("AITranslator", "记录命中：从本地存储加载了 ${song.name} 的翻译")
             cache.putMemory(songContentId, it)
-            return AITranslationApplicator.apply(song, it, forceOverride)
+            return AITranslationApplicator.apply(song, mergeWithLegacyTranslations(legacyResults, it), forceOverride)
         }
 
         HookLogger.d("AITranslator", "正在请求 AI：本地无记录，准备发起在线翻译")
@@ -125,7 +125,27 @@ object AITranslator {
             HookLogger.w("AITranslator", "翻译失败：未能获取到 ${song.name} 的 AI 翻译")
             return legacyResults?.let { AITranslationApplicator.apply(song, it, forceOverride) } ?: song
         }
-        return AITranslationApplicator.apply(song, apiResults, forceOverride)
+        return AITranslationApplicator.apply(
+            song, mergeWithLegacyTranslations(legacyResults, apiResults), forceOverride,
+        )
+    }
+
+    private fun mergeWithLegacyTranslations(
+        previous: List<TranslationItem>?,
+        enriched: List<TranslationItem>,
+    ): List<TranslationItem> {
+        if (previous.isNullOrEmpty()) return enriched
+        val merged = linkedMapOf<Int, TranslationItem>()
+        previous.forEach { merged[it.index] = it }
+        enriched.forEach { next ->
+            val previousItem = merged[next.index]
+            merged[next.index] = next.copy(
+                trans = next.trans.takeIf(String::isNotBlank)
+                    ?: previousItem?.trans.orEmpty(),
+                roma = next.roma?.takeIf(String::isNotBlank) ?: previousItem?.roma,
+            )
+        }
+        return merged.values.toList()
     }
 }
 

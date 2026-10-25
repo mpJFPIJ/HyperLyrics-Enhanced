@@ -18,6 +18,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.juren233.hyperlyricsenhanced.R
@@ -265,7 +266,14 @@ fun AppleMusicOptimizationPage(
         contentUiLanguage != RootConstants.APPLE_MUSIC_CONTENT_UI_LANGUAGE_NONE &&
             overrideAccountLanguage
     val metadataLookupEnabled = regionReplacementEnabled || restoreCjkOriginalMetadata
-    val pronunciationSourceOptions = listOf(
+    // A partial values-ko locale makes lint flag every existing untranslated string.
+    // Scope Korean copy to this new control, leaving the established resource locales intact.
+    val koreanLocale = LocalConfiguration.current.locales.get(0)?.language == "ko"
+    val pronunciationSourceOptions = if (koreanLocale) listOf(
+        "한글 발음 우선 (현재 동작)",
+        "Apple 원본 발음 우선",
+        "온라인 / AI 보완 발음 우선",
+    ) else listOf(
         stringResource(R.string.option_apple_music_pronunciation_hangul_first),
         stringResource(R.string.option_apple_music_pronunciation_apple_first),
         stringResource(R.string.option_apple_music_pronunciation_supplement_first),
@@ -518,8 +526,11 @@ fun AppleMusicOptimizationPage(
                     },
                 )
                 OverlayDropdownPreference(
-                    title = stringResource(R.string.title_apple_music_pronunciation_priority),
-                    summary = stringResource(R.string.summary_apple_music_pronunciation_priority),
+                    title = if (koreanLocale) "발음 출처 우선순위"
+                        else stringResource(R.string.title_apple_music_pronunciation_priority),
+                    summary = if (koreanLocale)
+                        "변경 후 Apple Music의 가사 화면을 다시 열어 적용하세요."
+                        else stringResource(R.string.summary_apple_music_pronunciation_priority),
                     items = pronunciationSourceOptions,
                     selectedIndex = pronunciationSourcePriority,
                     onSelectedIndexChange = { selected ->

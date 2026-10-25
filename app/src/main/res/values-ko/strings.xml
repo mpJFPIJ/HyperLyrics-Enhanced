@@ -1,8 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <string name="title_apple_music_pronunciation_priority">발음 출처 우선순위</string>
-    <string name="summary_apple_music_pronunciation_priority">변경 후 Apple Music의 가사 화면을 다시 열어 적용하세요. 실제로 있는 발음만 선택합니다.</string>
-    <string name="option_apple_music_pronunciation_hangul_first">한글 발음 우선 (현재 동작)</string>
-    <string name="option_apple_music_pronunciation_apple_first">Apple 원본 발음 우선</string>
-    <string name="option_apple_music_pronunciation_supplement_first">온라인 / AI 보완 발음 우선</string>
-</resources>

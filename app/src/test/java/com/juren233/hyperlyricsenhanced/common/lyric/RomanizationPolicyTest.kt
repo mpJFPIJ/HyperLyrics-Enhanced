@@ -61,4 +61,21 @@ class RomanizationPolicyTest {
         assertFalse(RomanizationPolicy.isLatinLanguageTag("zh-Hans"))
         assertFalse(RomanizationPolicy.isLatinLanguageTag(null))
     }
+
+    @Test
+    fun `accepts Hangul pronunciations for English supplements only`() {
+        assertEquals(
+            "아이 러브 유",
+            RomanizationPolicy.sanitizeSupplement("I love you", "아이 러브 유"),
+        )
+        assertNull(RomanizationPolicy.sanitize("I love you", "아이 러브 유"))
+        assertNull(RomanizationPolicy.sanitizeSupplement("I love you", "アイ ラブ ユー"))
+        assertNull(RomanizationPolicy.sanitizeSupplement("君の名は", "키미 노 나 와"))
+        assertNull(RomanizationPolicy.sanitizeSupplement("I love you", "아이 love 유"))
+        assertNull(RomanizationPolicy.sanitizeSupplement("...", "아이 러브 유"))
+        assertEquals(
+            "Kimi no na wa",
+            RomanizationPolicy.sanitizeSupplement("君の名は", "Kimi no na wa"),
+        )
+    }
 }

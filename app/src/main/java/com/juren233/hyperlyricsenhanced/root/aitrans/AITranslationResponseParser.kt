@@ -71,8 +71,11 @@ internal object AITranslationResponseParser {
         val accepted = LinkedHashMap<Int, TranslationItem>()
         items.forEach { item ->
             val trans = item.trans.trim()
-            if (item.index in requestIndices && trans.isNotBlank() && item.index !in accepted) {
-                accepted[item.index] = item.copy(trans = trans)
+            val roma = item.roma?.trim()?.takeIf(String::isNotBlank)
+            if (item.index in requestIndices && (trans.isNotBlank() || roma != null) &&
+                item.index !in accepted
+            ) {
+                accepted[item.index] = item.copy(trans = trans, roma = roma)
             }
         }
         return accepted.values.toList()

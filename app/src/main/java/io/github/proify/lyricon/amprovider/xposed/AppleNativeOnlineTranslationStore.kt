@@ -89,12 +89,12 @@ internal class AppleNativeOnlineTranslationStore {
      */
     private fun preservePronunciation(next: Overlay, previous: Overlay): Overlay {
         val merged = next.exactContent.mapValues { (key, content) ->
-            if (content.pronunciation != null) content else {
-                val existing = previous.exactContent[key]?.pronunciation
-                    ?: previous.translationsByTiming[key.timing]
-                        ?.singleOrNull()?.content?.pronunciation
-                content.copy(pronunciation = existing)
-            }
+            val existing = previous.exactContent[key]?.pronunciation
+                ?: previous.translationsByTiming[key.timing]
+                    ?.singleOrNull()?.content?.pronunciation
+            // A user-selected existing pronunciation wins over generated AI
+            // readings. AI only fills lines that genuinely lack a reading.
+            content.copy(pronunciation = existing ?: content.pronunciation)
         }
         val hasPronunciation = merged.values.any { it.pronunciation != null }
         return next.copy(

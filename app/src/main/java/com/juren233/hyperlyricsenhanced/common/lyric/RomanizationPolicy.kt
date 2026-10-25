@@ -20,6 +20,42 @@ object RomanizationPolicy {
         return candidate
     }
 
+    /**
+     * Online supplements can use English-to-Hangul phonetic readings, whereas
+     * Apple-provided CJK pronunciation tracks continue to require Latin text.
+     */
+    fun sanitizeSupplement(originalText: String?, pronunciation: String?): String? {
+        sanitize(originalText, pronunciation)?.let { return it }
+        val original = visibleText(originalText.orEmpty())
+        val candidate = pronunciation?.trim()?.takeIf(String::isNotEmpty) ?: return null
+        val shown = visibleText(candidate)
+        if (shown.isEmpty() || comparableText(shown) == comparableText(original)) return null
+
+        var hasLatinOriginal = false
+        var originalIndex = 0
+        while (originalIndex < original.length) {
+            val code = original.codePointAt(originalIndex)
+            if (Character.isLetter(code)) {
+                if (Character.UnicodeScript.of(code) != Character.UnicodeScript.LATIN) return null
+                hasLatinOriginal = true
+            }
+            originalIndex += Character.charCount(code)
+        }
+        if (!hasLatinOriginal) return null
+
+        var hasHangulReading = false
+        var readingIndex = 0
+        while (readingIndex < shown.length) {
+            val code = shown.codePointAt(readingIndex)
+            if (Character.isLetter(code)) {
+                if (Character.UnicodeScript.of(code) != Character.UnicodeScript.HANGUL) return null
+                hasHangulReading = true
+            }
+            readingIndex += Character.charCount(code)
+        }
+        return candidate.takeIf { hasHangulReading }
+    }
+
     fun isLatinLanguageTag(language: String?): Boolean =
         language
             ?.trim()

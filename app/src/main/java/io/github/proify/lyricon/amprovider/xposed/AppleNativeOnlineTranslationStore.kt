@@ -92,9 +92,13 @@ internal class AppleNativeOnlineTranslationStore {
             val existing = previous.exactContent[key]?.pronunciation
                 ?: previous.translationsByTiming[key.timing]
                     ?.singleOrNull()?.content?.pronunciation
-            // A user-selected existing pronunciation wins over generated AI
-            // readings. AI only fills lines that genuinely lack a reading.
-            content.copy(pronunciation = existing ?: content.pronunciation)
+            // Prefer requested Hangul display when AI provides it, while
+            // preserving older romanization whenever no Hangul was returned.
+            // The source lyrics and Apple's native track remain unchanged.
+            val displayReading = content.pronunciation
+                ?.takeIf(RomanizationPolicy::isHangulPronunciation)
+                ?: existing ?: content.pronunciation
+            content.copy(pronunciation = displayReading)
         }
         val hasPronunciation = merged.values.any { it.pronunciation != null }
         return next.copy(

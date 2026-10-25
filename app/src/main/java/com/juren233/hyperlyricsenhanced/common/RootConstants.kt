@@ -326,6 +326,13 @@ object RootConstants {
     /** Song pronunciation overlay policy; the original Apple preference stays authoritative for visibility. */
     const val KEY_HOOK_APPLE_MUSIC_PRONUNCIATION_SOURCE_PRIORITY =
         "key_hook_apple_music_pronunciation_source_priority"
+    /** Applies to the host lyric rows; never rewrites Apple preference storage. */
+    const val KEY_HOOK_APPLE_MUSIC_LYRICS_DISPLAY_MODE =
+        "key_hook_apple_music_lyrics_display_mode"
+    const val KEY_HOOK_APPLE_MUSIC_TRANSLATION_DISPLAY_OVERRIDE =
+        "key_hook_apple_music_translation_display_override"
+    const val KEY_HOOK_APPLE_MUSIC_PRONUNCIATION_DISPLAY_OVERRIDE =
+        "key_hook_apple_music_pronunciation_display_override"
     const val KEY_HOOK_APPLE_MUSIC_LYRICS_BLUR_EFFECT =
         "key_hook_apple_music_lyrics_blur_effect"
     const val KEY_HOOK_APPLE_MUSIC_LYRICS_BLUR_ANIMATION =
@@ -389,6 +396,16 @@ object RootConstants {
     const val APPLE_MUSIC_PRONUNCIATION_SUPPLEMENT_FIRST = 2
     const val DEFAULT_HOOK_APPLE_MUSIC_PRONUNCIATION_SOURCE_PRIORITY =
         APPLE_MUSIC_PRONUNCIATION_HANGUL_FIRST
+    const val APPLE_MUSIC_LYRICS_MODE_APPLE = 0
+    const val APPLE_MUSIC_LYRICS_MODE_THREE_LINE = 1
+    const val APPLE_MUSIC_LYRICS_MODE_CUSTOM = 2
+    const val DEFAULT_HOOK_APPLE_MUSIC_LYRICS_DISPLAY_MODE =
+        APPLE_MUSIC_LYRICS_MODE_APPLE
+    const val APPLE_MUSIC_LYRICS_DISPLAY_FOLLOW_APPLE = 0
+    const val APPLE_MUSIC_LYRICS_DISPLAY_SHOW = 1
+    const val APPLE_MUSIC_LYRICS_DISPLAY_HIDE = 2
+    const val DEFAULT_HOOK_APPLE_MUSIC_LYRICS_DISPLAY_OVERRIDE =
+        APPLE_MUSIC_LYRICS_DISPLAY_FOLLOW_APPLE
     const val APPLE_MUSIC_LYRICS_BLUR_EFFECT_OFF = 0
     const val APPLE_MUSIC_LYRICS_BLUR_EFFECT_NATIVE = 1
     const val APPLE_MUSIC_LYRICS_BLUR_EFFECT_ADVANCED_MATERIAL = 2

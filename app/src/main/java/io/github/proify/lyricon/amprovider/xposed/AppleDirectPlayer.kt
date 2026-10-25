@@ -51,6 +51,7 @@ internal class AppleDirectPlayer(
     private val context: Context,
     private val onOriginalMetadataRequested: (String) -> Unit,
     private val onOnlineTranslationReceived: (ByteArray) -> Unit,
+    private val onStandaloneAiTranslationReceived: (ByteArray) -> Unit,
     private val onOnlineTranslationCleared: (String?) -> Unit,
     private val onMissingLyricsSupplementReceived: (ByteArray) -> Unit,
     private val onMissingLyricsSupplementCleared: (String?) -> Unit,
@@ -157,7 +158,7 @@ internal class AppleDirectPlayer(
     private val appAiTranslation = AppleAppAiTranslationClient(
         context = context,
         isSystemUiBridgeActive = { isActive },
-        onTranslationReceived = onOnlineTranslationReceived,
+        onTranslationReceived = onStandaloneAiTranslationReceived,
     )
 
     private val registrationReceiver = object : BroadcastReceiver() {

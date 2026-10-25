@@ -24,12 +24,17 @@ class AIPronunciationPolicyTest {
         assertFalse(AIPronunciationPolicy.shouldEnrich(song("안녕", "Hello")))
     }
 
-    @Test fun doesNotEnrichSongsWithExistingPronunciationsOnEveryLine() {
-        val existing = Song(lyrics = listOf(
+    @Test fun requestsHangulWhenOnlyLatinRomajiExists() {
+        val existingLatin = Song(lyrics = listOf(
             RichLyricLine(text = "こんにちは", roma = "konnichiwa"),
             RichLyricLine(text = "ありがとう", roma = "arigatō"),
         ))
-        assertFalse(AIPronunciationPolicy.shouldEnrich(existing))
+        assertTrue(AIPronunciationPolicy.shouldEnrich(existingLatin))
+        val hangul = Song(lyrics = listOf(
+            RichLyricLine(text = "こんにちは", roma = "콘니치와"),
+            RichLyricLine(text = "ありがとう", roma = "아리가토"),
+        ))
+        assertFalse(AIPronunciationPolicy.shouldEnrich(hangul))
     }
 
     @Test fun pronunciationCacheDoesNotDestroyLegacyTranslationKey() {
@@ -48,9 +53,10 @@ class AIPronunciationPolicyTest {
         val jp = AITranslationPrompt.build(cfg, song("こんにちは"))
         val english = AITranslationPrompt.build(cfg, song("I miss you"))
         val korean = AITranslationPrompt.build(cfg, song("안녕하세요"))
-        assertTrue(jp.contains("Hepburn Japanese romanization"))
+        assertTrue(jp.contains("MUST be Hangul"))
+        assertTrue(jp.contains("키미노 나와"))
         assertTrue(english.contains("Korean Hangul"))
-        assertFalse(korean.contains("Hepburn Japanese romanization"))
+        assertFalse(korean.contains("MUST be Hangul"))
     }
 
 }

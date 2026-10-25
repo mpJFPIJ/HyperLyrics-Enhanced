@@ -323,6 +323,9 @@ object RootConstants {
         "key_hook_apple_music_hide_mandarin_pinyin"
     const val KEY_HOOK_APPLE_MUSIC_LUNABEAT_WORD_LYRICS =
         "key_hook_apple_music_lunabeat_word_lyrics"
+    /** Song pronunciation overlay policy; the original Apple preference stays authoritative for visibility. */
+    const val KEY_HOOK_APPLE_MUSIC_PRONUNCIATION_SOURCE_PRIORITY =
+        "key_hook_apple_music_pronunciation_source_priority"
     const val KEY_HOOK_APPLE_MUSIC_LYRICS_BLUR_EFFECT =
         "key_hook_apple_music_lyrics_blur_effect"
     const val KEY_HOOK_APPLE_MUSIC_LYRICS_BLUR_ANIMATION =
@@ -381,6 +384,11 @@ object RootConstants {
     const val DEFAULT_HOOK_APPLE_MUSIC_FILL_MISSING_LYRICS = false
     const val DEFAULT_HOOK_APPLE_MUSIC_HIDE_MANDARIN_PINYIN = false
     const val DEFAULT_HOOK_APPLE_MUSIC_LUNABEAT_WORD_LYRICS = false
+    const val APPLE_MUSIC_PRONUNCIATION_HANGUL_FIRST = 0
+    const val APPLE_MUSIC_PRONUNCIATION_APPLE_FIRST = 1
+    const val APPLE_MUSIC_PRONUNCIATION_SUPPLEMENT_FIRST = 2
+    const val DEFAULT_HOOK_APPLE_MUSIC_PRONUNCIATION_SOURCE_PRIORITY =
+        APPLE_MUSIC_PRONUNCIATION_HANGUL_FIRST
     const val APPLE_MUSIC_LYRICS_BLUR_EFFECT_OFF = 0
     const val APPLE_MUSIC_LYRICS_BLUR_EFFECT_NATIVE = 1
     const val APPLE_MUSIC_LYRICS_BLUR_EFFECT_ADVANCED_MATERIAL = 2

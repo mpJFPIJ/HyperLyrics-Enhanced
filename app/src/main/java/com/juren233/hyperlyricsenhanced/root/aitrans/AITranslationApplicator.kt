@@ -19,19 +19,22 @@ internal object AITranslationApplicator {
             val shouldReplaceTranslation = !transText.isNullOrBlank() &&
                 (forceOverride || line.translation.isNullOrBlank()) &&
                 transText.lowercase() != line.text?.trim()?.lowercase()
-            // Never overwrite an existing source's pronunciation with AI output.
-            val addedPronunciation = if (line.roma.isNullOrBlank()) {
-                RomanizationPolicy.sanitizeSupplement(
-                    line.text,
-                    translationsByIndex[index]?.roma
-                )
-            } else null
-            if (shouldReplaceTranslation || addedPronunciation != null) {
+            // Preserve an original reading in the source model, but display
+            // newly requested Korean phonetics instead of Latin romaji.
+            // Invalid AI output never replaces a valid existing pronunciation.
+            val hangulPronunciation = RomanizationPolicy.sanitizeHangulSupplement(
+                line.text, translationsByIndex[index]?.roma,
+            )
+            val preferredPronunciation = hangulPronunciation
+                ?: line.roma?.takeIf(String::isNotBlank)
+            if (shouldReplaceTranslation ||
+                (preferredPronunciation != null && preferredPronunciation != line.roma)
+            ) {
                 if (shouldReplaceTranslation) appliedCount++
                 line.copy(
                     translation = if (shouldReplaceTranslation) transText else line.translation,
                     translationWords = if (shouldReplaceTranslation) null else line.translationWords,
-                    roma = line.roma?.takeIf(String::isNotBlank) ?: addedPronunciation,
+                    roma = preferredPronunciation,
                 )
             } else line
         }

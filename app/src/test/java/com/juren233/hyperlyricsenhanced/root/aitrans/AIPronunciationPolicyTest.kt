@@ -1,0 +1,37 @@
+package com.juren233.hyperlyricsenhanced.root.aitrans
+
+import com.juren233.hyperlyricsenhanced.lyric.model.RichLyricLine
+import com.juren233.hyperlyricsenhanced.lyric.model.Song
+import com.juren233.hyperlyricsenhanced.lyric.style.AiTranslationConfigs
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class AIPronunciationPolicyTest {
+    private fun song(vararg texts: String): Song =
+        Song(lyrics = texts.map { RichLyricLine(text = it) })
+
+    @Test fun enrichesJapaneseAndEnglishLyrics() {
+        assertTrue(AIPronunciationPolicy.shouldEnrich(song("君の名は", "ありがとう")))
+        assertTrue(AIPronunciationPolicy.shouldEnrich(song("I love you", "forever yours")))
+        assertTrue(AIPronunciationPolicy.shouldEnrich(song("君の名は", "I love you")))
+    }
+
+    @Test fun avoidsOtherScriptsAndEmptyLyrics() {
+        assertFalse(AIPronunciationPolicy.shouldEnrich(song("사랑해", "고마워")))
+        assertFalse(AIPronunciationPolicy.shouldEnrich(song("你好", "世界")))
+        assertFalse(AIPronunciationPolicy.shouldEnrich(song("...")))
+        assertFalse(AIPronunciationPolicy.shouldEnrich(song("안녕", "Hello")))
+    }
+
+    @Test fun pronunciationCacheDoesNotDestroyLegacyTranslationKey() {
+        val item = song("I love you")
+        val cfg = AiTranslationConfigs(targetLanguage = "한국어")
+        val old = AITranslationKey.calculate(cfg, item, listOf("I love you"))
+        val upgraded = AITranslationKey.calculate(
+            cfg, item, listOf("I love you"), includePronunciation = true,
+        )
+        assertTrue(old != upgraded)
+        assertTrue(old == AITranslationKey.calculate(cfg, item, listOf("I love you")))
+    }
+}

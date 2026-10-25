@@ -465,6 +465,7 @@ internal class AppleOrchestratorLyricsPlaybackAssembly(
             onOriginalMetadataRequested =
                 playbackMetadataCoordinator::resolveOriginalMetadataOnDemand,
             onOnlineTranslationReceived = lyricsHooks::receiveNativeOnlineTranslation,
+            onStandaloneAiTranslationReceived = lyricsHooks::receiveStandaloneAiTranslation,
             onOnlineTranslationCleared = lyricsHooks::clearNativeOnlineTranslation,
             onMissingLyricsSupplementReceived = lyricsHooks::receiveMissingLyricsSupplement,
             onMissingLyricsSupplementCleared = missingLyricsHooks::clearSupplement,

@@ -8,7 +8,9 @@ import com.juren233.hyperlyricsenhanced.lyric.model.Song
  */
 internal object AIPronunciationPolicy {
     fun shouldEnrich(song: Song): Boolean {
-        val lines = song.lyrics.orEmpty().mapNotNull { it.text?.trim() }
+        val lines = song.lyrics.orEmpty()
+            .filter { it.roma.isNullOrBlank() }
+            .mapNotNull { it.text?.trim() }
             .filter(String::isNotBlank)
         return lines.any(::hasJapaneseKana) || (lines.isNotEmpty() &&
             lines.count(::hasEnglishLetters) * 2 >= lines.size &&

@@ -67,7 +67,20 @@ internal object ApplePronunciationPolicy {
         mainWordTexts: List<String>,
     ): List<String> {
         if (mainWordTexts.isEmpty()) return emptyList()
-        val tokens = pronunciation.trim().split(Regex("\\s+")).filter(String::isNotEmpty)
+        val groupedTokens = pronunciation.trim().split(Regex("\\s+"))
+            .filter(String::isNotEmpty)
+        // Hangul text is usually grouped into natural Korean words, but the
+        // Apple karaoke timeline can contain more Japanese/English word cells.
+        // Distribute Hangul syllables when whole-word grouping would leave
+        // most native word cells without a pronunciation.
+        val splitHangulSyllables =
+            RomanizationPolicy.isHangulPronunciation(pronunciation) &&
+                groupedTokens.size < mainWordTexts.size
+        val tokens = if (splitHangulSyllables) {
+            pronunciation.codePoints().toArray()
+                .filter(Character::isLetter)
+                .map { String(Character.toChars(it)) }
+        } else groupedTokens
         if (tokens.isEmpty()) return emptyList()
 
         val measuredWeights = mainWordTexts.map(::pronunciationUnitCount)
@@ -82,7 +95,9 @@ internal object ApplePronunciationPolicy {
             val tokenStart = consumedWeight * tokens.size / totalWeight
             consumedWeight += weight
             val tokenEnd = consumedWeight * tokens.size / totalWeight
-            tokens.subList(tokenStart, tokenEnd).joinToString(" ")
+            tokens.subList(tokenStart, tokenEnd).joinToString(
+                if (splitHangulSyllables) "" else " "
+            )
         }
     }
 

@@ -578,6 +578,28 @@ class AppleNativeOnlineTranslationStoreTest {
     }
 
     @Test
+    fun `standalone AI Hangul overrides displayed Latin romaji but keeps other lines`() {
+        val store = AppleNativeOnlineTranslationStore()
+        store.update(song("ja", RichLyricLine(
+            begin = 1_000, end = 2_000, text = "君の名は",
+            roma = "Kimi no na wa",
+        ), RichLyricLine(
+            begin = 2_000, end = 3_000, text = "ありがとう",
+            roma = "Arigatou",
+        )))
+        store.receive(song("ja", RichLyricLine(
+            begin = 1_000, end = 2_000, text = "君の名は",
+            translation = "너의 이름은", roma = "키미노 나와",
+        ), RichLyricLine(
+            begin = 2_000, end = 3_000, text = "ありがとう",
+            translation = "고마워",
+        )), preserveExistingPronunciation = true)
+        assertEquals("키미노 나와", store.pronunciation("ja", 1_000, 2_000, "君の名は"))
+        assertEquals("Arigatou", store.pronunciation("ja", 2_000, 3_000, "ありがとう"))
+        assertTrue(store.hasPronunciation("ja"))
+    }
+
+    @Test
     fun `store exposes validated Korean-script pronunciation for English lines`() {
         val store = AppleNativeOnlineTranslationStore()
         store.update(song("english", RichLyricLine(

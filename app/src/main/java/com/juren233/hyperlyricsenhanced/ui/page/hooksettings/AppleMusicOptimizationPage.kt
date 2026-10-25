@@ -135,6 +135,17 @@ fun AppleMusicOptimizationPage(
             )
         )
     }
+    var pronunciationSourcePriority by remember {
+        mutableIntStateOf(
+            prefs.getInt(
+                RootConstants.KEY_HOOK_APPLE_MUSIC_PRONUNCIATION_SOURCE_PRIORITY,
+                RootConstants.DEFAULT_HOOK_APPLE_MUSIC_PRONUNCIATION_SOURCE_PRIORITY,
+            ).coerceIn(
+                RootConstants.APPLE_MUSIC_PRONUNCIATION_HANGUL_FIRST,
+                RootConstants.APPLE_MUSIC_PRONUNCIATION_SUPPLEMENT_FIRST,
+            )
+        )
+    }
     var fillMissingLyrics by remember {
         mutableStateOf(
             prefs.getBoolean(
@@ -254,6 +265,11 @@ fun AppleMusicOptimizationPage(
         contentUiLanguage != RootConstants.APPLE_MUSIC_CONTENT_UI_LANGUAGE_NONE &&
             overrideAccountLanguage
     val metadataLookupEnabled = regionReplacementEnabled || restoreCjkOriginalMetadata
+    val pronunciationSourceOptions = listOf(
+        stringResource(R.string.option_apple_music_pronunciation_hangul_first),
+        stringResource(R.string.option_apple_music_pronunciation_apple_first),
+        stringResource(R.string.option_apple_music_pronunciation_supplement_first),
+    )
     val lyricsBlurEffectOptions = listOf(
         stringResource(R.string.option_apple_music_lyrics_blur_effect_off),
         stringResource(R.string.option_apple_music_lyrics_blur_effect_native),
@@ -498,6 +514,23 @@ fun AppleMusicOptimizationPage(
                         saveConfig(
                             RootConstants.KEY_HOOK_APPLE_MUSIC_NATIVE_ONLINE_TRANSLATION,
                             enabled,
+                        )
+                    },
+                )
+                OverlayDropdownPreference(
+                    title = stringResource(R.string.title_apple_music_pronunciation_priority),
+                    summary = stringResource(R.string.summary_apple_music_pronunciation_priority),
+                    items = pronunciationSourceOptions,
+                    selectedIndex = pronunciationSourcePriority,
+                    onSelectedIndexChange = { selected ->
+                        val priority = selected.coerceIn(
+                            RootConstants.APPLE_MUSIC_PRONUNCIATION_HANGUL_FIRST,
+                            RootConstants.APPLE_MUSIC_PRONUNCIATION_SUPPLEMENT_FIRST,
+                        )
+                        pronunciationSourcePriority = priority
+                        saveConfig(
+                            RootConstants.KEY_HOOK_APPLE_MUSIC_PRONUNCIATION_SOURCE_PRIORITY,
+                            priority,
                         )
                     },
                 )

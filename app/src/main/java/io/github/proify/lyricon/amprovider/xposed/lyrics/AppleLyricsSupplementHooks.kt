@@ -311,6 +311,30 @@ internal class AppleLyricsSupplementHooks(
             RootConstants.DEFAULT_HOOK_APPLE_MUSIC_PRONUNCIATION_SOURCE_PRIORITY,
         ) ?: RootConstants.DEFAULT_HOOK_APPLE_MUSIC_PRONUNCIATION_SOURCE_PRIORITY
 
+    /** Requested row visibility; three-line is opt-in and host defaults are untouched. */
+    internal fun appleLyricsDisplayMode(): Int =
+        contentUiLanguagePrefs?.getInt(
+            RootConstants.KEY_HOOK_APPLE_MUSIC_LYRICS_DISPLAY_MODE,
+            RootConstants.DEFAULT_HOOK_APPLE_MUSIC_LYRICS_DISPLAY_MODE,
+        ) ?: RootConstants.DEFAULT_HOOK_APPLE_MUSIC_LYRICS_DISPLAY_MODE
+
+    private fun requestedAppleLyricsRowVisibility(): AppleLyricsVisibilityPolicy.Result {
+        val prefs = contentUiLanguagePrefs
+        return AppleLyricsVisibilityPolicy.resolve(
+            appleTranslation = PreferencesMonitor.isTranslationSelected(),
+            applePronunciation = PreferencesMonitor.isPronunciationSelected(),
+            mode = appleLyricsDisplayMode(),
+            translationOverride = prefs?.getInt(
+                RootConstants.KEY_HOOK_APPLE_MUSIC_TRANSLATION_DISPLAY_OVERRIDE,
+                RootConstants.DEFAULT_HOOK_APPLE_MUSIC_LYRICS_DISPLAY_OVERRIDE,
+            ) ?: RootConstants.DEFAULT_HOOK_APPLE_MUSIC_LYRICS_DISPLAY_OVERRIDE,
+            pronunciationOverride = prefs?.getInt(
+                RootConstants.KEY_HOOK_APPLE_MUSIC_PRONUNCIATION_DISPLAY_OVERRIDE,
+                RootConstants.DEFAULT_HOOK_APPLE_MUSIC_LYRICS_DISPLAY_OVERRIDE,
+            ) ?: RootConstants.DEFAULT_HOOK_APPLE_MUSIC_LYRICS_DISPLAY_OVERRIDE,
+        )
+    }
+
     private val translationPreferenceHitLogged = AtomicBoolean(false)
     private val pronunciationPreferenceHitLogged = AtomicBoolean(false)
 
@@ -597,7 +621,9 @@ internal class AppleLyricsSupplementHooks(
             val adapter = appleRecyclerAdapter(recyclerView) ?: return
             val itemCount = appleRecyclerAdapterItemCount(adapter)
             if (itemCount <= 0) return
-            if (syncDisplayFlags) {
+            if (syncDisplayFlags ||
+                appleLyricsDisplayMode() != RootConstants.APPLE_MUSIC_LYRICS_MODE_APPLE
+            ) {
                 syncAppleLyricsAdapterDisplayFlags(adapter)
                 invalidateAppleLyricsVisibleHolderTextCaches(recyclerView)
             }
@@ -638,16 +664,17 @@ internal class AppleLyricsSupplementHooks(
      * 本轮重绑若继续按旧开关执行，adapter 会整段跳过翻译/发音子行的渲染。
      */
     internal fun syncAppleLyricsAdapterDisplayFlags(adapter: Any) {
+        val requested = requestedAppleLyricsRowVisibility()
         syncAppleLyricsAdapterBooleanFlag(
             adapter = adapter,
             member = AppleMusicRuntimeMember.LYRICS_ADAPTER_TRANSLATION_SELECTED_FIELD,
-            selected = PreferencesMonitor.isTranslationSelected(),
+            selected = requested.translation,
             label = "translation",
         )
         syncAppleLyricsAdapterBooleanFlag(
             adapter = adapter,
             member = AppleMusicRuntimeMember.LYRICS_ADAPTER_PRONUNCIATION_SELECTED_FIELD,
-            selected = PreferencesMonitor.isPronunciationSelected(),
+            selected = requested.pronunciation,
             label = "pronunciation",
         )
     }

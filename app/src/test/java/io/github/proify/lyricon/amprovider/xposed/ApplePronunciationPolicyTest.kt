@@ -157,6 +157,24 @@ class ApplePronunciationPolicyTest {
     }
 
     @Test
+    fun `spreads Hangul pronunciation across native Japanese karaoke words`() {
+        assertEquals(
+            listOf("키", "미", "노", "나와"),
+            ApplePronunciationPolicy.displaySegments(
+                pronunciation = "키미노 나와",
+                mainWordTexts = listOf("君", "の", "名", "は"),
+            ),
+        )
+        assertEquals(
+            listOf("아이", "러브", "유"),
+            ApplePronunciationPolicy.displaySegments(
+                pronunciation = "아이 러브 유",
+                mainWordTexts = listOf("I", "love", "you"),
+            ),
+        )
+    }
+
+    @Test
     fun `groups pronunciation by the Han characters inside native words`() {
         assertEquals(
             listOf("siu sa", "di", "fong", "pei"),

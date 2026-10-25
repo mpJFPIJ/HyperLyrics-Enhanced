@@ -447,6 +447,16 @@ internal class AppleOrchestratorLyricsPlaybackAssembly(
             ) {
                 playbackHooks.onNetworkAutoSkipPreferenceChanged()
             }
+            if (
+                key == RootConstants.KEY_HOOK_APPLE_MUSIC_LYRICS_DISPLAY_MODE ||
+                key == RootConstants.KEY_HOOK_APPLE_MUSIC_TRANSLATION_DISPLAY_OVERRIDE ||
+                key == RootConstants.KEY_HOOK_APPLE_MUSIC_PRONUNCIATION_DISPLAY_OVERRIDE ||
+                key == RootConstants.KEY_HOOK_APPLE_MUSIC_PRONUNCIATION_SOURCE_PRIORITY
+            ) {
+                // Use the existing full-bind refresh to avoid duplicated child translation rows.
+                // Cross-process preference propagation can be delayed; reopening lyrics is a fallback.
+                lyricsHooks.refreshAppleLyricsSupplementPresentation(syncDisplayFlags = true)
+            }
         }
         networkAutoSkipPreferenceListener?.let { previous ->
             runCatching { prefs.unregisterOnSharedPreferenceChangeListener(previous) }

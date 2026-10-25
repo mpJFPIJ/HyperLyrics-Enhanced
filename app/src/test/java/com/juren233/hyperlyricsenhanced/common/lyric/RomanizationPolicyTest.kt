@@ -63,19 +63,30 @@ class RomanizationPolicyTest {
     }
 
     @Test
-    fun `accepts Hangul pronunciations for English supplements only`() {
+    fun `accepts Hangul pronunciations for both English and Japanese supplements`() {
         assertEquals(
             "아이 러브 유",
             RomanizationPolicy.sanitizeSupplement("I love you", "아이 러브 유"),
         )
+        assertEquals(
+            "키미노 나와",
+            RomanizationPolicy.sanitizeSupplement("君の名は", "키미노 나와"),
+        )
+        assertEquals(
+            "아리가토",
+            RomanizationPolicy.sanitizeHangulSupplement("ありがとう", "아리가토"),
+        )
         assertNull(RomanizationPolicy.sanitize("I love you", "아이 러브 유"))
         assertNull(RomanizationPolicy.sanitizeSupplement("I love you", "アイ ラブ ユー"))
-        assertNull(RomanizationPolicy.sanitizeSupplement("君の名は", "키미 노 나 와"))
+        assertNull(RomanizationPolicy.sanitizeHangulSupplement("君の名は", "Kimi no na wa"))
         assertNull(RomanizationPolicy.sanitizeSupplement("I love you", "아이 love 유"))
+        assertNull(RomanizationPolicy.sanitizeSupplement("안녕하세요", "안녕하세요"))
         assertNull(RomanizationPolicy.sanitizeSupplement("...", "아이 러브 유"))
         assertEquals(
             "Kimi no na wa",
             RomanizationPolicy.sanitizeSupplement("君の名は", "Kimi no na wa"),
         )
+        assertTrue(RomanizationPolicy.isHangulPronunciation("키미노 나와"))
+        assertFalse(RomanizationPolicy.isHangulPronunciation("kimi no na wa"))
     }
 }

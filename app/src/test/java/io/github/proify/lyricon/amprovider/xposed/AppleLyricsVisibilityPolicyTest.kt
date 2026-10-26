@@ -87,4 +87,38 @@ class AppleLyricsVisibilityPolicyTest {
             ),
         )
     }
+
+    @Test
+    fun `three line visibility selects both native tracks even with both Apple toggles off`() {
+        val effective = AppleLyricsVisibilityPolicy.resolve(
+            appleTranslation = false,
+            applePronunciation = false,
+            mode = RootConstants.APPLE_MUSIC_LYRICS_MODE_THREE_LINE,
+            translationOverride = RootConstants.APPLE_MUSIC_LYRICS_DISPLAY_FOLLOW_APPLE,
+            pronunciationOverride = RootConstants.APPLE_MUSIC_LYRICS_DISPLAY_FOLLOW_APPLE,
+        )
+        val tracks = appleNativeSupplementTracks(
+            pronunciationSelected = effective.pronunciation,
+            translationSelected = effective.translation,
+        )
+        assertEquals(true, AppleNativeSupplementTrack.TRANSLATION in tracks)
+        assertEquals(true, AppleNativeSupplementTrack.PRONUNCIATION in tracks)
+    }
+
+    @Test
+    fun `custom visibility cannot select a native pronunciation track when explicitly hidden`() {
+        val effective = AppleLyricsVisibilityPolicy.resolve(
+            appleTranslation = true,
+            applePronunciation = true,
+            mode = RootConstants.APPLE_MUSIC_LYRICS_MODE_CUSTOM,
+            translationOverride = RootConstants.APPLE_MUSIC_LYRICS_DISPLAY_SHOW,
+            pronunciationOverride = RootConstants.APPLE_MUSIC_LYRICS_DISPLAY_HIDE,
+        )
+        val tracks = appleNativeSupplementTracks(
+            pronunciationSelected = effective.pronunciation,
+            translationSelected = effective.translation,
+        )
+        assertEquals(true, AppleNativeSupplementTrack.TRANSLATION in tracks)
+        assertEquals(false, AppleNativeSupplementTrack.PRONUNCIATION in tracks)
+    }
 }

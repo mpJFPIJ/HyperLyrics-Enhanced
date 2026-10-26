@@ -355,6 +355,8 @@ object RootConstants {
     const val KEY_HOOK_AI_TRANS_FORCE_OVERRIDE = "key_hook_ai_trans_force_override"
     const val KEY_HOOK_AI_TRANS_PROVIDER = "key_hook_ai_trans_provider"
     const val KEY_HOOK_AI_TRANS_API_KEY = "key_hook_ai_trans_api_key"
+    /** Local-only multi-key pool. Never synced to the Apple Music/NPatch process. */
+    const val KEY_HOOK_AI_TRANS_API_KEYS = "key_hook_ai_trans_api_keys"
     const val KEY_HOOK_AI_TRANS_MODEL = "key_hook_ai_trans_model"
     const val KEY_HOOK_AI_TRANS_BASE_URL = "key_hook_ai_trans_base_url"
     const val KEY_HOOK_AI_TRANS_TARGET_LANG = "key_hook_ai_trans_target_lang"

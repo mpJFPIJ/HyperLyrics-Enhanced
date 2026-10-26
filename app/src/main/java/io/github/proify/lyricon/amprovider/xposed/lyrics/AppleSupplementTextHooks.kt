@@ -431,16 +431,22 @@ internal fun AppleLyricsSupplementHooks.thirdPartyPronunciationFallbackLanguage(
 
 internal fun AppleLyricsSupplementHooks.applyAppleNativeSupplementSelection(songNative: Any) {
     val songId = nativeSongId(songNative)
+    // Use the same effective visibility for track selection and RecyclerView binding.
+    // In three-line mode the host toggle may be off, but its pronunciation/translation
+    // track still needs to be selected. Do not mutate Apple's stored preferences.
+    val requested = requestedAppleLyricsRowVisibility()
     reportApplePronunciationRuntimeDiagnostic(
         stage = "supplement_selection",
         songId = songId,
         details = "pronunciationSelected=${PreferencesMonitor.isPronunciationSelected()}, " +
             "translationSelected=${PreferencesMonitor.isTranslationSelected()}, " +
+            "effectivePronunciation=${requested.pronunciation}, " +
+            "effectiveTranslation=${requested.translation}, " +
             "hasOnlinePronunciation=${nativeOnlineTranslationStore.hasPronunciation(songId)}",
     )
     val tracks = appleNativeSupplementTracks(
-        pronunciationSelected = PreferencesMonitor.isPronunciationSelected(),
-        translationSelected = PreferencesMonitor.isTranslationSelected(),
+        pronunciationSelected = requested.pronunciation,
+        translationSelected = requested.translation,
     )
     if (AppleNativeSupplementTrack.TRANSLATION in tracks) {
         applyAppleNativeTranslationSelection(songNative)

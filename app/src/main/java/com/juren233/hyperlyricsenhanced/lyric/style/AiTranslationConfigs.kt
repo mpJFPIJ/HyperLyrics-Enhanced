@@ -28,7 +28,7 @@ data class AiTranslationConfigs(
     }
 
     override fun toString(): String {
-        return "AiTranslationConfigs(baseUrl=$baseUrl, provider=$provider, targetLanguage=$targetLanguage, apiKeys=<redacted count=${apiKeys.size + if (apiKey.isNullOrBlank()) 0 else 1}>, model=$model temperature=$temperature topP=$topP maxTokens=$maxTokens prompt=${
+        return "AiTranslationConfigs(baseUrl=$baseUrl, provider=$provider, targetLanguage=$targetLanguage, apiKeys=<redacted count=${if (apiKeys.isNotEmpty()) apiKeys.size else if (apiKey.isNullOrBlank()) 0 else 1}>, model=$model temperature=$temperature topP=$topP maxTokens=$maxTokens prompt=${
             prompt.take(30)
         }..., isUsable=$isUsable)"
     }

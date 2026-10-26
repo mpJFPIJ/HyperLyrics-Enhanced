@@ -62,6 +62,8 @@ internal class AppleOnlineSourceMenuHooks(
     internal val missingLyricsPronunciationSource: (String?) -> String?,
     internal val requestOnlineSource: (Long, String, String, String) -> Boolean,
     internal val debugValue: (Any?) -> String,
+    internal val lyricSyncOffsetForSong: (String) -> Int = { 0 },
+    internal val changeLyricSyncOffset: (String, Int) -> Int? = { _, _ -> null },
     private val configuredOrderedSources: () -> List<String> = { DEFAULT_SOURCE_ORDER },
     private val availableLyricsSources: (String?) -> List<String> = { emptyList() },
 ) {
@@ -676,6 +678,62 @@ internal class AppleOnlineSourceMenuHooks(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
             ),
         )
+        // This clock projection currently drives only module-provided lyric rows.
+        // Do not advertise Apple-native karaoke sync until its independent host clock
+        // has been verified on Apple Music 6.5.3 / NPatch.
+        if (
+            isLyricsSourceDialog &&
+            hasMissingLyricsSupplement(songId) &&
+            currentSource(songId, contentType) != APPLE_NATIVE_SOURCE
+        ) {
+            val korean = context.resources.configuration.locales.get(0)?.language == "ko"
+            val currentOffset = TextView(context).apply {
+                textSize = 15f
+                setTextColor(onSurfaceColor)
+                typeface = Typeface.DEFAULT_BOLD
+                setPadding(0, dp(context, 16), 0, dp(context, 4))
+            }
+            fun updateOffsetLabel(value: Int) {
+                currentOffset.text = if (korean) "곡별 가사 싱크: %+.1f초".format(value / 1000.0)
+                    else "Lyric sync: %+.1fs".format(value / 1000.0)
+            }
+            updateOffsetLabel(lyricSyncOffsetForSong(songId))
+            list.addView(currentOffset)
+            val controls = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER_VERTICAL
+            }
+            listOf(-500, -100, 0, 100, 500).forEach { delta ->
+                controls.addView(
+                    TextView(context).apply {
+                        text = if (delta == 0) "↺" else "${if (delta > 0) "+" else ""}$delta"
+                        textSize = 13f
+                        gravity = android.view.Gravity.CENTER
+                        minimumHeight = dp(context, 48)
+                        setTextColor(primaryColor)
+                        isClickable = true
+                        isFocusable = true
+                        contentDescription = when {
+                            delta == 0 -> if (korean) "싱크 초기화" else "Reset sync"
+                            delta > 0 -> if (korean) "가사 ${delta}밀리초 늦추기" else "Delay lyrics $delta ms"
+                            else -> if (korean) "가사 ${-delta}밀리초 앞당기기" else "Advance lyrics ${-delta} ms"
+                        }
+                        setOnClickListener {
+                            val change = if (delta == 0) -lyricSyncOffsetForSong(songId) else delta
+                            changeLyricSyncOffset(songId, change)?.let(::updateOffsetLabel)
+                        }
+                    },
+                    LinearLayout.LayoutParams(0, dp(context, 48), 1f),
+                )
+            }
+            list.addView(controls)
+            list.addView(TextView(context).apply {
+                text = if (korean) "보충 가사에만 적용되며 Apple 원본 가사 시간은 바뀌지 않습니다."
+                    else "For supplemental lyrics only. Apple's original timestamps stay unchanged."
+                textSize = 12f
+                setTextColor(onSurfaceVariantColor)
+            })
+        }
         val dialogRoot = FrameLayout(context).apply {
             background = roundedDrawable(context, surfaceColor, 28)
             addView(

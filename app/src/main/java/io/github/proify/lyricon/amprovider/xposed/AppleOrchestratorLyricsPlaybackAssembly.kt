@@ -381,6 +381,8 @@ internal class AppleOrchestratorLyricsPlaybackAssembly(
                 ) == true
             },
             debugValue = lyricsHooks::debugAppleLyricsValue,
+            lyricSyncOffsetForSong = lyricsHooks::lyricSyncOffsetForSong,
+            changeLyricSyncOffset = lyricsHooks::changeLyricSyncOffset,
             configuredOrderedSources = {
                 com.juren233.hyperlyricsenhanced.online.OnlineTranslationSourcePreferences
                     .orderedSources(catalogLanguage.contentUiLanguagePrefs)

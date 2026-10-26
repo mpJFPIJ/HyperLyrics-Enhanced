@@ -140,6 +140,32 @@ internal class AppleLyricsSupplementHooks(
         get() = runtime.mainHandler
     internal val contentUiLanguagePrefs: SharedPreferences?
         get() = preferences()
+    /** Dedicated host-private store: song IDs and offsets never enter the global hook config. */
+    private val lyricsSongOffsetStore by lazy {
+        val prefs = application.getSharedPreferences(
+            "hyperlyrics_enhanced_song_sync_offsets",
+            android.content.Context.MODE_PRIVATE,
+        )
+        AppleLyricsSongOffsetStore(object : AppleLyricsSongOffsetStore.Preferences {
+            override fun read(key: String): Int = prefs.getInt(key, 0)
+            override fun write(key: String, value: Int?) {
+                prefs.edit().apply {
+                    if (value == null) remove(key) else putInt(key, value)
+                }.apply()
+            }
+        })
+    }
+
+    internal fun lyricSyncOffsetForSong(songId: String?): Int = lyricsSongOffsetStore.get(songId)
+
+    internal fun changeLyricSyncOffset(songId: String?, deltaMs: Int): Int? {
+        if (songId.isNullOrBlank() || currentAppleLyricsSongId != songId) return null
+        val next = AppleLyricsSyncOffset.nextOffsetMs(lyricsSongOffsetStore.get(songId), deltaMs)
+        if (!lyricsSongOffsetStore.set(songId, next)) return null
+        activeLineUpdateController.stop()
+        updateSupplementActiveLine()
+        return next
+    }
     internal val coroutineScope by lazy { CoroutineScope(Dispatchers.Default + SupervisorJob()) }
 
     /** 方法发现与安装去重；各 Hook 家族独立，互不共享第一次安装判定。 */

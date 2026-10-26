@@ -22,6 +22,7 @@ internal object OpenAiHttpRetryPolicy {
         retryAfter: String?,
         jitterMillis: Long,
         reason: String? = null,
+        alternateKeyAvailable: Boolean = false,
     ): Long? {
         if (attempt < 0 || attempt >= MAX_ATTEMPTS - 1) return null
         val retryAfterSeconds = retryAfter?.trim()?.toLongOrNull()?.takeIf { it >= 0L }
@@ -33,10 +34,12 @@ internal object OpenAiHttpRetryPolicy {
         val delayBeforeJitter = when (statusCode) {
             500, 502, 503, 504 -> maxOf(minDelay, explicitDelayMs ?: minDelay)
             429 -> {
-                // A 429 can mean a daily hard quota rather than a short rate limit.
-                // Only one explicit bounded retry, and never retry quota exhaustion.
-                if (reason == "quota" || attempt > 0 || explicitDelayMs == null) return null
-                maxOf(minDelay, explicitDelayMs)
+                // A 429 can mean a shared project-wide hard quota. Never retry a
+                // classified quota failure. With another user-configured key, a
+                // single bounded failover may help a transient key-level limit.
+                if (reason == "quota" || attempt > 0) return null
+                if (explicitDelayMs == null && !alternateKeyAvailable) return null
+                maxOf(minDelay, explicitDelayMs ?: minDelay)
             }
             else -> return null
         }

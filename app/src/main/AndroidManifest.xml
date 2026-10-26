@@ -27,7 +27,9 @@
         android:testOnly="false"
         android:theme="@style/Theme.MaterialComponents.DayNight.NoActionBar"
         android:icon="@mipmap/ic_launcher"
-        android:roundIcon="@mipmap/ic_launcher_round">
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:fullBackupContent="@xml/backup_rules"
+        android:dataExtractionRules="@xml/data_extraction_rules">
 
         <meta-data
             android:name="lyricon_module"

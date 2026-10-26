@@ -23,7 +23,10 @@ internal object OpenAiTranslationClient {
         song: Song? = null,
         texts: List<String>
     ): List<TranslationItem>? = withContext(Dispatchers.IO) {
-        if (configs.apiKey.isNullOrBlank()) {
+        val configuredKeys = configs.apiKeys.takeIf { it.isNotEmpty() }
+            ?: AiApiKeyPool.parse(null, configs.apiKey)
+        val orderedKeys = AiApiKeyPool.orderedForRequest(configuredKeys)
+        if (orderedKeys.isEmpty()) {
             LogManager.w("AppleMusicAiService", "stage=http_skipped reason=missing_api_key")
             HookLogger.w("OpenAiTranslationClient", "跳过翻译请求: reason=missing_api_key")
             return@withContext null
@@ -75,6 +78,9 @@ internal object OpenAiTranslationClient {
         val requestBody = chatRequest.toJson()
         val url = URL(apiUrl)
         for (attempt in 0 until OpenAiHttpRetryPolicy.MAX_ATTEMPTS) {
+            // A new request starts on the next key; transient retries use the next
+            // configured key without repeating the entire song translation queue.
+            val selectedKey = orderedKeys[attempt % orderedKeys.size]
             var connection: HttpURLConnection? = null
             var retryDelayMs: Long? = null
             try {
@@ -88,7 +94,7 @@ internal object OpenAiTranslationClient {
                     readTimeout = 3 * (60 * 1000)
                     doOutput = true
                     setRequestProperty("Content-Type", "application/json")
-                    setRequestProperty("Authorization", "Bearer ${configs.apiKey}")
+                    setRequestProperty("Authorization", "Bearer $selectedKey")
                 }
 
                 OutputStreamWriter(connection.outputStream).use {
@@ -119,6 +125,7 @@ internal object OpenAiTranslationClient {
                     retryAfter = connection.getHeaderField("Retry-After"),
                     jitterMillis = Random.nextLong(0L, 501L),
                     reason = reason,
+                    alternateKeyAvailable = orderedKeys.size > 1 && attempt < 1,
                 )
                 if (retryDelayMs != null) {
                     LogManager.w(

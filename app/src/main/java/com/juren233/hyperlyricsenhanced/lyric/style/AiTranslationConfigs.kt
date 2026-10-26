@@ -7,6 +7,8 @@ data class AiTranslationConfigs(
     val provider: String? = null,
     val targetLanguage: String? = null,
     val apiKey: String? = null,
+    /** Additional configured credentials; server-side translation owns these only. */
+    val apiKeys: List<String> = emptyList(),
     val model: String? = null,
     val baseUrl: String? = null,
     val prompt: String = USER_PROMPT,
@@ -20,15 +22,13 @@ data class AiTranslationConfigs(
     val isUsable by lazy {
         !provider.isNullOrBlank()
                 && !targetLanguage.isNullOrBlank()
-                && !apiKey.isNullOrBlank()
+                && (!apiKey.isNullOrBlank() || apiKeys.isNotEmpty())
                 && !model.isNullOrBlank()
                 && !baseUrl.isNullOrBlank()
     }
 
     override fun toString(): String {
-        return "AiTranslationConfigs(baseUrl=$baseUrl, provider=$provider, targetLanguage=$targetLanguage, apiKey=${
-            apiKey.orEmpty().take(6)
-        }..., model=$model temperature=$temperature topP=$topP maxTokens=$maxTokens prompt=${
+        return "AiTranslationConfigs(baseUrl=$baseUrl, provider=$provider, targetLanguage=$targetLanguage, apiKeys=<redacted count=${apiKeys.size + if (apiKey.isNullOrBlank()) 0 else 1}>, model=$model temperature=$temperature topP=$topP maxTokens=$maxTokens prompt=${
             prompt.take(30)
         }..., isUsable=$isUsable)"
     }

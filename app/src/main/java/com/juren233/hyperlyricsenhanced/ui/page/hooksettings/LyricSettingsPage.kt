@@ -18,7 +18,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import com.juren233.hyperlyricsenhanced.root.aitrans.AiApiKeyPool
+import com.juren233.hyperlyricsenhanced.root.aitrans.AiApiKeyStore
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.juren233.hyperlyricsenhanced.R
@@ -42,6 +44,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 fun LyricSettingsPage() {
     val navigator = LocalNavigator.current
     val prefs = rememberHookPrefs()
+    val context = LocalContext.current
     val saveConfig = rememberHookConfigSaver(prefs)
 
     var lyricSource by remember {
@@ -124,11 +127,7 @@ fun LyricSettingsPage() {
         )
     }
     var apiKeys by remember {
-        mutableStateOf(
-            prefs.getString(RootConstants.KEY_HOOK_AI_TRANS_API_KEYS, null)
-                ?.takeIf(String::isNotBlank)
-                ?: prefs.getString(RootConstants.KEY_HOOK_AI_TRANS_API_KEY, "").orEmpty()
-        )
+        mutableStateOf(AiApiKeyStore.read(context, prefs).joinToString("\n"))
     }
     val koreanLocale = LocalConfiguration.current.locales.get(0)?.language == "ko"
     val configuredApiKeyCount = AiApiKeyPool.parse(apiKeys).size
@@ -179,14 +178,8 @@ fun LyricSettingsPage() {
         initialValue = apiKeys,
         onDismiss = { showApiKeyDialog = false },
         onConfirm = { input ->
-            val normalized = AiApiKeyPool.parse(input).joinToString("\n")
-            apiKeys = normalized
-            // Credentials belong only to this app's private preferences.
-            // Do NOT route them through PrefsBridge to the patched Apple Music process.
-            prefs.edit()
-                .putString(RootConstants.KEY_HOOK_AI_TRANS_API_KEYS, normalized)
-                .putString(RootConstants.KEY_HOOK_AI_TRANS_API_KEY, "")
-                .apply()
+            // Dedicated private file: never synchronizes with the Xposed process.
+            apiKeys = AiApiKeyStore.save(context, prefs, input).joinToString("\n")
         },
     )
     TextInputDialog(

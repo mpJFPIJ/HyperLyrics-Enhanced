@@ -21,7 +21,7 @@ class OpenAiHttpRetryPolicyTest {
     }
 
     @Test
-    fun `400 and 401 fail immediately and 429 is left for quota aware handling`() {
+    fun `permanent 4xx and unscheduled 429 fail immediately`() {
         for (status in listOf(400, 401, 403, 404, 429)) {
             assertNull(OpenAiHttpRetryPolicy.nextDelayMillis(status, 0, null, 0))
         }
@@ -39,5 +39,58 @@ class OpenAiHttpRetryPolicyTest {
         assertEquals(1_500L, OpenAiHttpRetryPolicy.nextDelayMillis(503, 0, null, 1_000))
         assertEquals(1_000L, OpenAiHttpRetryPolicy.nextDelayMillis(503, 0, null, -5))
         assertNull(OpenAiHttpRetryPolicy.nextDelayMillis(503, -1, null, 0))
+    }
+
+    @Test
+    fun `429 retries once only with an explicit small Retry After and no hard quota evidence`() {
+        assertEquals(
+            5_250L,
+            OpenAiHttpRetryPolicy.nextDelayMillis(
+                statusCode = 429,
+                attempt = 0,
+                retryAfter = "5",
+                jitterMillis = 250,
+                reason = "unspecified",
+            ),
+        )
+        assertNull(
+            OpenAiHttpRetryPolicy.nextDelayMillis(
+                statusCode = 429,
+                attempt = 1,
+                retryAfter = "5",
+                jitterMillis = 0,
+                reason = "unspecified",
+            ),
+        )
+    }
+
+    @Test
+    fun `429 quota exhaustion and excessive retry interval never retry`() {
+        for (retryAfter in listOf(null, "", "invalid", "120")) {
+            assertNull(OpenAiHttpRetryPolicy.nextDelayMillis(
+                statusCode = 429, attempt = 0, retryAfter = retryAfter,
+                jitterMillis = 0, reason = "unspecified",
+            ))
+        }
+        assertNull(OpenAiHttpRetryPolicy.nextDelayMillis(
+            statusCode = 429, attempt = 0, retryAfter = "3",
+            jitterMillis = 0, reason = "quota",
+        ))
+    }
+
+    @Test
+    fun `429 cannot bypass retry limit and preserves monotonic safe minimum`() {
+        assertEquals(1_000L, OpenAiHttpRetryPolicy.nextDelayMillis(
+            statusCode = 429, attempt = 0, retryAfter = "0",
+            jitterMillis = 0, reason = "unspecified",
+        ))
+        assertNull(OpenAiHttpRetryPolicy.nextDelayMillis(
+            statusCode = 429, attempt = 2, retryAfter = "0",
+            jitterMillis = 0, reason = "unspecified",
+        ))
+        assertNull(OpenAiHttpRetryPolicy.nextDelayMillis(
+            statusCode = 401, attempt = 0, retryAfter = "1",
+            jitterMillis = 0, reason = "unspecified",
+        ))
     }
 }

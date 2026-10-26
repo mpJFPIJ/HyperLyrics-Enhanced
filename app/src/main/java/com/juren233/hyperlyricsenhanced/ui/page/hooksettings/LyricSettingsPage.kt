@@ -17,6 +17,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.platform.LocalConfiguration
+import com.juren233.hyperlyricsenhanced.root.aitrans.AiApiKeyPool
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.juren233.hyperlyricsenhanced.R
@@ -121,9 +123,15 @@ fun LyricSettingsPage() {
             )
         )
     }
-    var apiKey by remember {
-        mutableStateOf(prefs.getString(RootConstants.KEY_HOOK_AI_TRANS_API_KEY, "").orEmpty())
+    var apiKeys by remember {
+        mutableStateOf(
+            prefs.getString(RootConstants.KEY_HOOK_AI_TRANS_API_KEYS, null)
+                ?.takeIf(String::isNotBlank)
+                ?: prefs.getString(RootConstants.KEY_HOOK_AI_TRANS_API_KEY, "").orEmpty()
+        )
     }
+    val koreanLocale = LocalConfiguration.current.locales.get(0)?.language == "ko"
+    val configuredApiKeyCount = AiApiKeyPool.parse(apiKeys).size
     var model by remember {
         mutableStateOf(
             prefs.getString(
@@ -165,12 +173,20 @@ fun LyricSettingsPage() {
 
     TextInputDialog(
         show = showApiKeyDialog,
-        title = stringResource(R.string.label_ai_trans_api_key),
-        initialValue = apiKey,
+        title = if (koreanLocale) "AI API 키 여러 개 등록" else "AI API keys (one per line)",
+        label = if (koreanLocale) "한 줄에 키 하나씩 입력 (최대 12개)"
+            else "Enter one API key per line (up to 12)",
+        initialValue = apiKeys,
         onDismiss = { showApiKeyDialog = false },
-        onConfirm = {
-            apiKey = it
-            saveConfig(RootConstants.KEY_HOOK_AI_TRANS_API_KEY, it)
+        onConfirm = { input ->
+            val normalized = AiApiKeyPool.parse(input).joinToString("\n")
+            apiKeys = normalized
+            // Credentials belong only to this app's private preferences.
+            // Do NOT route them through PrefsBridge to the patched Apple Music process.
+            prefs.edit()
+                .putString(RootConstants.KEY_HOOK_AI_TRANS_API_KEYS, normalized)
+                .putString(RootConstants.KEY_HOOK_AI_TRANS_API_KEY, "")
+                .apply()
         },
     )
     TextInputDialog(
@@ -417,11 +433,16 @@ fun LyricSettingsPage() {
                                 onClick = { showTargetLangDialog = true },
                             )
                             ArrowPreference(
-                                title = stringResource(R.string.label_ai_trans_api_key),
+                                title = if (koreanLocale) "AI API 키 순환 사용"
+                                    else "AI API key rotation",
+                                summary = if (koreanLocale)
+                                    "여러 개를 한 줄에 하나씩 등록하면 요청마다 순서대로 사용합니다. 같은 프로젝트의 사용량 한도는 공유될 수 있습니다."
+                                    else "One key per line. Requests rotate keys; project-level quotas may still be shared.",
                                 endActions = {
                                     Text(
-                                        if (apiKey.isNotEmpty()) {
-                                            "***************"
+                                        if (configuredApiKeyCount > 0) {
+                                            if (koreanLocale) "${configuredApiKeyCount}개 등록"
+                                            else "$configuredApiKeyCount configured"
                                         } else {
                                             stringResource(R.string.summary_not_configured)
                                         },

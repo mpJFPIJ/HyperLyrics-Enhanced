@@ -25,6 +25,7 @@ import io.github.proify.lyricon.amprovider.xposed.ActiveOnlineSourceMenu
 import io.github.proify.lyricon.amprovider.xposed.AppleMusicHookPoint
 import io.github.proify.lyricon.amprovider.xposed.AppleMusicHookTarget
 import io.github.proify.lyricon.amprovider.xposed.AppleMusicProviderRuntime
+import io.github.proify.lyricon.amprovider.xposed.AppleLyricsSyncOffset
 import io.github.proify.lyricon.amprovider.xposed.AppleMusicRuntimeMember
 import io.github.proify.lyricon.amprovider.xposed.AppleNativeOnlineTranslationStore
 import io.github.proify.lyricon.amprovider.xposed.AppleSourceSwitchPerformanceDiagnostics
@@ -64,6 +65,7 @@ internal class AppleOnlineSourceMenuHooks(
     internal val debugValue: (Any?) -> String,
     internal val lyricSyncOffsetForSong: (String) -> Int = { 0 },
     internal val changeLyricSyncOffset: (String, Int) -> Int? = { _, _ -> null },
+    internal val hasKnownNativeLyricsForSong: (String) -> Boolean = { false },
     private val configuredOrderedSources: () -> List<String> = { DEFAULT_SOURCE_ORDER },
     private val availableLyricsSources: (String?) -> List<String> = { emptyList() },
 ) {
@@ -681,10 +683,11 @@ internal class AppleOnlineSourceMenuHooks(
         // This clock projection currently drives only module-provided lyric rows.
         // Do not advertise Apple-native karaoke sync until its independent host clock
         // has been verified on Apple Music 6.5.3 / NPatch.
-        if (
-            isLyricsSourceDialog &&
-            hasMissingLyricsSupplement(songId) &&
-            currentSource(songId, contentType) != APPLE_NATIVE_SOURCE
+        if (isLyricsSourceDialog && AppleLyricsSyncOffset.canAdjustSupplement(
+                hasSupplement = hasMissingLyricsSupplement(songId),
+                nativeLyricsKnown = hasKnownNativeLyricsForSong(songId),
+                appleNativeSelected = currentSource(songId, contentType) == APPLE_NATIVE_SOURCE,
+            )
         ) {
             val korean = context.resources.configuration.locales.get(0)?.language == "ko"
             val currentOffset = TextView(context).apply {

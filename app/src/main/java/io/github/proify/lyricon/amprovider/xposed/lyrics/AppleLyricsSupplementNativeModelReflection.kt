@@ -10,10 +10,15 @@ import com.juren233.hyperlyricsenhanced.common.lyric.RomanizationPolicy
 
 /** Apple 原生歌词模型（SongInfo/LyricsSection/LyricsLine/LyricsWord）的只读反射访问。 */
 internal fun AppleLyricsSupplementHooks.appleLyricsCurrentPlaybackPositionMs(): Long? =
+    playbackHooks().currentPositionMs()
+
+/** Only module-rendered active lines consume the song-specific time projection. */
+internal fun AppleLyricsSupplementHooks.appleLyricsSupplementPlaybackPositionMs(): Long? =
     playbackHooks().currentPositionMs()?.let { rawPosition ->
-        AppleLyricsSyncOffset.lyricPositionMs(
+        AppleLyricsSyncOffset.positionForSurface(
             playbackPositionMs = rawPosition,
             offsetMs = lyricSyncOffsetForSong(currentAppleLyricsSongId),
+            isSupplement = true,
         )
     }
 

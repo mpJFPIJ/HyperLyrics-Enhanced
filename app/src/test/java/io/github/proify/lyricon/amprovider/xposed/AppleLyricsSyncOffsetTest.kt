@@ -22,6 +22,19 @@ class AppleLyricsSyncOffsetTest {
         assertEquals(0, AppleLyricsSyncOffset.nextOffsetMs(500, -500))
     }
 
+    @Test fun `native renderer keeps its raw clock while supplement uses offset`() {
+        assertEquals(12_000L, AppleLyricsSyncOffset.positionForSurface(12_000L, 500, false))
+        assertEquals(11_500L, AppleLyricsSyncOffset.positionForSurface(12_000L, 500, true))
+        assertEquals(12_500L, AppleLyricsSyncOffset.positionForSurface(12_000L, -500, true))
+    }
+
+    @Test fun `controls are hidden when the active renderer cannot apply the offset`() {
+        assertTrue(AppleLyricsSyncOffset.canAdjustSupplement(true, false, false))
+        assertFalse(AppleLyricsSyncOffset.canAdjustSupplement(false, false, false))
+        assertFalse(AppleLyricsSyncOffset.canAdjustSupplement(true, true, false))
+        assertFalse(AppleLyricsSyncOffset.canAdjustSupplement(true, false, true))
+    }
+
     @Test fun `song-specific settings survive recreation and do not leak song ids`() {
         val entries = mutableMapOf<String, Int>()
         val preferences = object : AppleLyricsSongOffsetStore.Preferences {

@@ -21,6 +21,17 @@ internal object AppleLyricsSyncOffset {
             .coerceIn(-MAX_OFFSET_MS.toLong(), MAX_OFFSET_MS.toLong())
             .toInt()
 
+    /** Keep native Apple karaoke and the playback progress bar on their original clock. */
+    fun positionForSurface(playbackPositionMs: Long, offsetMs: Int, isSupplement: Boolean): Long =
+        if (isSupplement) lyricPositionMs(playbackPositionMs, offsetMs) else playbackPositionMs
+
+    /** Only offer controls while the module's active-line driver owns the display. */
+    fun canAdjustSupplement(
+        hasSupplement: Boolean,
+        nativeLyricsKnown: Boolean,
+        appleNativeSelected: Boolean,
+    ): Boolean = hasSupplement && !nativeLyricsKnown && !appleNativeSelected
+
     fun lyricPositionMs(playbackPositionMs: Long, offsetMs: Int): Long {
         val playback = playbackPositionMs.coerceAtLeast(0L)
         val offset = normalize(offsetMs).toLong()

@@ -13,7 +13,7 @@ import com.juren233.hyperlyricsenhanced.common.RootConstants
 import com.juren233.hyperlyricsenhanced.common.UIConstants
 import com.juren233.hyperlyricsenhanced.lyric.model.Song
 import com.juren233.hyperlyricsenhanced.lyric.style.AiTranslationConfigs
-import com.juren233.hyperlyricsenhanced.root.aitrans.AiApiKeyPool
+import com.juren233.hyperlyricsenhanced.root.aitrans.AiApiKeyStore
 import com.juren233.hyperlyricsenhanced.lyric.style.AiTranslationProvider
 import com.juren233.hyperlyricsenhanced.root.aitrans.AITranslator
 import io.github.proify.extensions.deflate
@@ -188,11 +188,7 @@ class AppleMusicAiTranslationService : Service() {
 
         // Keep all keys inside the Enhanced app process. The patched Apple Music
         // bridge sees lyrics/results only, never API credentials.
-        val legacyKey = prefs.getString(RootConstants.KEY_HOOK_AI_TRANS_API_KEY, "")
-        val keys = AiApiKeyPool.parse(
-            configured = prefs.getString(RootConstants.KEY_HOOK_AI_TRANS_API_KEYS, null),
-            legacy = legacyKey,
-        )
+        val keys = AiApiKeyStore.read(this, prefs)
         return AiTranslationConfigs(
             provider = providerName,
             targetLanguage = prefs.getString(

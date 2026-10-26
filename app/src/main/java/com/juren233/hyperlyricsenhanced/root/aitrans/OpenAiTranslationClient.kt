@@ -69,9 +69,9 @@ internal object OpenAiTranslationClient {
             LogManager.i("AppleMusicAiService", "stage=gemini_request_compat model=${configs.model}")
         }
 
-        // Most 503 responses are transient model/backend overloads. Retry them a
-        // few times with jitter rather than immediately losing the lyric result.
-        // Do not retry 429 without a quota-aware policy, or non-transient 4xx.
+        // Transient 5xx retries use bounded backoff. A 429 only retries when
+        // its short Retry-After header and classified reason permit it; hard
+        // quota failures and permanent 4xx never enter a retry loop.
         val requestBody = chatRequest.toJson()
         val url = URL(apiUrl)
         for (attempt in 0 until OpenAiHttpRetryPolicy.MAX_ATTEMPTS) {
@@ -118,11 +118,13 @@ internal object OpenAiTranslationClient {
                     attempt = attempt,
                     retryAfter = connection.getHeaderField("Retry-After"),
                     jitterMillis = Random.nextLong(0L, 501L),
+                    reason = reason,
                 )
                 if (retryDelayMs != null) {
                     LogManager.w(
                         "AppleMusicAiService",
-                        "stage=http_retry code=$responseCode next_attempt=${attempt + 2} delay_ms=$retryDelayMs"
+                        "stage=http_retry code=$responseCode reason=$reason " +
+                            "next_attempt=${attempt + 2} delay_ms=$retryDelayMs"
                     )
                 } else {
                     LogManager.w(

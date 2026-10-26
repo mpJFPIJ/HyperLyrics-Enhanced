@@ -93,4 +93,23 @@ class OpenAiHttpRetryPolicyTest {
             jitterMillis = 0, reason = "unspecified",
         ))
     }
+
+    @Test
+    fun `429 can fail over once when an alternate configured key exists`() {
+        assertEquals(
+            1_000L,
+            OpenAiHttpRetryPolicy.nextDelayMillis(
+                statusCode = 429, attempt = 0, retryAfter = null,
+                jitterMillis = 0, reason = "unspecified", alternateKeyAvailable = true,
+            ),
+        )
+        assertNull(OpenAiHttpRetryPolicy.nextDelayMillis(
+            statusCode = 429, attempt = 1, retryAfter = null,
+            jitterMillis = 0, reason = "unspecified", alternateKeyAvailable = true,
+        ))
+        assertNull(OpenAiHttpRetryPolicy.nextDelayMillis(
+            statusCode = 429, attempt = 0, retryAfter = null,
+            jitterMillis = 0, reason = "quota", alternateKeyAvailable = true,
+        ))
+    }
 }

@@ -318,7 +318,7 @@ internal class AppleLyricsSupplementHooks(
             RootConstants.DEFAULT_HOOK_APPLE_MUSIC_LYRICS_DISPLAY_MODE,
         ) ?: RootConstants.DEFAULT_HOOK_APPLE_MUSIC_LYRICS_DISPLAY_MODE
 
-    private fun requestedAppleLyricsRowVisibility(): AppleLyricsVisibilityPolicy.Result {
+    internal fun requestedAppleLyricsRowVisibility(): AppleLyricsVisibilityPolicy.Result {
         val prefs = contentUiLanguagePrefs
         return AppleLyricsVisibilityPolicy.resolve(
             appleTranslation = PreferencesMonitor.isTranslationSelected(),

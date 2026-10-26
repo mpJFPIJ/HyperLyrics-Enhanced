@@ -1,19 +1,11 @@
-<?xml version="1.0" encoding="utf-8"?><!--
-   Sample data extraction rules file; uncomment and customize as necessary.
-   See https://developer.android.com/about/versions/12/backup-restore#xml-changes
-   for details.
--->
+<?xml version="1.0" encoding="utf-8"?>
 <data-extraction-rules>
     <cloud-backup>
-        <!-- TODO: Use <include> and <exclude> to control what is backed up.
-        <include .../>
-        <exclude .../>
-        -->
+        <!-- Never export private AI API key pools to a cloud backup. -->
+        <exclude domain="sharedpref" path="hyperlyricsenhanced_private_ai_credentials.xml" />
     </cloud-backup>
-    <!--
     <device-transfer>
-        <include .../>
-        <exclude .../>
+        <!-- New devices must opt in by entering their own API credentials. -->
+        <exclude domain="sharedpref" path="hyperlyricsenhanced_private_ai_credentials.xml" />
     </device-transfer>
-    -->
 </data-extraction-rules>

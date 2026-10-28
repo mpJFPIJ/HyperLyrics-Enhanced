@@ -126,6 +126,14 @@ fun LyricSettingsPage() {
             )
         )
     }
+    var webSearchEnabled by remember {
+        mutableStateOf(
+            prefs.getBoolean(
+                RootConstants.KEY_HOOK_AI_TRANS_WEB_SEARCH,
+                RootConstants.DEFAULT_HOOK_AI_TRANS_WEB_SEARCH,
+            )
+        )
+    }
     var apiKeys by remember {
         mutableStateOf(AiApiKeyStore.read(context, prefs).joinToString("\n"))
     }
@@ -412,6 +420,18 @@ fun LyricSettingsPage() {
                                             false,
                                         )
                                     }
+                                },
+                            )
+                            SwitchPreference(
+                                title = if (koreanLocale) "Gemini 웹 번역 참고"
+                                    else "Gemini web translation research",
+                                summary = if (koreanLocale)
+                                    "같은 곡의 한국어 번역과 해석 자료를 검색·확인한 뒤 AI 번역에 참고합니다. 검색 사용량에 따라 요금이 발생할 수 있습니다. 공식 Gemini API에서만 작동합니다."
+                                else "Research cited web interpretations before translation. Google Search usage may incur charges; requires the official Gemini API.",
+                                checked = webSearchEnabled,
+                                onCheckedChange = {
+                                    webSearchEnabled = it
+                                    saveConfig(RootConstants.KEY_HOOK_AI_TRANS_WEB_SEARCH, it)
                                 },
                             )
                             ArrowPreference(

@@ -16,7 +16,9 @@ data class AiTranslationConfigs(
     val topP: Float = DEFAULT_TOP_P,
     val maxTokens: Int = DEFAULT_MAX_TOKENS,
     val presencePenalty: Float = DEFAULT_PRESENCE_PENALTY,
-    val frequencyPenalty: Float = DEFAULT_FREQUENCY_PENALTY
+    val frequencyPenalty: Float = DEFAULT_FREQUENCY_PENALTY,
+    /** Optional Google Search grounding; disabled by default to avoid unrequested tool charges. */
+    val webSearchEnabled: Boolean = false,
 ) {
 
     val isUsable by lazy {
@@ -28,7 +30,7 @@ data class AiTranslationConfigs(
     }
 
     override fun toString(): String {
-        return "AiTranslationConfigs(baseUrl=$baseUrl, provider=$provider, targetLanguage=$targetLanguage, apiKeys=<redacted count=${if (apiKeys.isNotEmpty()) apiKeys.size else if (apiKey.isNullOrBlank()) 0 else 1}>, model=$model temperature=$temperature topP=$topP maxTokens=$maxTokens prompt=${
+        return "AiTranslationConfigs(baseUrl=$baseUrl, provider=$provider, targetLanguage=$targetLanguage, apiKeys=<redacted count=${if (apiKeys.isNotEmpty()) apiKeys.size else if (apiKey.isNullOrBlank()) 0 else 1}>, model=$model webSearchEnabled=$webSearchEnabled temperature=$temperature topP=$topP maxTokens=$maxTokens prompt=${
             prompt.take(30)
         }..., isUsable=$isUsable)"
     }

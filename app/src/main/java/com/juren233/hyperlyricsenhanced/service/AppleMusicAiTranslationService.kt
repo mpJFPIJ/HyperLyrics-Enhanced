@@ -219,6 +219,10 @@ class AppleMusicAiTranslationService : Service() {
             maxTokens = prefs.getInt(
                 RootConstants.KEY_HOOK_AI_TRANS_MAX_TOKENS, AiTranslationConfigs.DEFAULT_MAX_TOKENS
             ),
+            webSearchEnabled = prefs.getBoolean(
+                RootConstants.KEY_HOOK_AI_TRANS_WEB_SEARCH,
+                RootConstants.DEFAULT_HOOK_AI_TRANS_WEB_SEARCH,
+            ),
         )
     }
 

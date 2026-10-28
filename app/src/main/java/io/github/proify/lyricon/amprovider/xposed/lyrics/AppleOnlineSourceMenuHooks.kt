@@ -845,37 +845,46 @@ internal class AppleOnlineSourceMenuHooks(
         fields.addView(translation)
         fields.addView(pronunciation)
 
-        fun currentSongStillMatches(): Boolean = currentSongId() == editable.songId
-
-        AlertDialog.Builder(context)
+        val dialog = AlertDialog.Builder(context)
             .setTitle(if (korean) "가사 줄 수정" else "Edit lyric line")
             .setView(fields)
             .setNegativeButton(if (korean) "취소" else "Cancel", null)
-            .setNeutralButton(if (korean) "수정 초기화" else "Reset edits") { _, _ ->
-                if (!currentSongStillMatches()) return@setNeutralButton
-                saveEditableLine(editable, null, null)
+            .setNeutralButton(if (korean) "수정 초기화" else "Reset edits", null)
+            .setPositiveButton(if (korean) "저장" else "Save", null)
+            .create()
+
+        fun submitEdits(newTranslation: String?, newPronunciation: String?) {
+            val result = AppleLyricsLineEditSubmission.submit(editable.songId, currentSongId()) {
+                saveEditableLine(editable, newTranslation, newPronunciation)
             }
-            .setPositiveButton(if (korean) "저장" else "Save") { _, _ ->
-                if (!currentSongStillMatches()) {
-                    Toast.makeText(
-                        context,
-                        if (korean) "곡이 변경되어 저장하지 않았습니다." else "Song changed; edits not saved.",
-                        Toast.LENGTH_SHORT,
-                    ).show()
-                    return@setPositiveButton
+            if (result.canDismiss) {
+                dialog.dismiss()
+            } else {
+                val message = when (result) {
+                    AppleLyricsLineEditSubmission.Result.SONG_CHANGED ->
+                        if (korean) "곡이 변경되어 저장하지 않았습니다." else "Song changed; edits not saved."
+                    AppleLyricsLineEditSubmission.Result.SAVE_FAILED ->
+                        if (korean) "저장에 실패했습니다. 발음 입력 또는 저장 공간을 확인하세요."
+                        else "Could not save. Check pronunciation and storage."
+                    AppleLyricsLineEditSubmission.Result.SAVED -> return
                 }
+                Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+            }
+        }
+
+        dialog.setOnShowListener {
+            // AlertDialog's default button listener dismisses the editor even when
+            // validation or persistence fails. Manual clicks preserve unsaved input.
+            dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
+                submitEdits(null, null)
+            }
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 val newTranslation = translation.text?.toString()?.trim().orEmpty()
                 val newPronunciation = pronunciation.text?.toString()?.trim().orEmpty()
-                if (!saveEditableLine(editable, newTranslation, newPronunciation)) {
-                    Toast.makeText(
-                        context,
-                        if (korean) "수정값을 저장하지 못했습니다. 발음 입력을 확인하세요."
-                            else "Edits were not saved. Check the pronunciation text.",
-                        Toast.LENGTH_LONG,
-                    ).show()
-                }
+                submitEdits(newTranslation, newPronunciation)
             }
-            .show()
+        }
+        dialog.show()
     }
 
 }

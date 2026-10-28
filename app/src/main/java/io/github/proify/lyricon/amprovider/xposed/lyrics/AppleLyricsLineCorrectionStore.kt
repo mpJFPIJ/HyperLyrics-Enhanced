@@ -96,6 +96,39 @@ internal class AppleLyricsLineCorrectionStore(private val storage: Storage) {
         return true
     }
 
+    /** One editor action writes both fields together; invalid input cannot half-save a row. */
+    @Synchronized
+    fun replaceTranslationAndPronunciation(
+        songId: String?,
+        begin: Long,
+        end: Long,
+        sourceText: String?,
+        translation: String?,
+        pronunciation: String?,
+    ): Boolean {
+        val id = validSongId(songId) ?: return false
+        val row = validRow(begin, end, sourceText) ?: return false
+        val newTranslation = translation?.trim()?.takeIf(String::isNotEmpty)
+        val newPronunciation = pronunciation?.trim()?.takeIf(String::isNotEmpty)
+        if (newTranslation != null && newTranslation.length > MAX_TEXT_LENGTH) return false
+        if (newPronunciation != null && (newPronunciation.length > MAX_TEXT_LENGTH ||
+                RomanizationPolicy.sanitizeSupplement(row.sourceText, newPronunciation) == null)
+        ) return false
+        if (!load(id)) return false
+        val before = loadedRows[row] ?: Correction()
+        val after = before.copy(translation = newTranslation, pronunciation = newPronunciation)
+        if (before == after) return true
+        val next = loadedRows.toMutableMap()
+        if (after.isEmpty()) next.remove(row) else next[row] = after
+        if (next.size > MAX_LINES_PER_SONG) return false
+        val encoded = encode(next)
+        if (encoded != null && encoded.length > MAX_SONG_BYTES) return false
+        val key = loadedStorageKey ?: return false
+        if (runCatching { storage.write(key, encoded) }.isFailure) return false
+        loadedRows = next
+        return true
+    }
+
     private fun load(songId: String): Boolean {
         if (loadedSongId == songId) return true
         val key = storageKey(songId)

@@ -386,6 +386,14 @@ internal class AppleOrchestratorLyricsPlaybackAssembly(
             hasKnownNativeLyricsForSong = { songId ->
                 missingLyricsHooks.hasKnownNativeLyricsFor(songId)
             },
+            currentEditableLine = { songId ->
+                lyricsHooks.currentEditableNativeLine(songId)
+            },
+            saveEditableLine = { line, translation, pronunciation ->
+                lyricsHooks.saveUserLineTranslationAndPronunciation(
+                    line, translation, pronunciation,
+                )
+            },
             configuredOrderedSources = {
                 com.juren233.hyperlyricsenhanced.online.OnlineTranslationSourcePreferences
                     .orderedSources(catalogLanguage.contentUiLanguagePrefs)

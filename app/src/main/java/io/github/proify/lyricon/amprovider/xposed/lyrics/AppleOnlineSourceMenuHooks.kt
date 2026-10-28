@@ -6,18 +6,24 @@
 
 package io.github.proify.lyricon.amprovider.xposed.lyrics
 
+import android.app.AlertDialog
 import android.app.Dialog
+import android.content.Context
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.text.InputFilter
+import android.text.InputType
 import android.util.TypedValue
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.PopupWindow
 import android.widget.TextView
+import android.widget.Toast
 import com.juren233.hyperlyricsenhanced.BuildConfig
 import com.juren233.hyperlyricsenhanced.common.lyric.AppleMissingLyricsSourceInfo
 import com.juren233.hyperlyricsenhanced.common.lyric.AppleMissingLyricsSourceStatus
@@ -26,6 +32,7 @@ import io.github.proify.lyricon.amprovider.xposed.AppleMusicHookPoint
 import io.github.proify.lyricon.amprovider.xposed.AppleMusicHookTarget
 import io.github.proify.lyricon.amprovider.xposed.AppleMusicProviderRuntime
 import io.github.proify.lyricon.amprovider.xposed.AppleLyricsSyncOffset
+import io.github.proify.lyricon.amprovider.xposed.AppleLyricsEditableLine
 import io.github.proify.lyricon.amprovider.xposed.AppleMusicRuntimeMember
 import io.github.proify.lyricon.amprovider.xposed.AppleNativeOnlineTranslationStore
 import io.github.proify.lyricon.amprovider.xposed.AppleSourceSwitchPerformanceDiagnostics
@@ -66,6 +73,9 @@ internal class AppleOnlineSourceMenuHooks(
     internal val lyricSyncOffsetForSong: (String) -> Int = { 0 },
     internal val changeLyricSyncOffset: (String, Int) -> Int? = { _, _ -> null },
     internal val hasKnownNativeLyricsForSong: (String) -> Boolean = { false },
+    internal val currentEditableLine: (String) -> AppleLyricsEditableLine? = { null },
+    internal val saveEditableLine: (AppleLyricsEditableLine, String?, String?) -> Boolean =
+        { _, _, _ -> false },
     private val configuredOrderedSources: () -> List<String> = { DEFAULT_SOURCE_ORDER },
     private val availableLyricsSources: (String?) -> List<String> = { emptyList() },
 ) {
@@ -737,6 +747,29 @@ internal class AppleOnlineSourceMenuHooks(
                 setTextColor(onSurfaceVariantColor)
             })
         }
+        // A safe first editor entry point: it targets the currently timed native
+        // line by song ID + immutable source timing/text, without replacing Apple's
+        // RecyclerView long-click handlers or touching its word-level karaoke.
+        if (isLyricsSourceDialog && hasKnownNativeLyricsForSong(songId)) {
+            currentEditableLine(songId)?.let { editable ->
+                val korean = context.resources.configuration.locales.get(0)?.language == "ko"
+                list.addView(TextView(context).apply {
+                    text = if (korean) "현재 가사 줄 번역·발음 수정" else "Edit current line translation / pronunciation"
+                    textSize = 15f
+                    typeface = Typeface.DEFAULT_BOLD
+                    setTextColor(primaryColor)
+                    minimumHeight = dp(context, 48)
+                    gravity = android.view.Gravity.CENTER_VERTICAL
+                    setPadding(0, dp(context, 12), 0, dp(context, 12))
+                    isClickable = true
+                    isFocusable = true
+                    setOnClickListener {
+                        dialog.dismiss()
+                        showCurrentLineEditor(context, editable)
+                    }
+                })
+            }
+        }
         val dialogRoot = FrameLayout(context).apply {
             background = roundedDrawable(context, surfaceColor, 28)
             addView(
@@ -775,6 +808,65 @@ internal class AppleOnlineSourceMenuHooks(
             onSurfaceVariantColor = onSurfaceVariantColor,
         )
         refreshActiveLyricsSourceDialog(songId)
+    }
+
+    private fun showCurrentLineEditor(context: Context, editable: AppleLyricsEditableLine) {
+        val korean = context.resources.configuration.locales.get(0)?.language == "ko"
+        val fields = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(context, 20), dp(context, 12), dp(context, 20), dp(context, 8))
+        }
+        fields.addView(TextView(context).apply {
+            text = editable.line.text
+            textSize = 15f
+            setPadding(0, 0, 0, dp(context, 12))
+        })
+
+        fun editor(label: String, value: String?): EditText = EditText(context).apply {
+            hint = label
+            setText(value.orEmpty())
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+            maxLines = 3
+            filters = arrayOf<InputFilter>(InputFilter.LengthFilter(1024))
+            setSingleLine(false)
+        }
+
+        val translation = editor(if (korean) "한국어 번역" else "Translation", editable.userTranslation)
+        val pronunciation = editor(if (korean) "한글 발음" else "Korean pronunciation", editable.userPronunciation)
+        fields.addView(translation)
+        fields.addView(pronunciation)
+
+        fun currentSongStillMatches(): Boolean = currentSongId() == editable.songId
+
+        AlertDialog.Builder(context)
+            .setTitle(if (korean) "가사 줄 수정" else "Edit lyric line")
+            .setView(fields)
+            .setNegativeButton(if (korean) "취소" else "Cancel", null)
+            .setNeutralButton(if (korean) "수정 초기화" else "Reset edits") { _, _ ->
+                if (!currentSongStillMatches()) return@setNeutralButton
+                saveEditableLine(editable, null, null)
+            }
+            .setPositiveButton(if (korean) "저장" else "Save") { _, _ ->
+                if (!currentSongStillMatches()) {
+                    Toast.makeText(
+                        context,
+                        if (korean) "곡이 변경되어 저장하지 않았습니다." else "Song changed; edits not saved.",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                    return@setPositiveButton
+                }
+                val newTranslation = translation.text?.toString()?.trim().orEmpty()
+                val newPronunciation = pronunciation.text?.toString()?.trim().orEmpty()
+                if (!saveEditableLine(editable, newTranslation, newPronunciation)) {
+                    Toast.makeText(
+                        context,
+                        if (korean) "수정값을 저장하지 못했습니다. 발음 입력을 확인하세요."
+                            else "Edits were not saved. Check the pronunciation text.",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                }
+            }
+            .show()
     }
 
 }

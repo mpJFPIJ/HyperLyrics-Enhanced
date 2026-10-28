@@ -43,6 +43,57 @@ internal fun AppleLyricsSupplementHooks.appleRecyclerAdapterItemCount(adapter: A
 internal fun AppleLyricsSupplementHooks.appleRecyclerNotifyDataSetChanged(adapter: Any) =
     blurHooks.appleRecyclerNotifyDataSetChanged(adapter)
 
+internal data class AppleLyricsEditableLine(
+    val songId: String,
+    val line: AppleLyricsActiveLineEditPolicy.Line,
+    val userTranslation: String?,
+    val userPronunciation: String?,
+)
+
+/** Resolve the current timed row from the visible song, never from a stale playback callback. */
+internal fun AppleLyricsSupplementHooks.currentEditableNativeLine(songId: String): AppleLyricsEditableLine? {
+    if (songId != currentAppleLyricsSongId) return null
+    val position = appleLyricsCurrentPlaybackPositionMs() ?: return null
+    val pointer = presentationBinding.pointer() ?: return null
+    val nativeSong = runCatching {
+        lyricsNativeCall(pointer, AppleMusicRuntimeMember.LYRICS_NATIVE_POINTER_GET_METHOD)
+    }.getOrNull() ?: return null
+    if (nativeSongId(nativeSong) != songId) return null
+    val sections = runCatching {
+        lyricsNativeCall(nativeSong, AppleMusicRuntimeMember.LYRICS_NATIVE_SONG_SECTIONS_METHOD)
+    }.getOrNull() ?: return null
+    val lines = nativeVectorItems(sections, limit = 64).flatMap { section ->
+        val vector = runCatching {
+            lyricsNativeCall(section, AppleMusicRuntimeMember.LYRICS_NATIVE_SECTION_LINES_METHOD)
+        }.getOrNull()
+        nativeVectorItems(vector, limit = 256).mapNotNull { lyricLine ->
+            val begin = runCatching {
+                lyricsNativeCall(lyricLine, AppleMusicRuntimeMember.LYRICS_NATIVE_BEGIN_METHOD)
+                    as? Number
+            }.getOrNull()?.toLong() ?: return@mapNotNull null
+            val end = runCatching {
+                lyricsNativeCall(lyricLine, AppleMusicRuntimeMember.LYRICS_NATIVE_END_METHOD)
+                    as? Number
+            }.getOrNull()?.toLong() ?: return@mapNotNull null
+            val text = AppleLyricTextTransform.withRawReads {
+                runCatching {
+                    lyricsNativeCall(lyricLine, AppleMusicRuntimeMember.LYRICS_NATIVE_LINE_TEXT_METHOD)
+                        as? String
+                }.getOrNull()
+            } ?: return@mapNotNull null
+            AppleLyricsActiveLineEditPolicy.Line(begin, end, text)
+        }
+    }
+    val line = AppleLyricsActiveLineEditPolicy.current(lines, position) ?: return null
+    val saved = lyricsLineCorrections.correction(songId, line.begin, line.end, line.text)
+    return AppleLyricsEditableLine(
+        songId = songId,
+        line = line,
+        userTranslation = saved?.translation,
+        userPronunciation = saved?.pronunciation,
+    )
+}
+
 internal fun AppleLyricsSupplementHooks.userCorrectionForNativeLine(
     line: Any?,
 ): AppleLyricsLineCorrectionStore.Correction? {

@@ -182,6 +182,24 @@ internal class AppleLyricsSupplementHooks(
         return changed
     }
 
+    internal fun saveUserLineTranslationAndPronunciation(
+        line: AppleLyricsEditableLine,
+        translation: String?,
+        pronunciation: String?,
+    ): Boolean {
+        if (line.songId != currentAppleLyricsSongId) return false
+        val key = line.line
+        val before = lyricsLineCorrections.correction(line.songId, key.begin, key.end, key.text)
+        val saved = lyricsLineCorrections.replaceTranslationAndPronunciation(
+            line.songId, key.begin, key.end, key.text, translation, pronunciation,
+        )
+        if (saved && before != lyricsLineCorrections.correction(
+                line.songId, key.begin, key.end, key.text,
+            )
+        ) refreshAppleLyricsSupplementPresentation(expectedSongId = line.songId)
+        return saved
+    }
+
     internal fun lyricSyncOffsetForSong(songId: String?): Int = lyricsSongOffsetStore.get(songId)
 
     internal fun changeLyricSyncOffset(songId: String?, deltaMs: Int): Int? {

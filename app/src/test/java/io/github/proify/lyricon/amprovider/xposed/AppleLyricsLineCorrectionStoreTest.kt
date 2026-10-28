@@ -108,4 +108,26 @@ class AppleLyricsLineCorrectionStoreTest {
         assertEquals("saved", AppleLyricsLineCorrectionStore(storage)
             .correction("s", 10, 20, "line")?.translation)
     }
+
+    @Test
+    fun `two field editor saves atomically and rejects invalid pronunciation`() {
+        val storage = MemoryStorage()
+        val corrections = AppleLyricsLineCorrectionStore(storage)
+        assertTrue(corrections.replaceTranslationAndPronunciation(
+            "song", 10, 20, "Hello", "안녕", "헬로",
+        ))
+        val initial = corrections.correction("song", 10, 20, "Hello")
+        assertEquals("안녕", initial?.translation)
+        assertEquals("헬로", initial?.pronunciation)
+        assertFalse(corrections.replaceTranslationAndPronunciation(
+            "song", 10, 20, "Hello", "새 번역", "Hello",
+        ))
+        assertEquals(initial, AppleLyricsLineCorrectionStore(storage)
+            .correction("song", 10, 20, "Hello"))
+        assertTrue(corrections.replaceTranslationAndPronunciation(
+            "song", 10, 20, "Hello", null, null,
+        ))
+        assertNull(corrections.correction("song", 10, 20, "Hello"))
+        assertTrue(storage.files.isEmpty())
+    }
 }

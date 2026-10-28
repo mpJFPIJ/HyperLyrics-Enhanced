@@ -43,7 +43,9 @@ internal fun AppleLyricsSupplementHooks.appleRecyclerAdapterItemCount(adapter: A
 internal fun AppleLyricsSupplementHooks.appleRecyclerNotifyDataSetChanged(adapter: Any) =
     blurHooks.appleRecyclerNotifyDataSetChanged(adapter)
 
-internal fun AppleLyricsSupplementHooks.onlineTranslationForNativeLine(line: Any?): String? {
+internal fun AppleLyricsSupplementHooks.userCorrectionForNativeLine(
+    line: Any?,
+): AppleLyricsLineCorrectionStore.Correction? {
     if (line == null) return null
     val begin = (
         lyricsNativeCall(line, AppleMusicRuntimeMember.LYRICS_NATIVE_BEGIN_METHOD) as? Number
@@ -57,8 +59,28 @@ internal fun AppleLyricsSupplementHooks.onlineTranslationForNativeLine(line: Any
         lyricsNativeCall(line, AppleMusicRuntimeMember.LYRICS_NATIVE_LINE_TEXT_METHOD)
             as? String
     }
-    return nativeOnlineTranslationStore.translation(
+    return lyricsLineCorrections.correction(
         songId = currentAppleLyricsSongId,
+        begin = begin,
+        end = end,
+        sourceText = text,
+    )
+}
+
+internal fun AppleLyricsSupplementHooks.onlineTranslationForNativeLine(line: Any?): String? {
+    if (line == null) return null
+    val begin = (
+        lyricsNativeCall(line, AppleMusicRuntimeMember.LYRICS_NATIVE_BEGIN_METHOD) as? Number
+        )?.toLong() ?: return null
+    val end = (
+        lyricsNativeCall(line, AppleMusicRuntimeMember.LYRICS_NATIVE_END_METHOD) as? Number
+        )?.toLong() ?: return null
+    val text = AppleLyricTextTransform.withRawReads {
+        lyricsNativeCall(line, AppleMusicRuntimeMember.LYRICS_NATIVE_LINE_TEXT_METHOD) as? String
+    }
+    val songId = currentAppleLyricsSongId
+    return nativeOnlineTranslationStore.translation(
+        songId = songId,
         begin = begin,
         end = end,
         text = text,
@@ -71,7 +93,8 @@ internal fun AppleLyricsSupplementHooks.onlineTranslationForNativeLine(line: Any
 }
 
 internal fun AppleLyricsSupplementHooks.hasAnyOnlineTranslation(songId: String?): Boolean =
-    (isNativeOnlineTranslationEnabled() && nativeOnlineTranslationStore.hasTranslation(songId)) ||
+    hasUserTranslationCorrection(songId) ||
+        (isNativeOnlineTranslationEnabled() && nativeOnlineTranslationStore.hasTranslation(songId)) ||
         missingLyricsSupplement().hasTranslation(songId)
 // 注意：这里刻意不计入 hasLunaBeatSource。LB 来源的歌曲靠
 // ensureMissingLyricsTranslationButtonVisible（hasSupplementContent）强制保留
@@ -79,7 +102,7 @@ internal fun AppleLyricsSupplementHooks.hasAnyOnlineTranslation(songId: String?)
 // 翻译可用性，Apple 会在无翻译的 LB 歌曲菜单里渲染无效的「隐藏翻译」项。
 
 internal fun AppleLyricsSupplementHooks.onlinePronunciationForNativeLine(line: Any?): String? {
-    if (line == null || !isNativeOnlineTranslationEnabled()) return null
+    if (line == null) return null
     if (shouldHideMandarinPronunciation()) return null
     val begin = (
         lyricsNativeCall(line, AppleMusicRuntimeMember.LYRICS_NATIVE_BEGIN_METHOD) as? Number
@@ -100,7 +123,7 @@ internal fun AppleLyricsSupplementHooks.onlinePronunciationForNativeLine(line: A
             begin = begin,
             end = end,
             text = text,
-        ),
+        ).takeIf { isNativeOnlineTranslationEnabled() },
     )
 }
 

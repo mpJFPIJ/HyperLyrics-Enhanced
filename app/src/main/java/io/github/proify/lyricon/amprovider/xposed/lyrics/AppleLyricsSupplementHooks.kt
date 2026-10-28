@@ -156,6 +156,32 @@ internal class AppleLyricsSupplementHooks(
         })
     }
 
+    /** User corrections are persisted separately from provider/AI caches and Android backup. */
+    internal val lyricsLineCorrections by lazy {
+        AppleLyricsLineCorrectionStore(AppleLyricsLineCorrectionFileStorage(application))
+    }
+
+    internal fun hasUserTranslationCorrection(songId: String?): Boolean =
+        lyricsLineCorrections.hasAny(songId, AppleLyricsLineCorrectionStore.Field.TRANSLATION)
+
+    internal fun hasUserPronunciationCorrection(songId: String?): Boolean =
+        lyricsLineCorrections.hasAny(songId, AppleLyricsLineCorrectionStore.Field.PRONUNCIATION)
+
+    /** Reject late editor callbacks after a track switch; refresh only the matching song. */
+    internal fun changeUserLineCorrection(
+        songId: String?,
+        begin: Long,
+        end: Long,
+        sourceText: String?,
+        field: AppleLyricsLineCorrectionStore.Field,
+        value: String?,
+    ): Boolean {
+        if (songId.isNullOrBlank() || currentAppleLyricsSongId != songId) return false
+        val changed = lyricsLineCorrections.update(songId, begin, end, sourceText, field, value)
+        if (changed) refreshAppleLyricsSupplementPresentation(expectedSongId = songId)
+        return changed
+    }
+
     internal fun lyricSyncOffsetForSong(songId: String?): Int = lyricsSongOffsetStore.get(songId)
 
     internal fun changeLyricSyncOffset(songId: String?, deltaMs: Int): Int? {

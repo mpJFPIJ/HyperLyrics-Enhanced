@@ -15,15 +15,14 @@ import java.net.URL
 
 /** Optional, bounded first-pass research. Only cited context reaches the normal translator. */
 internal object GeminiWebReferenceClient {
-    private const val SEARCH_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/interactions"
     private const val LEGACY_BASE = "https://generativelanguage.googleapis.com/v1beta/models/"
     private const val MAX_RESPONSE_CHARS = 128 * 1024
 
     suspend fun search(configs: AiTranslationConfigs, song: Song, lines: List<String>): String? =
         withContext(Dispatchers.IO) {
-            if (!GeminiWebReferencePolicy.canSearch(configs, song.name, song.artist)) {
-                return@withContext null
-            }
+            val researchModel = GeminiWebReferencePolicy.researchModelFor(
+                configs, song.name, song.artist,
+            ) ?: return@withContext null
             val keys = configs.apiKeys.takeIf { it.isNotEmpty() }
                 ?: AiApiKeyPool.parse(null, configs.apiKey)
             val key = AiApiKeyPool.orderedForRequest(keys).firstOrNull()
@@ -42,9 +41,7 @@ internal object GeminiWebReferenceClient {
                     context on established interpretations, metaphors, names, and ambiguous lines.
                     Never reproduce full copyrighted lyrics or translations. Cite the found source.
                 """.trimIndent()
-            val model = requireNotNull(configs.model)
-            val legacy = model.startsWith("gemini-2.")
-            val request = if (legacy) buildJsonObject {
+            val request = buildJsonObject {
                 put("contents", buildJsonArray {
                     add(buildJsonObject {
                         put("role", "user")
@@ -54,16 +51,11 @@ internal object GeminiWebReferenceClient {
                 put("tools", buildJsonArray {
                     add(buildJsonObject { put("google_search", buildJsonObject {}) })
                 })
-            } else buildJsonObject {
-                put("model", model)
-                put("input", prompt)
-                put("tools", buildJsonArray {
-                    add(buildJsonObject { put("type", "google_search") })
-                })
             }
-            val endpoint = if (legacy) "$LEGACY_BASE$model:generateContent" else SEARCH_ENDPOINT
+            val endpoint = "$LEGACY_BASE$researchModel:generateContent"
             var connection: HttpURLConnection? = null
             try {
+                LogManager.i("AppleMusicAiService", "stage=web_reference_request model=$researchModel")
                 connection = (URL(endpoint).openConnection() as HttpURLConnection).apply {
                     requestMethod = "POST"
                     connectTimeout = 12_000

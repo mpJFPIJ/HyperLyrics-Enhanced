@@ -10,7 +10,14 @@ import kotlinx.serialization.json.contentOrNull
 /** Treat search output as untrusted context, never as a command or a lyric replacement. */
 internal object GeminiWebReferencePolicy {
     private const val MAX_REFERENCE_CHARS = 2_000
+    private const val FREE_SEARCH_MODEL = "gemini-2.5-flash"
     private val validModel = Regex("^gemini-[a-zA-Z0-9._-]{1,80}$")
+
+    /** The 2.5 Flash Standard API supports free-tier search grounding.
+     * Keep the user's newer model solely for the final translation/phonetics request.
+     */
+    fun researchModelFor(configs: AiTranslationConfigs, title: String?, artist: String?): String? =
+        FREE_SEARCH_MODEL.takeIf { canSearch(configs, title, artist) }
 
     fun canSearch(configs: AiTranslationConfigs, title: String?, artist: String?): Boolean =
         configs.webSearchEnabled &&

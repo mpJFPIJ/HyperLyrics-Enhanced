@@ -15,6 +15,30 @@ class GeminiWebReferencePolicyTest {
     )
 
     @Test
+    fun `web grounding uses free tier 2_5 Flash without downgrading final translation`() {
+        val translator = base.copy(model = "gemini-3.8-flash")
+        assertEquals(
+            "gemini-2.5-flash",
+            GeminiWebReferencePolicy.researchModelFor(translator, "君の名は", "RADWIMPS"),
+        )
+        assertEquals("gemini-3.8-flash", translator.model)
+    }
+
+    @Test
+    fun `free web grounding refuses disabled non Korean and unofficial translators`() {
+        val translator = base.copy(model = "gemini-3.8-flash")
+        assertNull(GeminiWebReferencePolicy.researchModelFor(
+            translator.copy(webSearchEnabled = false), "君の名は", "RADWIMPS",
+        ))
+        assertNull(GeminiWebReferencePolicy.researchModelFor(
+            translator.copy(targetLanguage = "en"), "君の名は", "RADWIMPS",
+        ))
+        assertNull(GeminiWebReferencePolicy.researchModelFor(
+            translator.copy(baseUrl = "https://proxy.example/v1"), "君の名は", "RADWIMPS",
+        ))
+    }
+
+    @Test
     fun `only opted-in official Gemini endpoints can search`() {
         assertTrue(GeminiWebReferencePolicy.canSearch(base, "君の名は", "RADWIMPS"))
         assertFalse(GeminiWebReferencePolicy.canSearch(base.copy(webSearchEnabled = false), "君の名は", "RADWIMPS"))

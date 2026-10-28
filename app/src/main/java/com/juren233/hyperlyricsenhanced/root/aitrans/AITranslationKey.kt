@@ -9,7 +9,7 @@ internal object AITranslationKey {
         return buildString {
             append("target=").appendLine(configs.targetLanguage.orEmpty())
             if (includePronunciation) appendLine("pronunciation=ja-hangul-en-hangul-v2")
-            if (configs.webSearchEnabled) appendLine("web-reference=grounded-v1")
+            if (configs.webSearchEnabled) appendLine("web-reference=free-2.5flash-v2")
             append("title=").appendLine(song.name.orEmpty())
             append("artist=").appendLine(song.artist.orEmpty())
             lines.forEachIndexed { index, line ->

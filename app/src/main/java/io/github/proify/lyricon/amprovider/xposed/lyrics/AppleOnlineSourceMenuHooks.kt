@@ -386,6 +386,14 @@ internal class AppleOnlineSourceMenuHooks(
         if (translationPresentation != null && translationSelected) {
             menu.addView(createMenuItem(menu, songId, "translation", translationPresentation))
         }
+        // Apple-native songs do not necessarily expose the supplemental lyrics
+        // source dialog, so the line editor must also be reachable from the
+        // existing native lyrics actions menu itself.
+        if (hasKnownNativeLyricsForSong(songId)) {
+            currentEditableLine(songId)?.let { editable ->
+                menu.addView(createCurrentLineEditMenuItem(popup, menu, editable))
+            }
+        }
         normalizeTextItems(menu)
         if (BuildConfig.DEBUG) {
             ProviderLogger.diagnostic(
@@ -469,6 +477,30 @@ internal class AppleOnlineSourceMenuHooks(
         item.setCompoundDrawablesRelativeWithIntrinsicBounds(0, 0, iconId, 0)
         item.setOnClickListener {
             showSourceDialog(menu.context, songId, "lyrics")
+        }
+        return item
+    }
+
+    private fun createCurrentLineEditMenuItem(
+        popup: PopupWindow,
+        menu: LinearLayout,
+        editable: AppleLyricsEditableLine,
+    ): TextView {
+        val layoutId = runtime.application.resources.getIdentifier(
+            "menu_item_lyrics_translations", "layout", APPLE_MUSIC_PACKAGE,
+        )
+        val item = LayoutInflater.from(menu.context).inflate(layoutId, menu, false) as TextView
+        item.tag = ONLINE_SOURCE_MENU_ITEM_TAG
+        item.background = menu.getChildAt(0)?.background
+            ?.constantState?.newDrawable(menu.resources)
+        val korean = menu.resources.configuration.locales.get(0)?.language == "ko"
+        item.text = if (korean) "현재 가사 줄 번역·발음 수정" else "Edit current lyric line"
+        item.setCompoundDrawablesRelativeWithIntrinsicBounds(
+            0, 0, android.R.drawable.ic_menu_edit, 0,
+        )
+        item.setOnClickListener {
+            popup.dismiss()
+            showCurrentLineEditor(menu.context, editable)
         }
         return item
     }
@@ -746,29 +778,6 @@ internal class AppleOnlineSourceMenuHooks(
                 textSize = 12f
                 setTextColor(onSurfaceVariantColor)
             })
-        }
-        // A safe first editor entry point: it targets the currently timed native
-        // line by song ID + immutable source timing/text, without replacing Apple's
-        // RecyclerView long-click handlers or touching its word-level karaoke.
-        if (isLyricsSourceDialog && hasKnownNativeLyricsForSong(songId)) {
-            currentEditableLine(songId)?.let { editable ->
-                val korean = context.resources.configuration.locales.get(0)?.language == "ko"
-                list.addView(TextView(context).apply {
-                    text = if (korean) "현재 가사 줄 번역·발음 수정" else "Edit current line translation / pronunciation"
-                    textSize = 15f
-                    typeface = Typeface.DEFAULT_BOLD
-                    setTextColor(primaryColor)
-                    minimumHeight = dp(context, 48)
-                    gravity = android.view.Gravity.CENTER_VERTICAL
-                    setPadding(0, dp(context, 12), 0, dp(context, 12))
-                    isClickable = true
-                    isFocusable = true
-                    setOnClickListener {
-                        dialog.dismiss()
-                        showCurrentLineEditor(context, editable)
-                    }
-                })
-            }
         }
         val dialogRoot = FrameLayout(context).apply {
             background = roundedDrawable(context, surfaceColor, 28)

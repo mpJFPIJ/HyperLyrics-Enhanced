@@ -139,6 +139,9 @@ fun LyricSettingsPage() {
     }
     val koreanLocale = LocalConfiguration.current.locales.get(0)?.language == "ko"
     val configuredApiKeyCount = AiApiKeyPool.parse(apiKeys).size
+    var groqConfigured by remember {
+        mutableStateOf(!AiApiKeyStore.readGroq(context).isNullOrBlank())
+    }
     var model by remember {
         mutableStateOf(
             prefs.getString(
@@ -173,6 +176,7 @@ fun LyricSettingsPage() {
     }
 
     var showApiKeyDialog by remember { mutableStateOf(false) }
+    var showGroqKeyDialog by remember { mutableStateOf(false) }
     var showModelDialog by remember { mutableStateOf(false) }
     var showBaseUrlDialog by remember { mutableStateOf(false) }
     var showTargetLangDialog by remember { mutableStateOf(false) }
@@ -188,6 +192,18 @@ fun LyricSettingsPage() {
         onConfirm = { input ->
             // Dedicated private file: never synchronizes with the Xposed process.
             apiKeys = AiApiKeyStore.save(context, prefs, input).joinToString("\n")
+        },
+    )
+    TextInputDialog(
+        show = showGroqKeyDialog,
+        title = if (koreanLocale) "Groq API 키" else "Groq API key",
+        label = if (koreanLocale) "GPT-OSS 검색 및 Qwen 예비 번역용 (비우면 삭제)"
+            else "For GPT-OSS research and Qwen fallback (empty to remove)",
+        initialValue = "",
+        onDismiss = { showGroqKeyDialog = false },
+        onConfirm = { input ->
+            AiApiKeyStore.saveGroq(context, input)
+            groqConfigured = input.isNotBlank()
         },
     )
     TextInputDialog(
@@ -423,11 +439,11 @@ fun LyricSettingsPage() {
                                 },
                             )
                             SwitchPreference(
-                                title = if (koreanLocale) "Gemini 웹 번역 참고"
-                                    else "Gemini web translation research",
+                                title = if (koreanLocale) "GPT-OSS 웹 번역 참고"
+                                    else "GPT-OSS web translation research",
                                 summary = if (koreanLocale)
-                                    "같은 곡의 한국어 번역과 해석 자료를 검색·확인한 뒤 AI 번역에 참고합니다. 검색 사용량에 따라 요금이 발생할 수 있습니다. 공식 Gemini API에서만 작동합니다."
-                                else "Research cited web interpretations before translation. Google Search usage may incur charges; requires the official Gemini API.",
+                                    "Groq 키가 있으면 GPT-OSS 120B로 검색합니다. 없으면 기존 Gemini 검색을 사용합니다. 검색·토큰 사용 요금에 주의하세요."
+                                else "Uses Groq GPT-OSS 120B when configured, otherwise existing Gemini research. Search and token usage may incur charges.",
                                 checked = webSearchEnabled,
                                 onCheckedChange = {
                                     webSearchEnabled = it
@@ -464,6 +480,24 @@ fun LyricSettingsPage() {
                                     )
                                 },
                                 onClick = { showApiKeyDialog = true },
+                            )
+                            ArrowPreference(
+                                title = if (koreanLocale) "Groq API 키 (검색·예비 번역)"
+                                    else "Groq API key (research and fallback)",
+                                summary = if (koreanLocale) "Gemini 오류 시 Qwen 3.8 27B로 자동 전환. Groq 키는 앱에만 보관합니다."
+                                    else "Qwen 3.8 27B fallback on Gemini failures; key stays in the app.",
+                                endActions = {
+                                    Text(
+                                        if (groqConfigured) {
+                                            if (koreanLocale) "등록됨" else "Configured"
+                                        } else {
+                                            stringResource(R.string.summary_not_configured)
+                                        },
+                                        fontSize = MiuixTheme.textStyles.body2.fontSize,
+                                        color = MiuixTheme.colorScheme.onSurfaceVariantActions,
+                                    )
+                                },
+                                onClick = { showGroqKeyDialog = true },
                             )
                             ArrowPreference(
                                 title = stringResource(R.string.label_ai_trans_model),

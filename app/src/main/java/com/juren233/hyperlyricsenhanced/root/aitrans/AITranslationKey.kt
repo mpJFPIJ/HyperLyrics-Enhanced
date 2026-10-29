@@ -9,7 +9,11 @@ internal object AITranslationKey {
         return buildString {
             append("target=").appendLine(configs.targetLanguage.orEmpty())
             if (includePronunciation) appendLine("pronunciation=ja-hangul-en-hangul-v2")
-            if (configs.webSearchEnabled) appendLine("web-reference=free-2.5flash-v2")
+            if (configs.webSearchEnabled) appendLine(
+                if (configs.groqApiKey.isNullOrBlank()) "web-reference=free-2.5flash-v2"
+                else "web-reference=groq-gpt-oss-120b-v3"
+            )
+            if (!configs.groqApiKey.isNullOrBlank()) appendLine("fallback=qwen3.8-27b-v1")
             append("title=").appendLine(song.name.orEmpty())
             append("artist=").appendLine(song.artist.orEmpty())
             lines.forEachIndexed { index, line ->

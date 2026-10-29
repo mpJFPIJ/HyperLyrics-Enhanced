@@ -197,6 +197,7 @@ class AppleMusicAiTranslationService : Service() {
             ),
             apiKey = keys.firstOrNull(),
             apiKeys = keys,
+            groqApiKey = AiApiKeyStore.readGroq(this),
             model = prefs.getString(
                 RootConstants.KEY_HOOK_AI_TRANS_MODEL,
                 RootConstants.DEFAULT_HOOK_AI_TRANS_MODEL,

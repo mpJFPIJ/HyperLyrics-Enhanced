@@ -51,7 +51,15 @@ internal object OpenAiTranslationClient {
         val isGoogleGemini = OpenAiRequestCompatibility.isGoogleGemini(configs.model, baseUrl)
         // Search research is a bounded, optional precursor. Failure never blocks the
         // existing Gemini/OpenAI-compatible translation and Hangul pronunciation path.
-        val webReference = song?.let { GeminiWebReferenceClient.search(configs, it, texts) }
+        val webReference = song?.let {
+            if (!configs.groqApiKey.isNullOrBlank())
+                GroqMultiModelClient.research(configs, it, texts)
+            else GeminiWebReferenceClient.search(configs, it, texts)
+        }
+        suspend fun fallback(reason: String): List<TranslationItem>? =
+            if (isGoogleGemini) GroqMultiModelClient.fallbackTranslate(
+                configs, song, payload, requestIndices, webReference, reason,
+            ) else null
         val chatRequest = OpenAiChatRequest(
             model = configs.model.orEmpty(),
             messages = buildList {
@@ -121,7 +129,9 @@ internal object OpenAiTranslationClient {
                         return@withContext null
                     }
                     HookLogger.d("OpenAiTranslationClient", "翻译请求完成: code=$responseCode")
-                    return@withContext AITranslationResponseParser.parse(content, requestIndices)
+                    val parsed = AITranslationResponseParser.parse(content, requestIndices)
+                    return@withContext parsed.takeUnless { it.isNullOrEmpty() }
+                        ?: fallback("empty_response")
                 }
 
                 // Never log or persist a provider error body. It may echo private lyrics.
@@ -149,14 +159,15 @@ internal object OpenAiTranslationClient {
                         "stage=http_rejected code=$responseCode reason=$reason"
                     )
                     HookLogger.e("OpenAiTranslationClient", "翻译请求失败: code=$responseCode")
-                    return@withContext null
+                    return@withContext if (responseCode == 429 || responseCode in 500..599)
+                        fallback("http_$responseCode") else null
                 }
             } catch (e: CancellationException) {
                 throw e
             } catch (_: EOFException) {
                 LogManager.w("AppleMusicAiService", "stage=http_io_failed type=EOFException")
                 HookLogger.w("OpenAiTranslationClient", "翻译连接意外关闭: reason=EOF")
-                return@withContext null
+                return@withContext fallback("EOFException")
             } catch (e: Exception) {
                 LogManager.w(
                     "AppleMusicAiService",
@@ -167,14 +178,14 @@ internal object OpenAiTranslationClient {
                     "翻译网络请求异常: type=${e.javaClass.simpleName}",
                     e
                 )
-                return@withContext null
+                return@withContext fallback("network_error")
             } finally {
                 connection?.disconnect()
             }
             // Delay after disconnecting, so no open connection is held during backoff.
             delay(retryDelayMs ?: return@withContext null)
         }
-        null
+        fallback("retry_exhausted")
     }
 
     private fun shouldRequestTranslation(text: String): Boolean {

@@ -13,6 +13,7 @@ import com.juren233.hyperlyricsenhanced.common.RootConstants
 internal object AiApiKeyStore {
     const val PREFERENCES_FILE = "hyperlyricsenhanced_private_ai_credentials"
     private const val KEY_POOL = "api_keys"
+    private const val KEY_GROQ = "groq_api_key"
 
     private fun privatePrefs(context: Context): SharedPreferences =
         context.applicationContext.getSharedPreferences(PREFERENCES_FILE, Context.MODE_PRIVATE)
@@ -27,6 +28,16 @@ internal object AiApiKeyStore {
             configured = legacyPrefs.getString(RootConstants.KEY_HOOK_AI_TRANS_API_KEYS, null),
             legacy = legacyPrefs.getString(RootConstants.KEY_HOOK_AI_TRANS_API_KEY, null),
         )
+    }
+
+    /** Separate private Groq credential, never placed in remote/Xposed preferences. */
+    fun readGroq(context: Context): String? =
+        privatePrefs(context).getString(KEY_GROQ, null)?.trim()?.takeIf { it.isNotBlank() }
+
+    fun saveGroq(context: Context, rawKey: String) {
+        check(privatePrefs(context).edit()
+            .putString(KEY_GROQ, rawKey.trim())
+            .commit()) { "Failed to save local Groq credential" }
     }
 
     fun save(context: Context, legacyPrefs: SharedPreferences, rawKeys: String): List<String> {

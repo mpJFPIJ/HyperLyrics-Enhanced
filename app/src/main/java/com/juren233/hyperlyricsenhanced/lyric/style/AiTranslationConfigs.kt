@@ -9,6 +9,8 @@ data class AiTranslationConfigs(
     val apiKey: String? = null,
     /** Additional configured credentials; server-side translation owns these only. */
     val apiKeys: List<String> = emptyList(),
+    /** App-process only: Groq credentials are never synced to patched Apple Music. */
+    val groqApiKey: String? = null,
     val model: String? = null,
     val baseUrl: String? = null,
     val prompt: String = USER_PROMPT,

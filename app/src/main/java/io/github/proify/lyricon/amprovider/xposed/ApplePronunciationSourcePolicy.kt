@@ -13,9 +13,22 @@ import com.juren233.hyperlyricsenhanced.common.lyric.RomanizationPolicy
 internal object ApplePronunciationSourcePolicy {
     data class Selection(val text: String?, val fromSupplement: Boolean)
 
-    fun select(official: String?, supplement: String?, priority: Int): Selection {
+    fun select(
+        official: String?,
+        supplement: String?,
+        priority: Int,
+        hangulOnly: Boolean = false,
+    ): Selection {
         val native = official?.takeIf { it.isNotBlank() }
         val overlay = supplement?.takeIf { it.isNotBlank() }
+
+        // When a song has confirmed Hangul overlay, don't leak native ja-Latn
+        // romanization into missing rows under the Hangul-first preference.
+        // Apple-first and supplement-first continue to honour the user's choice.
+        if (hangulOnly && priority == RootConstants.APPLE_MUSIC_PRONUNCIATION_HANGUL_FIRST) {
+            val hangul = overlay?.takeIf(RomanizationPolicy::isHangulPronunciation)
+            return Selection(hangul, hangul != null)
+        }
 
         val supplementFirst = when (priority) {
             RootConstants.APPLE_MUSIC_PRONUNCIATION_APPLE_FIRST -> false

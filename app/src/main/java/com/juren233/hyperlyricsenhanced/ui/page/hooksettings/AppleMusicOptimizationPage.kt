@@ -580,7 +580,7 @@ fun AppleMusicOptimizationPage(
                     title = if (koreanLocale) "가사 표시 방식"
                         else stringResource(R.string.title_apple_music_lyrics_display_mode),
                     summary = if (koreanLocale)
-                        "3단 표시는 발음·번역이 모두 있을 때만 가능합니다. Apple 원본 가사와 싱크는 유지합니다."
+                        "3단 모드에서도 번역과 발음을 각각 숨길 수 있습니다. Apple 원본 가사와 싱크는 유지합니다."
                         else stringResource(R.string.summary_apple_music_lyrics_display_mode),
                     items = lyricsDisplayModeOptions,
                     selectedIndex = lyricsDisplayMode,
@@ -594,7 +594,8 @@ fun AppleMusicOptimizationPage(
                     },
                 )
                 AnimatedVisibility(
-                    visible = lyricsDisplayMode == RootConstants.APPLE_MUSIC_LYRICS_MODE_CUSTOM
+                    visible = lyricsDisplayMode == RootConstants.APPLE_MUSIC_LYRICS_MODE_CUSTOM ||
+                        lyricsDisplayMode == RootConstants.APPLE_MUSIC_LYRICS_MODE_THREE_LINE
                 ) {
                     OverlayDropdownPreference(
                         title = if (koreanLocale) "한국어 번역 표시"
@@ -615,7 +616,8 @@ fun AppleMusicOptimizationPage(
                     )
                 }
                 AnimatedVisibility(
-                    visible = lyricsDisplayMode == RootConstants.APPLE_MUSIC_LYRICS_MODE_CUSTOM
+                    visible = lyricsDisplayMode == RootConstants.APPLE_MUSIC_LYRICS_MODE_CUSTOM ||
+                        lyricsDisplayMode == RootConstants.APPLE_MUSIC_LYRICS_MODE_THREE_LINE
                 ) {
                     OverlayDropdownPreference(
                         title = if (koreanLocale) "한글 발음 표시"

@@ -24,6 +24,10 @@ For BOTH Japanese and English ORIGINAL lyric lines, include the "roma" field
 as a natural Korean Hangul phonetic transcription of how the ORIGINAL line
 is sung or spoken. "roma" is a legacy field name: its value MUST be Hangul,
 NOT Latin-script Japanese romaji, Hepburn, English spelling, or IPA.
+Write every phonetic syllable in Korean Hangul for every Japanese/English line.
+Even if Apple supplies ja-Latn romanization, do not copy any Latin alphabet into
+"roma". If unsure of a kanji reading, infer it from the entire song context.
+Do not omit "roma" for a Japanese/English line solely because translation exists.
 Examples:
 Japanese "君の名は" -> "키미노 나와" (NOT "kimi no na wa")
 Japanese "ありがとう" -> "아리가토"

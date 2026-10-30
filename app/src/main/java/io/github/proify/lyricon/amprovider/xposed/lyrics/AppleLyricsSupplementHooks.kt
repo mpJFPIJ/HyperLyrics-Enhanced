@@ -381,6 +381,19 @@ internal class AppleLyricsSupplementHooks(
             RootConstants.DEFAULT_HOOK_APPLE_MUSIC_PRONUNCIATION_SOURCE_PRIORITY,
         ) ?: RootConstants.DEFAULT_HOOK_APPLE_MUSIC_PRONUNCIATION_SOURCE_PRIORITY
 
+    /** Apple Latin romanization is independent from the AI/online Hangul channel. */
+    internal fun showNativeApplePronunciation(): Boolean =
+        contentUiLanguagePrefs?.getBoolean(
+            RootConstants.KEY_HOOK_APPLE_MUSIC_SHOW_NATIVE_PRONUNCIATION,
+            RootConstants.DEFAULT_HOOK_APPLE_MUSIC_SHOW_NATIVE_PRONUNCIATION,
+        ) ?: RootConstants.DEFAULT_HOOK_APPLE_MUSIC_SHOW_NATIVE_PRONUNCIATION
+
+    internal fun showHangulSupplementPronunciation(): Boolean =
+        contentUiLanguagePrefs?.getBoolean(
+            RootConstants.KEY_HOOK_APPLE_MUSIC_SHOW_HANGUL_PRONUNCIATION,
+            RootConstants.DEFAULT_HOOK_APPLE_MUSIC_SHOW_HANGUL_PRONUNCIATION,
+        ) ?: RootConstants.DEFAULT_HOOK_APPLE_MUSIC_SHOW_HANGUL_PRONUNCIATION
+
     /** Requested row visibility; three-line is opt-in and host defaults are untouched. */
     internal fun appleLyricsDisplayMode(): Int =
         contentUiLanguagePrefs?.getInt(

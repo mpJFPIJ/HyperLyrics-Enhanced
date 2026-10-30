@@ -106,6 +106,51 @@ class ApplePronunciationSourcePolicyTest {
     }
 
     @Test
+    fun `native Apple off and Hangul on only shows Hangul from supplement`() {
+        val selection = ApplePronunciationSourcePolicy.select(
+            official = "kimi no na wa",
+            supplement = "키미노 나와",
+            priority = RootConstants.APPLE_MUSIC_PRONUNCIATION_APPLE_FIRST,
+            allowAppleNative = false,
+            allowHangulSupplement = true,
+        )
+        assertEquals("키미노 나와", selection.text)
+        assertTrue(selection.fromSupplement)
+        assertNull(ApplePronunciationSourcePolicy.select(
+            official = "kimi no na wa",
+            supplement = null,
+            priority = RootConstants.APPLE_MUSIC_PRONUNCIATION_HANGUL_FIRST,
+            allowAppleNative = false,
+            allowHangulSupplement = true,
+        ).text)
+        assertNull(ApplePronunciationSourcePolicy.select(
+            official = "kimi no na wa",
+            supplement = "kimi no na wa",
+            priority = RootConstants.APPLE_MUSIC_PRONUNCIATION_SUPPLEMENT_FIRST,
+            allowAppleNative = false,
+            allowHangulSupplement = true,
+        ).text)
+    }
+
+    @Test
+    fun `Hangul source switch off keeps native Apple and suppresses Hangul`() {
+        assertEquals("kimi no na wa", ApplePronunciationSourcePolicy.select(
+            official = "kimi no na wa",
+            supplement = "키미노 나와",
+            priority = RootConstants.APPLE_MUSIC_PRONUNCIATION_HANGUL_FIRST,
+            allowAppleNative = true,
+            allowHangulSupplement = false,
+        ).text)
+        assertNull(ApplePronunciationSourcePolicy.select(
+            official = "kimi no na wa",
+            supplement = "키미노 나와",
+            priority = RootConstants.APPLE_MUSIC_PRONUNCIATION_HANGUL_FIRST,
+            allowAppleNative = false,
+            allowHangulSupplement = false,
+        ).text)
+    }
+
+    @Test
     fun `missing sources never invent a pronunciation`() {
         val selection = ApplePronunciationSourcePolicy.select(
             official = null,

@@ -68,7 +68,11 @@ internal fun AppleLyricsSupplementHooks.hookAppleLyricTextGetter(clazz: Class<*>
                 val userReading = RomanizationPolicy.sanitizeSupplement(
                     originalText = nativeOriginalLineText(chain.thisObject),
                     pronunciation = userCorrectionForNativeLine(chain.thisObject)?.pronunciation,
-                )
+                )?.takeIf {
+                    if (RomanizationPolicy.isHangulPronunciation(it))
+                        showHangulSupplementPronunciation()
+                    else showNativeApplePronunciation()
+                }
                 val onlineReading = onlinePronunciationForNativeLine(chain.thisObject)
                 // Keep Apple-native timing intact while allowing a user-selected
                 // overlay preference. Hangul-first retains the previous behavior.
@@ -79,6 +83,8 @@ internal fun AppleLyricsSupplementHooks.hookAppleLyricTextGetter(clazz: Class<*>
                     hangulOnly = nativeOnlineTranslationStore.hasHangulPronunciation(
                         currentAppleLyricsSongId
                     ),
+                    allowAppleNative = showNativeApplePronunciation(),
+                    allowHangulSupplement = showHangulSupplementPronunciation(),
                 )
                 val onlineText = selection.text.takeIf { selection.fromSupplement && userReading == null }
                 if (onlineText != null) {
@@ -106,7 +112,9 @@ internal fun AppleLyricsSupplementHooks.hookAppleLyricTextGetter(clazz: Class<*>
             lyricsRuntimeMember(
                 AppleMusicRuntimeMember.LYRICS_NATIVE_PRONUNCIATION_BACKGROUND_TEXT_METHOD
             ) -> {
-                if (shouldHideMandarinPronunciation(lyricObject = chain.thisObject)) {
+                if (shouldHideMandarinPronunciation(lyricObject = chain.thisObject) ||
+                    !showNativeApplePronunciation()
+                ) {
                     return@installResultOverrideHook ""
                 }
                 val text = RomanizationPolicy.sanitize(
@@ -254,7 +262,9 @@ private fun AppleLyricsSupplementHooks.hookApplePronunciationWordsGetter(
             return@installResultOverrideHook original
         }
         val line = chain.thisObject ?: return@installResultOverrideHook original
-        if (shouldHideMandarinPronunciation(lyricObject = line)) {
+        if (shouldHideMandarinPronunciation(lyricObject = line) ||
+            (!onlineFallback && !showNativeApplePronunciation())
+        ) {
             return@installResultOverrideHook emptyApplePronunciationWords(
                 originalVector = original,
                 mainWords = null,
@@ -274,7 +284,11 @@ private fun AppleLyricsSupplementHooks.hookApplePronunciationWordsGetter(
             RomanizationPolicy.sanitizeSupplement(
                 originalText = originalText,
                 pronunciation = userCorrectionForNativeLine(line)?.pronunciation,
-            )
+            )?.takeIf {
+                if (RomanizationPolicy.isHangulPronunciation(it))
+                    showHangulSupplementPronunciation()
+                else showNativeApplePronunciation()
+            }
         } else {
             null
         }
@@ -287,6 +301,8 @@ private fun AppleLyricsSupplementHooks.hookApplePronunciationWordsGetter(
             hangulOnly = nativeOnlineTranslationStore.hasHangulPronunciation(
                 currentAppleLyricsSongId
             ),
+            allowAppleNative = showNativeApplePronunciation(),
+            allowHangulSupplement = showHangulSupplementPronunciation(),
         )
         val hasValidOfficialWords = selectedPronunciation.text != null &&
             !selectedPronunciation.fromSupplement &&

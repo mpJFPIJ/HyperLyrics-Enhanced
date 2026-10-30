@@ -173,6 +173,22 @@ fun AppleMusicOptimizationPage(
             )
         )
     }
+    var showNativePronunciation by remember {
+        mutableStateOf(
+            prefs.getBoolean(
+                RootConstants.KEY_HOOK_APPLE_MUSIC_SHOW_NATIVE_PRONUNCIATION,
+                RootConstants.DEFAULT_HOOK_APPLE_MUSIC_SHOW_NATIVE_PRONUNCIATION,
+            )
+        )
+    }
+    var showHangulPronunciation by remember {
+        mutableStateOf(
+            prefs.getBoolean(
+                RootConstants.KEY_HOOK_APPLE_MUSIC_SHOW_HANGUL_PRONUNCIATION,
+                RootConstants.DEFAULT_HOOK_APPLE_MUSIC_SHOW_HANGUL_PRONUNCIATION,
+            )
+        )
+    }
     var pronunciationSourcePriority by remember {
         mutableIntStateOf(
             prefs.getInt(
@@ -632,7 +648,7 @@ fun AppleMusicOptimizationPage(
                         lyricsDisplayMode == RootConstants.APPLE_MUSIC_LYRICS_MODE_THREE_LINE
                 ) {
                     OverlayDropdownPreference(
-                        title = if (koreanLocale) "한글 발음 표시"
+                        title = if (koreanLocale) "발음 줄 표시"
                             else stringResource(R.string.title_apple_music_pronunciation_visibility),
                         summary = if (koreanLocale) "변경 후 Apple Music 가사를 다시 열어주세요. Xposed 연결이 끊긴 경우 재연결 후 적용됩니다."
                             else "Reopen lyrics to apply. If Xposed is disconnected, waits for reconnection.",
@@ -659,6 +675,50 @@ fun AppleMusicOptimizationPage(
                         },
                     )
                 }
+                SwitchPreference(
+                    title = if (koreanLocale) "Apple 기본 발음 표시" else "Show Apple native pronunciation",
+                    summary = if (koreanLocale)
+                        "끄면 Apple의 영문 로마자 발음은 숨기지만, AI가 생성한 한글 발음은 유지합니다."
+                        else "Turn off Apple's native romanization without hiding AI-generated Hangul pronunciation.",
+                    checked = showNativePronunciation,
+                    onCheckedChange = { enabled ->
+                        showNativePronunciation = enabled
+                        saveConfig(
+                            RootConstants.KEY_HOOK_APPLE_MUSIC_SHOW_NATIVE_PRONUNCIATION,
+                            enabled,
+                        )
+                        if (RootApplication.xposedService == null) {
+                            Toast.makeText(
+                                context,
+                                if (koreanLocale) "Xposed 연결 후 Apple Music을 다시 열어 적용하세요."
+                                else "Reconnect Xposed and reopen Apple Music to apply.",
+                                Toast.LENGTH_LONG,
+                            ).show()
+                        }
+                    },
+                )
+                SwitchPreference(
+                    title = if (koreanLocale) "AI/온라인 한글 발음 표시" else "Show AI / online Hangul pronunciation",
+                    summary = if (koreanLocale)
+                        "한글 발음이 도착하면 해당 가사 줄에 표시합니다. Apple 기본 발음 설정과 독립적입니다."
+                        else "Show Hangul phonetics as they arrive, independently from Apple's native pronunciation.",
+                    checked = showHangulPronunciation,
+                    onCheckedChange = { enabled ->
+                        showHangulPronunciation = enabled
+                        saveConfig(
+                            RootConstants.KEY_HOOK_APPLE_MUSIC_SHOW_HANGUL_PRONUNCIATION,
+                            enabled,
+                        )
+                        if (RootApplication.xposedService == null) {
+                            Toast.makeText(
+                                context,
+                                if (koreanLocale) "Xposed 연결 후 Apple Music을 다시 열어 적용하세요."
+                                else "Reconnect Xposed and reopen Apple Music to apply.",
+                                Toast.LENGTH_LONG,
+                            ).show()
+                        }
+                    },
+                )
                 OverlayDropdownPreference(
                     title = if (koreanLocale) "발음 출처 우선순위"
                         else stringResource(R.string.title_apple_music_pronunciation_priority),

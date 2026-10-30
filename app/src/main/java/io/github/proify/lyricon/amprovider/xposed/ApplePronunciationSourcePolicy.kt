@@ -18,14 +18,22 @@ internal object ApplePronunciationSourcePolicy {
         supplement: String?,
         priority: Int,
         hangulOnly: Boolean = false,
+        allowAppleNative: Boolean = true,
+        allowHangulSupplement: Boolean = true,
     ): Selection {
-        val native = official?.takeIf { it.isNotBlank() }
+        // Never display Apple romanization when explicitly disabled. Existing
+        // legacy Latin supplements remain available only with native display on.
+        val native = official?.takeIf { allowAppleNative && it.isNotBlank() }
         val overlay = supplement?.takeIf { it.isNotBlank() }
+            ?.takeIf { allowHangulSupplement || !RomanizationPolicy.isHangulPronunciation(it) }
+            ?.takeIf { allowAppleNative || RomanizationPolicy.isHangulPronunciation(it) }
 
         // When a song has confirmed Hangul overlay, don't leak native ja-Latn
         // romanization into missing rows under the Hangul-first preference.
         // Apple-first and supplement-first continue to honour the user's choice.
-        if (hangulOnly && priority == RootConstants.APPLE_MUSIC_PRONUNCIATION_HANGUL_FIRST) {
+        if (hangulOnly && allowHangulSupplement &&
+            priority == RootConstants.APPLE_MUSIC_PRONUNCIATION_HANGUL_FIRST
+        ) {
             val hangul = overlay?.takeIf(RomanizationPolicy::isHangulPronunciation)
             return Selection(hangul, hangul != null)
         }

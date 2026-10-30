@@ -75,6 +75,37 @@ class ApplePronunciationSourcePolicyTest {
     }
 
     @Test
+    fun `Hangul-only selection never mixes official romaji or Latin supplements`() {
+        assertEquals(
+            ApplePronunciationSourcePolicy.Selection(null, false),
+            ApplePronunciationSourcePolicy.select(
+                official = "kimi no na wa",
+                supplement = "kimi no na wa",
+                priority = RootConstants.APPLE_MUSIC_PRONUNCIATION_HANGUL_FIRST,
+                hangulOnly = true,
+            ),
+        )
+        assertEquals(
+            ApplePronunciationSourcePolicy.Selection("키미노 나와", true),
+            ApplePronunciationSourcePolicy.select(
+                official = "kimi no na wa",
+                supplement = "키미노 나와",
+                priority = RootConstants.APPLE_MUSIC_PRONUNCIATION_HANGUL_FIRST,
+                hangulOnly = true,
+            ),
+        )
+        assertEquals(
+            ApplePronunciationSourcePolicy.Selection("kimi no na wa", false),
+            ApplePronunciationSourcePolicy.select(
+                official = "kimi no na wa",
+                supplement = null,
+                priority = RootConstants.APPLE_MUSIC_PRONUNCIATION_APPLE_FIRST,
+                hangulOnly = true,
+            ),
+        )
+    }
+
+    @Test
     fun `missing sources never invent a pronunciation`() {
         val selection = ApplePronunciationSourcePolicy.select(
             official = null,

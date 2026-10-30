@@ -76,6 +76,9 @@ internal fun AppleLyricsSupplementHooks.hookAppleLyricTextGetter(clazz: Class<*>
                     official = officialText,
                     supplement = onlineReading,
                     priority = pronunciationSourcePriority(),
+                    hangulOnly = nativeOnlineTranslationStore.hasHangulPronunciation(
+                        currentAppleLyricsSongId
+                    ),
                 )
                 val onlineText = selection.text.takeIf { selection.fromSupplement && userReading == null }
                 if (onlineText != null) {
@@ -281,8 +284,12 @@ private fun AppleLyricsSupplementHooks.hookApplePronunciationWordsGetter(
             official = officialPronunciation,
             supplement = onlinePronunciation,
             priority = pronunciationSourcePriority(),
+            hangulOnly = nativeOnlineTranslationStore.hasHangulPronunciation(
+                currentAppleLyricsSongId
+            ),
         )
-        val hasValidOfficialWords = !selectedPronunciation.fromSupplement &&
+        val hasValidOfficialWords = selectedPronunciation.text != null &&
+            !selectedPronunciation.fromSupplement &&
             officialPronunciation != null &&
             RomanizationPolicy.sanitize(
                 originalText = originalText,
@@ -302,7 +309,8 @@ private fun AppleLyricsSupplementHooks.hookApplePronunciationWordsGetter(
             )
         val mainTimingPronunciation = when {
             selectedPronunciation.fromSupplement -> selectedPronunciation.text
-            officialPronunciation != null && !hasCompatibleOfficialWords -> {
+            selectedPronunciation.text != null &&
+                officialPronunciation != null && !hasCompatibleOfficialWords -> {
                 reportApplePronunciationRuntimeDiagnostic(
                     stage = "official_word_timing_fallback",
                     details = nativeLineDiagnosticDetails(
@@ -322,7 +330,7 @@ private fun AppleLyricsSupplementHooks.hookApplePronunciationWordsGetter(
                 )
                 officialPronunciation
             }
-            else -> onlinePronunciation
+            else -> null
         }
         val wordTrack = ApplePronunciationPolicy.wordTrack(
             hasValidOfficialPronunciation = hasCompatibleOfficialWords,

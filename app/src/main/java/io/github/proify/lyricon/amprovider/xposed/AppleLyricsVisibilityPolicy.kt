@@ -17,8 +17,9 @@ internal object AppleLyricsVisibilityPolicy {
         pronunciationOverride: Int,
     ): Result = when (mode) {
         RootConstants.APPLE_MUSIC_LYRICS_MODE_THREE_LINE -> Result(
-            translation = true,
-            pronunciation = true,
+            // Three-line remains on by default, but an explicit Hide must win.
+            translation = override(true, translationOverride),
+            pronunciation = override(true, pronunciationOverride),
         )
         RootConstants.APPLE_MUSIC_LYRICS_MODE_CUSTOM -> Result(
             translation = override(appleTranslation, translationOverride),

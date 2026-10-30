@@ -23,6 +23,30 @@ class AppleLyricsVisibilityPolicyTest {
     }
 
     @Test
+    fun `three line hides either row when explicitly disabled`() {
+        assertEquals(
+            AppleLyricsVisibilityPolicy.Result(true, false),
+            AppleLyricsVisibilityPolicy.resolve(
+                appleTranslation = false,
+                applePronunciation = false,
+                mode = RootConstants.APPLE_MUSIC_LYRICS_MODE_THREE_LINE,
+                translationOverride = RootConstants.APPLE_MUSIC_LYRICS_DISPLAY_FOLLOW_APPLE,
+                pronunciationOverride = RootConstants.APPLE_MUSIC_LYRICS_DISPLAY_HIDE,
+            ),
+        )
+        assertEquals(
+            AppleLyricsVisibilityPolicy.Result(false, true),
+            AppleLyricsVisibilityPolicy.resolve(
+                appleTranslation = true,
+                applePronunciation = true,
+                mode = RootConstants.APPLE_MUSIC_LYRICS_MODE_THREE_LINE,
+                translationOverride = RootConstants.APPLE_MUSIC_LYRICS_DISPLAY_HIDE,
+                pronunciationOverride = RootConstants.APPLE_MUSIC_LYRICS_DISPLAY_FOLLOW_APPLE,
+            ),
+        )
+    }
+
+    @Test
     fun `three line requests both native supplemental rows regardless of previous Apple preferences`() {
         assertEquals(
             AppleLyricsVisibilityPolicy.Result(true, true),
@@ -30,8 +54,8 @@ class AppleLyricsVisibilityPolicyTest {
                 appleTranslation = false,
                 applePronunciation = false,
                 mode = RootConstants.APPLE_MUSIC_LYRICS_MODE_THREE_LINE,
-                translationOverride = RootConstants.APPLE_MUSIC_LYRICS_DISPLAY_HIDE,
-                pronunciationOverride = RootConstants.APPLE_MUSIC_LYRICS_DISPLAY_HIDE,
+                translationOverride = RootConstants.APPLE_MUSIC_LYRICS_DISPLAY_FOLLOW_APPLE,
+                pronunciationOverride = RootConstants.APPLE_MUSIC_LYRICS_DISPLAY_FOLLOW_APPLE,
             ),
         )
     }

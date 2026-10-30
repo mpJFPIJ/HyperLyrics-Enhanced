@@ -34,6 +34,7 @@ internal class AppleNativeOnlineTranslationStore {
         val translationsByTiming: Map<TimingKey, List<Entry>>,
         val hasTranslation: Boolean,
         val hasPronunciation: Boolean,
+        val hasHangulPronunciation: Boolean,
         val translationSource: String?,
         val pronunciationSource: String?,
         val translationMatchStats: Map<String, OnlineTranslationMatchStat>,
@@ -108,6 +109,9 @@ internal class AppleNativeOnlineTranslationStore {
                 valueTransform = { Entry(it.key.text, it.value) },
             ),
             hasPronunciation = hasPronunciation,
+            hasHangulPronunciation = merged.values.any {
+                RomanizationPolicy.isHangulPronunciation(it.pronunciation)
+            },
             pronunciationSource = next.pronunciationSource
                 ?: previous.pronunciationSource.takeIf { hasPronunciation },
             pronunciationMatchStats = if (next.pronunciationMatchStats.isEmpty() && hasPronunciation) {
@@ -139,6 +143,9 @@ internal class AppleNativeOnlineTranslationStore {
             ),
             hasTranslation = entries.any { it.second.translation != null },
             hasPronunciation = entries.any { it.second.pronunciation != null },
+            hasHangulPronunciation = entries.any {
+                RomanizationPolicy.isHangulPronunciation(it.second.pronunciation)
+            },
             translationSource = song.metadata
                 ?.getString(LyricMetadataKeys.ONLINE_TRANSLATION_SOURCE),
             pronunciationSource = song.metadata
@@ -176,6 +183,10 @@ internal class AppleNativeOnlineTranslationStore {
     fun hasPronunciation(songId: String?): Boolean =
         !songId.isNullOrBlank() &&
             overlay?.let { it.songId == songId && it.hasPronunciation } == true
+
+    fun hasHangulPronunciation(songId: String?): Boolean =
+        !songId.isNullOrBlank() &&
+            overlay?.let { it.songId == songId && it.hasHangulPronunciation } == true
 
     fun translationSource(songId: String?): String? =
         overlay?.takeIf { it.songId == songId && it.hasTranslation }?.translationSource

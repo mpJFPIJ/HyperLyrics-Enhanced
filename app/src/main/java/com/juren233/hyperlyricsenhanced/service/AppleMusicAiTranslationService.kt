@@ -48,6 +48,8 @@ class AppleMusicAiTranslationService : Service() {
     private val json = Json { ignoreUnknownKeys = true; coerceInputValues = true }
     private val requestLock = Any()
     private var requestJob: Job? = null
+    private var activeRequestKey: String? = null
+    private var activeReceiver: IAppleMusicTranslationReceiver? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -67,12 +69,14 @@ class AppleMusicAiTranslationService : Service() {
                     packageManager.getPackagesForUid(Binder.getCallingUid())
                 )
             ) return
-            generation.incrementAndGet()
-            LogManager.i(TAG, "stage=request_cancelled")
             synchronized(requestLock) {
+                generation.incrementAndGet()
                 requestJob?.cancel()
                 requestJob = null
+                activeRequestKey = null
+                activeReceiver = null
             }
+            LogManager.i(TAG, "stage=request_cancelled")
         }
 
         override fun translate(compressedSong: ByteArray?, receiver: IAppleMusicTranslationReceiver?) {
@@ -92,15 +96,35 @@ class AppleMusicAiTranslationService : Service() {
             }
             LogManager.i(TAG, "stage=request_received bytes=${compressedSong.size}")
 
-            val serial = generation.incrementAndGet()
+            // Decode the small lyric payload before cancelling the running request.
+            // A provider often emits multiple variants of the same song within
+            // seconds; cancelling every in-flight Gemini request prevents a
+            // usable translation/pronunciation result from ever reaching Apple.
+            val song = try {
+                json.decodeFromString<Song>(
+                    compressedSong.inflate().toString(Charsets.UTF_8)
+                )
+            } catch (error: Exception) {
+                LogManager.w(TAG, "stage=song_decode_failed type=${error.javaClass.simpleName}")
+                return
+            }
+            val requestKey = AppleMusicAiRequestIdentity.key(song)
             synchronized(requestLock) {
+                if (requestKey == activeRequestKey && requestJob?.isActive == true) {
+                    // Only the receiver changes; original lyrics and line indexes
+                    // are identical, so one translation can serve both requests.
+                    activeReceiver = receiver
+                    LogManager.i(TAG, "stage=request_coalesced lines=${song.lyrics.orEmpty().size}")
+                    return
+                }
+
+                val serial = generation.incrementAndGet()
                 requestJob?.cancel()
+                activeRequestKey = requestKey
+                activeReceiver = receiver
                 requestJob = scope.launch {
                     try {
                         val prefs = getSharedPreferences(UIConstants.PREF_NAME, MODE_PRIVATE)
-                        val song = json.decodeFromString<Song>(
-                            compressedSong.inflate().toString(Charsets.UTF_8)
-                        )
                         LogManager.i(TAG, "stage=song_decoded lines=${song.lyrics.orEmpty().size}")
                         val forceOverride = prefs.getBoolean(
                             RootConstants.KEY_HOOK_AI_TRANS_FORCE_OVERRIDE,
@@ -165,14 +189,27 @@ class AppleMusicAiTranslationService : Service() {
                         if (result.size > MAX_COMPRESSED_BYTES ||
                             serial != generation.get()
                         ) return@launch
-                        receiver.onOnlineTranslationResult(result)
-                        LogManager.i(TAG, "stage=result_sent bytes=${result.size}")
+                        // Deliver to the most recent bound receiver for this song.
+                        val target = synchronized(requestLock) {
+                            if (serial == generation.get() && activeRequestKey == requestKey)
+                                activeReceiver else null
+                        }
+                        target?.onOnlineTranslationResult(result)
+                        if (target != null) LogManager.i(TAG, "stage=result_sent bytes=${result.size}")
                     } catch (cancelled: CancellationException) {
                         LogManager.i(TAG, "stage=request_cancelled_inflight")
                         throw cancelled
                     } catch (error: Exception) {
                         // Never log the lyrics, request body, or private API credentials.
                         LogManager.w(TAG, "stage=translation_failed type=${error.javaClass.simpleName}")
+                    } finally {
+                        synchronized(requestLock) {
+                            if (serial == generation.get() && activeRequestKey == requestKey) {
+                                activeRequestKey = null
+                                activeReceiver = null
+                                requestJob = null
+                            }
+                        }
                     }
                 }
             }

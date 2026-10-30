@@ -52,7 +52,7 @@ internal object OpenAiTranslationClient {
         // Search research is a bounded, optional precursor. Failure never blocks the
         // existing Gemini/OpenAI-compatible translation and Hangul pronunciation path.
         val webReference = song?.let {
-            if (!configs.groqApiKey.isNullOrBlank())
+            if (GroqApiKeyPool.configured(configs).isNotEmpty())
                 GroqMultiModelClient.research(configs, it, texts)
             else GeminiWebReferenceClient.search(configs, it, texts)
         }
@@ -108,8 +108,10 @@ internal object OpenAiTranslationClient {
                 )
                 connection = (url.openConnection() as HttpURLConnection).apply {
                     requestMethod = "POST"
-                    connectTimeout = 60 * 1000
-                    readTimeout = 3 * (60 * 1000)
+                    // Timed-out requests must reach Qwen fallback promptly rather
+                    // than leave a song with neither translation nor Hangul phonetics.
+                    connectTimeout = 20 * 1000
+                    readTimeout = if (isGoogleGemini) 90_000 else 180_000
                     doOutput = true
                     setRequestProperty("Content-Type", "application/json")
                     setRequestProperty("Authorization", "Bearer $selectedKey")

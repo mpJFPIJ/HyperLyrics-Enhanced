@@ -19,6 +19,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
+import android.widget.Toast
+import com.juren233.hyperlyricsenhanced.root.RootApplication
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.juren233.hyperlyricsenhanced.R
@@ -52,6 +55,7 @@ fun AppleMusicOptimizationPage(
     onAppSettingsClick: () -> Unit = {},
 ) {
     val prefs = rememberHookPrefs()
+    val context = LocalContext.current
     val saveConfig = rememberHookConfigSaver(prefs)
     var forceCellularDataEntry by remember {
         mutableStateOf(
@@ -612,6 +616,14 @@ fun AppleMusicOptimizationPage(
                                 RootConstants.KEY_HOOK_APPLE_MUSIC_TRANSLATION_DISPLAY_OVERRIDE,
                                 value,
                             )
+                            if (RootApplication.xposedService == null) {
+                                Toast.makeText(
+                                    context,
+                                    if (koreanLocale) "Xposed 서비스가 연결되지 않아 적용 대기 중입니다. 연결 후 Apple Music을 다시 열어주세요."
+                                    else "Xposed service unavailable. Change is queued; reopen Apple Music after reconnect.",
+                                    Toast.LENGTH_LONG,
+                                ).show()
+                            }
                         },
                     )
                 }
@@ -622,6 +634,8 @@ fun AppleMusicOptimizationPage(
                     OverlayDropdownPreference(
                         title = if (koreanLocale) "한글 발음 표시"
                             else stringResource(R.string.title_apple_music_pronunciation_visibility),
+                        summary = if (koreanLocale) "변경 후 Apple Music 가사를 다시 열어주세요. Xposed 연결이 끊긴 경우 재연결 후 적용됩니다."
+                            else "Reopen lyrics to apply. If Xposed is disconnected, waits for reconnection.",
                         items = lyricsVisibilityOptions,
                         selectedIndex = pronunciationVisibility,
                         onSelectedIndexChange = { selected ->
@@ -634,6 +648,14 @@ fun AppleMusicOptimizationPage(
                                 RootConstants.KEY_HOOK_APPLE_MUSIC_PRONUNCIATION_DISPLAY_OVERRIDE,
                                 value,
                             )
+                            if (RootApplication.xposedService == null) {
+                                Toast.makeText(
+                                    context,
+                                    if (koreanLocale) "Xposed 서비스가 연결되지 않아 적용 대기 중입니다. 연결 후 Apple Music을 다시 열어주세요."
+                                    else "Xposed service unavailable. Change is queued; reopen Apple Music after reconnect.",
+                                    Toast.LENGTH_LONG,
+                                ).show()
+                            }
                         },
                     )
                 }

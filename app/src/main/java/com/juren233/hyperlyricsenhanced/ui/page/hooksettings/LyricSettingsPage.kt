@@ -139,9 +139,10 @@ fun LyricSettingsPage() {
     }
     val koreanLocale = LocalConfiguration.current.locales.get(0)?.language == "ko"
     val configuredApiKeyCount = AiApiKeyPool.parse(apiKeys).size
-    var groqConfigured by remember {
-        mutableStateOf(!AiApiKeyStore.readGroq(context).isNullOrBlank())
+    var groqKeys by remember {
+        mutableStateOf(AiApiKeyStore.readGroqKeys(context).joinToString("\n"))
     }
+    val configuredGroqKeyCount = AiApiKeyPool.parse(groqKeys).size
     var model by remember {
         mutableStateOf(
             prefs.getString(
@@ -196,14 +197,13 @@ fun LyricSettingsPage() {
     )
     TextInputDialog(
         show = showGroqKeyDialog,
-        title = if (koreanLocale) "Groq API 키" else "Groq API key",
-        label = if (koreanLocale) "GPT-OSS 검색 및 Qwen 예비 번역용 (비우면 삭제)"
-            else "For GPT-OSS research and Qwen fallback (empty to remove)",
-        initialValue = "",
+        title = if (koreanLocale) "Groq API 키 여러 개 등록" else "Multiple Groq API keys",
+        label = if (koreanLocale) "한 줄에 키 하나씩 입력 (최대 12개, 비우면 삭제)"
+            else "One key per line (up to 12; empty removes)",
+        initialValue = groqKeys,
         onDismiss = { showGroqKeyDialog = false },
         onConfirm = { input ->
-            AiApiKeyStore.saveGroq(context, input)
-            groqConfigured = input.isNotBlank()
+            groqKeys = AiApiKeyStore.saveGroqKeys(context, input).joinToString("\n")
         },
     )
     TextInputDialog(
@@ -482,14 +482,15 @@ fun LyricSettingsPage() {
                                 onClick = { showApiKeyDialog = true },
                             )
                             ArrowPreference(
-                                title = if (koreanLocale) "Groq API 키 (검색·예비 번역)"
-                                    else "Groq API key (research and fallback)",
-                                summary = if (koreanLocale) "Gemini 오류 시 Qwen 3.8 27B로 자동 전환. Groq 키는 앱에만 보관합니다."
-                                    else "Qwen 3.8 27B fallback on Gemini failures; key stays in the app.",
+                                title = if (koreanLocale) "Groq API 키 순환 사용 (최대 12개)"
+                                    else "Groq API key rotation (up to 12)",
+                                summary = if (koreanLocale) "GPT-OSS 검색과 Qwen 예비 번역에 순환 사용합니다. 429 한도를 우회하지 않으며 프로젝트 한도는 공유될 수 있습니다."
+                                    else "Round-robin for GPT-OSS and Qwen. No 429 quota bypass; project quotas may be shared.",
                                 endActions = {
                                     Text(
-                                        if (groqConfigured) {
-                                            if (koreanLocale) "등록됨" else "Configured"
+                                        if (configuredGroqKeyCount > 0) {
+                                            if (koreanLocale) "${configuredGroqKeyCount}개 등록"
+                                            else "$configuredGroqKeyCount configured"
                                         } else {
                                             stringResource(R.string.summary_not_configured)
                                         },

@@ -10,7 +10,8 @@ data class AiTranslationConfigs(
     /** Additional configured credentials; server-side translation owns these only. */
     val apiKeys: List<String> = emptyList(),
     /** App-process only: Groq credentials are never synced to patched Apple Music. */
-    val groqApiKey: String? = null,
+    val groqApiKey: String? = null, // legacy call sites
+    val groqApiKeys: List<String> = emptyList(),
     val model: String? = null,
     val baseUrl: String? = null,
     val prompt: String = USER_PROMPT,
@@ -32,7 +33,7 @@ data class AiTranslationConfigs(
     }
 
     override fun toString(): String {
-        return "AiTranslationConfigs(baseUrl=$baseUrl, provider=$provider, targetLanguage=$targetLanguage, apiKeys=<redacted count=${if (apiKeys.isNotEmpty()) apiKeys.size else if (apiKey.isNullOrBlank()) 0 else 1}>, model=$model webSearchEnabled=$webSearchEnabled temperature=$temperature topP=$topP maxTokens=$maxTokens prompt=${
+        return "AiTranslationConfigs(baseUrl=$baseUrl, provider=$provider, targetLanguage=$targetLanguage, apiKeys=<redacted count=${if (apiKeys.isNotEmpty()) apiKeys.size else if (apiKey.isNullOrBlank()) 0 else 1}>, groqApiKeys=<redacted count=${if (groqApiKeys.isNotEmpty()) groqApiKeys.size else if (groqApiKey.isNullOrBlank()) 0 else 1}>, model=$model webSearchEnabled=$webSearchEnabled temperature=$temperature topP=$topP maxTokens=$maxTokens prompt=${
             prompt.take(30)
         }..., isUsable=$isUsable)"
     }

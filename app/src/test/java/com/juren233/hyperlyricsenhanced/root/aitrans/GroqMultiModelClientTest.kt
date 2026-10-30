@@ -21,5 +21,7 @@ class GroqMultiModelClientTest {
     @Test fun logsNeverExposeGroqCredential() {
         val text = AiTranslationConfigs(groqApiKey = "test-secret").toString()
         assertFalse(text.contains("test-secret"))
+        assertFalse(AiTranslationConfigs(groqApiKeys = listOf("secret-a", "secret-b"))
+            .toString().contains("secret-a"))
     }
 }

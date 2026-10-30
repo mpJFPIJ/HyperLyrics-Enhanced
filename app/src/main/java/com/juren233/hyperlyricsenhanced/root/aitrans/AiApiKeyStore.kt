@@ -13,7 +13,8 @@ import com.juren233.hyperlyricsenhanced.common.RootConstants
 internal object AiApiKeyStore {
     const val PREFERENCES_FILE = "hyperlyricsenhanced_private_ai_credentials"
     private const val KEY_POOL = "api_keys"
-    private const val KEY_GROQ = "groq_api_key"
+    private const val KEY_GROQ = "groq_api_key" // earlier single-key preview
+    private const val KEY_GROQ_POOL = "groq_api_keys"
 
     private fun privatePrefs(context: Context): SharedPreferences =
         context.applicationContext.getSharedPreferences(PREFERENCES_FILE, Context.MODE_PRIVATE)
@@ -30,15 +31,28 @@ internal object AiApiKeyStore {
         )
     }
 
-    /** Separate private Groq credential, never placed in remote/Xposed preferences. */
-    fun readGroq(context: Context): String? =
-        privatePrefs(context).getString(KEY_GROQ, null)?.trim()?.takeIf { it.isNotBlank() }
-
-    fun saveGroq(context: Context, rawKey: String) {
-        check(privatePrefs(context).edit()
-            .putString(KEY_GROQ, rawKey.trim())
-            .commit()) { "Failed to save local Groq credential" }
+    /** Read the saved pool or migrate an earlier single Groq key, without exporting it. */
+    fun readGroqKeys(context: Context): List<String> {
+        val secure = privatePrefs(context)
+        return if (secure.contains(KEY_GROQ_POOL)) {
+            AiApiKeyPool.parse(secure.getString(KEY_GROQ_POOL, null))
+        } else {
+            AiApiKeyPool.parse(secure.getString(KEY_GROQ, null))
+        }
     }
+
+    fun saveGroqKeys(context: Context, rawKeys: String): List<String> {
+        val normalized = AiApiKeyPool.parse(rawKeys)
+        check(privatePrefs(context).edit()
+            .putString(KEY_GROQ_POOL, normalized.joinToString("\n"))
+            .remove(KEY_GROQ)
+            .commit()) { "Failed to save local Groq credentials" }
+        return normalized
+    }
+
+    /** Legacy single-key API remains available to earlier callers. */
+    fun readGroq(context: Context): String? = readGroqKeys(context).firstOrNull()
+    fun saveGroq(context: Context, rawKey: String) { saveGroqKeys(context, rawKey) }
 
     fun save(context: Context, legacyPrefs: SharedPreferences, rawKeys: String): List<String> {
         val normalized = AiApiKeyPool.parse(rawKeys)

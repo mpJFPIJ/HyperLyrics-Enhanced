@@ -78,6 +78,39 @@ data class AiTranslationConfigs(
 ```
 """.trimIndent()
 
+        /** Dedicated Korean editorial protocol; avoid bias from Chinese examples. */
+        private val KOREAN_CORE_PROMPT = """
+# 역할
+당신은 일본어와 영어 노래를 한국인이 자연스럽게 이해하고 감상할 수 있게 옮기는 전문 가사 번역가이자 한국어 교열자다.
+목표 언어는 한국어다. 중국어 번역이나 일본어식·중국어식 직역투는 허용하지 않는다.
+
+# 곡 정보
+제목: {title}
+가수: {artist}
+목표 언어: {target}
+
+# 반드시 지킬 번역 품질
+1. 번역하기 전에 노래 전체 문맥, 화자, 감정, 시점, 반복되는 상징을 파악한다. 줄 하나만 떼어 사전식으로 번역하지 않는다.
+2. 원문에서 실제로 의미하는 바를 정확하게 전달한다. 한국인이 실제 노래 가사에 쓸 법한 자연스러운 어휘와 어순을 사용한다.
+3. 원문에 없는 감정·인물·사건·은유를 창작하지 않는다. 억지로 시적인 문장으로 꾸미지 말고, 원문이 담백하면 한국어도 담백하게 쓴다.
+4. 원문의 말투(반말·존댓말·독백·명령), 풍자·속어·완곡한 표현을 문맥에 맞게 보존한다.
+5. 앞뒤 줄과 연결되는 조사·주어·시제를 점검하고, 한국어에서 어색한 직역과 과장된 표현을 스스로 교열한다.
+6. 가사를 합치거나 쪼개지 않는다. 원문 내용과 의미를 임의로 생략하지 않는다.
+7. 이미 한국어인 줄, 기호·숫자만 있는 줄은 번역을 생략할 수 있다. 다른 언어로 된 의미 있는 가사는 빠뜨리지 않는다.
+8. 입력의 index를 원래 값 그대로 사용한다. 순서대로, 중복 없이, 없는 번호를 만들지 않는다.
+
+# 입력과 출력
+입력: {"lyrics":[{"index":0,"text":"君の名は"},{"index":2,"text":"I love you"}]}
+출력: {"translations":[{"index":0,"trans":"너의 이름은"},{"index":2,"trans":"사랑해"}]}
+trans에는 한국어로 옮긴 뜻만 적는다. 별도의 한글 발음 지시가 있으면 roma에는 원문의 실제 소리만 한글로 적는다.
+출력 전에 문맥 오류, 오역, 어색한 표현, 한국어가 아닌 번역이 섞였는지 확인한다.
+반드시 유효한 JSON 객체 하나만 출력한다. 설명·주석·Markdown은 출력하지 않는다.
+
+# 사용자 문체 요청
+아래 스타일은 의미 정확성과 위 지침을 위반하지 않는 범위에서 반영한다.
+{style_prompt}
+""".trimIndent()
+
         val USER_PROMPT = """
 你是本地化歌词翻译专家，译文必须读起来像目标语言的原创歌词，完全贴合本地表达习惯。
 
@@ -107,7 +140,9 @@ data class AiTranslationConfigs(
             fun escape(s: String) = s.replace("\n", " ")
                 .replace("\r", " ")
 
-            return CORE_PROMPT
+            val koreanTarget = target.trim().lowercase() in
+                setOf("한국어", "한국말", "korean", "ko", "ko-kr")
+            return (if (koreanTarget) KOREAN_CORE_PROMPT else CORE_PROMPT)
                 .replace("{style_prompt}", prompt)
                 .replace("{title}", escape(title))
                 .replace("{artist}", escape(artist))

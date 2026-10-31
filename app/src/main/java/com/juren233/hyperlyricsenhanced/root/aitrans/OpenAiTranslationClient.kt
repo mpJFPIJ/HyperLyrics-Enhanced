@@ -111,7 +111,7 @@ internal object OpenAiTranslationClient {
                     // Timed-out requests must reach Qwen fallback promptly rather
                     // than leave a song with neither translation nor Hangul phonetics.
                     connectTimeout = 20 * 1000
-                    readTimeout = if (isGoogleGemini) 90_000 else 180_000
+                    readTimeout = if (isGoogleGemini) 150_000 else 180_000
                     doOutput = true
                     setRequestProperty("Content-Type", "application/json")
                     setRequestProperty("Authorization", "Bearer $selectedKey")

@@ -103,6 +103,8 @@ class RootApplication : Application() {
 
         @JvmStatic
         fun syncPreference(group: String, key: String, value: Any?) {
+            // Multi-key pool is app-private: never mirror it into the Xposed service.
+            if (key == RootConstants.KEY_HOOK_AI_TRANS_API_KEYS) return
             if (BuildConfig.DEBUG) {
                 LogManager.i(
                     "PrefsBridge",

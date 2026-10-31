@@ -871,4 +871,19 @@
     <string name="island_touch_forward_value">快进 %1$d 秒</string>
     <string name="island_touch_backward_value">倒退 %1$d 秒</string>
     <string name="island_touch_seconds_range">1–300 秒</string>
+    <string name="title_apple_music_pronunciation_priority">发音来源优先级</string>
+    <string name="summary_apple_music_pronunciation_priority">切换后重新打开 Apple Music 歌词页面。只在存在相应发音时生效。</string>
+    <string name="option_apple_music_pronunciation_hangul_first">优先韩文音译（保持现有行为）</string>
+    <string name="option_apple_music_pronunciation_apple_first">优先 Apple 原生发音</string>
+    <string name="option_apple_music_pronunciation_supplement_first">优先在线 / AI 补全发音</string>
+    <string name="title_apple_music_lyrics_display_mode">歌词显示模式</string>
+    <string name="summary_apple_music_lyrics_display_mode">三行显示需同时存在原文、翻译和发音；不更改原生歌词时间轴。</string>
+    <string name="option_apple_music_lyrics_mode_apple">遵循 Apple Music</string>
+    <string name="option_apple_music_lyrics_mode_three_line">三行显示（实验性）</string>
+    <string name="option_apple_music_lyrics_mode_custom">独立控制</string>
+    <string name="title_apple_music_translation_visibility">翻译行可见性</string>
+    <string name="title_apple_music_pronunciation_visibility">发音行可见性</string>
+    <string name="option_apple_music_lyrics_visibility_apple">遵循 Apple 设置</string>
+    <string name="option_apple_music_lyrics_visibility_show">显示（有内容时）</string>
+    <string name="option_apple_music_lyrics_visibility_hide">隐藏</string>
 </resources>

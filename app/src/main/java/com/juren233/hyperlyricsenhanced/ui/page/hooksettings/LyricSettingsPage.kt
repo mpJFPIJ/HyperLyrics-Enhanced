@@ -17,6 +17,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
+import com.juren233.hyperlyricsenhanced.root.aitrans.AiApiKeyPool
+import com.juren233.hyperlyricsenhanced.root.aitrans.AiApiKeyStore
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.juren233.hyperlyricsenhanced.R
@@ -40,6 +44,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 fun LyricSettingsPage() {
     val navigator = LocalNavigator.current
     val prefs = rememberHookPrefs()
+    val context = LocalContext.current
     val saveConfig = rememberHookConfigSaver(prefs)
 
     var lyricSource by remember {
@@ -121,9 +126,23 @@ fun LyricSettingsPage() {
             )
         )
     }
-    var apiKey by remember {
-        mutableStateOf(prefs.getString(RootConstants.KEY_HOOK_AI_TRANS_API_KEY, "").orEmpty())
+    var webSearchEnabled by remember {
+        mutableStateOf(
+            prefs.getBoolean(
+                RootConstants.KEY_HOOK_AI_TRANS_WEB_SEARCH,
+                RootConstants.DEFAULT_HOOK_AI_TRANS_WEB_SEARCH,
+            )
+        )
     }
+    var apiKeys by remember {
+        mutableStateOf(AiApiKeyStore.read(context, prefs).joinToString("\n"))
+    }
+    val koreanLocale = LocalConfiguration.current.locales.get(0)?.language == "ko"
+    val configuredApiKeyCount = AiApiKeyPool.parse(apiKeys).size
+    var groqKeys by remember {
+        mutableStateOf(AiApiKeyStore.readGroqKeys(context).joinToString("\n"))
+    }
+    val configuredGroqKeyCount = AiApiKeyPool.parse(groqKeys).size
     var model by remember {
         mutableStateOf(
             prefs.getString(
@@ -158,6 +177,7 @@ fun LyricSettingsPage() {
     }
 
     var showApiKeyDialog by remember { mutableStateOf(false) }
+    var showGroqKeyDialog by remember { mutableStateOf(false) }
     var showModelDialog by remember { mutableStateOf(false) }
     var showBaseUrlDialog by remember { mutableStateOf(false) }
     var showTargetLangDialog by remember { mutableStateOf(false) }
@@ -165,12 +185,25 @@ fun LyricSettingsPage() {
 
     TextInputDialog(
         show = showApiKeyDialog,
-        title = stringResource(R.string.label_ai_trans_api_key),
-        initialValue = apiKey,
+        title = if (koreanLocale) "AI API 키 여러 개 등록" else "AI API keys (one per line)",
+        label = if (koreanLocale) "한 줄에 키 하나씩 입력 (최대 12개)"
+            else "Enter one API key per line (up to 12)",
+        initialValue = apiKeys,
         onDismiss = { showApiKeyDialog = false },
-        onConfirm = {
-            apiKey = it
-            saveConfig(RootConstants.KEY_HOOK_AI_TRANS_API_KEY, it)
+        onConfirm = { input ->
+            // Dedicated private file: never synchronizes with the Xposed process.
+            apiKeys = AiApiKeyStore.save(context, prefs, input).joinToString("\n")
+        },
+    )
+    TextInputDialog(
+        show = showGroqKeyDialog,
+        title = if (koreanLocale) "Groq API 키 여러 개 등록" else "Multiple Groq API keys",
+        label = if (koreanLocale) "한 줄에 키 하나씩 입력 (최대 12개, 비우면 삭제)"
+            else "One key per line (up to 12; empty removes)",
+        initialValue = groqKeys,
+        onDismiss = { showGroqKeyDialog = false },
+        onConfirm = { input ->
+            groqKeys = AiApiKeyStore.saveGroqKeys(context, input).joinToString("\n")
         },
     )
     TextInputDialog(
@@ -405,6 +438,18 @@ fun LyricSettingsPage() {
                                     }
                                 },
                             )
+                            SwitchPreference(
+                                title = if (koreanLocale) "GPT-OSS 웹 번역 참고"
+                                    else "GPT-OSS web translation research",
+                                summary = if (koreanLocale)
+                                    "Groq 키가 있으면 GPT-OSS 120B로 검색합니다. 없으면 기존 Gemini 검색을 사용합니다. 검색·토큰 사용 요금에 주의하세요."
+                                else "Uses Groq GPT-OSS 120B when configured, otherwise existing Gemini research. Search and token usage may incur charges.",
+                                checked = webSearchEnabled,
+                                onCheckedChange = {
+                                    webSearchEnabled = it
+                                    saveConfig(RootConstants.KEY_HOOK_AI_TRANS_WEB_SEARCH, it)
+                                },
+                            )
                             ArrowPreference(
                                 title = stringResource(R.string.label_ai_trans_target_lang),
                                 endActions = {
@@ -417,11 +462,16 @@ fun LyricSettingsPage() {
                                 onClick = { showTargetLangDialog = true },
                             )
                             ArrowPreference(
-                                title = stringResource(R.string.label_ai_trans_api_key),
+                                title = if (koreanLocale) "AI API 키 순환 사용"
+                                    else "AI API key rotation",
+                                summary = if (koreanLocale)
+                                    "여러 개를 한 줄에 하나씩 등록하면 요청마다 순서대로 사용합니다. 같은 프로젝트의 사용량 한도는 공유될 수 있습니다."
+                                    else "One key per line. Requests rotate keys; project-level quotas may still be shared.",
                                 endActions = {
                                     Text(
-                                        if (apiKey.isNotEmpty()) {
-                                            "***************"
+                                        if (configuredApiKeyCount > 0) {
+                                            if (koreanLocale) "${configuredApiKeyCount}개 등록"
+                                            else "$configuredApiKeyCount configured"
                                         } else {
                                             stringResource(R.string.summary_not_configured)
                                         },
@@ -430,6 +480,25 @@ fun LyricSettingsPage() {
                                     )
                                 },
                                 onClick = { showApiKeyDialog = true },
+                            )
+                            ArrowPreference(
+                                title = if (koreanLocale) "Groq API 키 순환 사용 (최대 12개)"
+                                    else "Groq API key rotation (up to 12)",
+                                summary = if (koreanLocale) "GPT-OSS 검색과 Qwen 예비 번역에 순환 사용합니다. 429 한도를 우회하지 않으며 프로젝트 한도는 공유될 수 있습니다."
+                                    else "Round-robin for GPT-OSS and Qwen. No 429 quota bypass; project quotas may be shared.",
+                                endActions = {
+                                    Text(
+                                        if (configuredGroqKeyCount > 0) {
+                                            if (koreanLocale) "${configuredGroqKeyCount}개 등록"
+                                            else "$configuredGroqKeyCount configured"
+                                        } else {
+                                            stringResource(R.string.summary_not_configured)
+                                        },
+                                        fontSize = MiuixTheme.textStyles.body2.fontSize,
+                                        color = MiuixTheme.colorScheme.onSurfaceVariantActions,
+                                    )
+                                },
+                                onClick = { showGroqKeyDialog = true },
                             )
                             ArrowPreference(
                                 title = stringResource(R.string.label_ai_trans_model),
@@ -459,6 +528,21 @@ fun LyricSettingsPage() {
                         }
                     }
                 }
+            }
+        }
+        item(key = "ai_cache_management") {
+            Card(
+                modifier = Modifier.padding(horizontal = 12.dp)
+                    .padding(bottom = 12.dp).fillMaxWidth()
+            ) {
+                ArrowPreference(
+                    title = if (koreanLocale) "곡별 AI 번역 관리"
+                        else "Manage saved AI translations",
+                    summary = if (koreanLocale)
+                        "HyperLyrics 앱에서 저장된 곡의 번역·한글 발음 캐시를 개별 삭제합니다."
+                    else "Review saved songs and delete each song's translation and phonetics cache.",
+                    onClick = { navigator.navigate(Route.AiTranslationCache) },
+                )
             }
         }
     }

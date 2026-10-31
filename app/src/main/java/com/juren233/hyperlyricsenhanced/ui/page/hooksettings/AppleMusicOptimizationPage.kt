@@ -18,6 +18,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
+import android.widget.Toast
+import com.juren233.hyperlyricsenhanced.root.RootApplication
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.juren233.hyperlyricsenhanced.R
@@ -51,6 +55,7 @@ fun AppleMusicOptimizationPage(
     onAppSettingsClick: () -> Unit = {},
 ) {
     val prefs = rememberHookPrefs()
+    val context = LocalContext.current
     val saveConfig = rememberHookConfigSaver(prefs)
     var forceCellularDataEntry by remember {
         mutableStateOf(
@@ -132,6 +137,66 @@ fun AppleMusicOptimizationPage(
             prefs.getBoolean(
                 RootConstants.KEY_HOOK_APPLE_MUSIC_NATIVE_ONLINE_TRANSLATION,
                 RootConstants.DEFAULT_HOOK_APPLE_MUSIC_NATIVE_ONLINE_TRANSLATION,
+            )
+        )
+    }
+    var lyricsDisplayMode by remember {
+        mutableIntStateOf(
+            prefs.getInt(
+                RootConstants.KEY_HOOK_APPLE_MUSIC_LYRICS_DISPLAY_MODE,
+                RootConstants.DEFAULT_HOOK_APPLE_MUSIC_LYRICS_DISPLAY_MODE,
+            ).coerceIn(
+                RootConstants.APPLE_MUSIC_LYRICS_MODE_APPLE,
+                RootConstants.APPLE_MUSIC_LYRICS_MODE_CUSTOM,
+            )
+        )
+    }
+    var translationVisibility by remember {
+        mutableIntStateOf(
+            prefs.getInt(
+                RootConstants.KEY_HOOK_APPLE_MUSIC_TRANSLATION_DISPLAY_OVERRIDE,
+                RootConstants.DEFAULT_HOOK_APPLE_MUSIC_LYRICS_DISPLAY_OVERRIDE,
+            ).coerceIn(
+                RootConstants.APPLE_MUSIC_LYRICS_DISPLAY_FOLLOW_APPLE,
+                RootConstants.APPLE_MUSIC_LYRICS_DISPLAY_HIDE,
+            )
+        )
+    }
+    var pronunciationVisibility by remember {
+        mutableIntStateOf(
+            prefs.getInt(
+                RootConstants.KEY_HOOK_APPLE_MUSIC_PRONUNCIATION_DISPLAY_OVERRIDE,
+                RootConstants.DEFAULT_HOOK_APPLE_MUSIC_LYRICS_DISPLAY_OVERRIDE,
+            ).coerceIn(
+                RootConstants.APPLE_MUSIC_LYRICS_DISPLAY_FOLLOW_APPLE,
+                RootConstants.APPLE_MUSIC_LYRICS_DISPLAY_HIDE,
+            )
+        )
+    }
+    var showNativePronunciation by remember {
+        mutableStateOf(
+            prefs.getBoolean(
+                RootConstants.KEY_HOOK_APPLE_MUSIC_SHOW_NATIVE_PRONUNCIATION,
+                RootConstants.DEFAULT_HOOK_APPLE_MUSIC_SHOW_NATIVE_PRONUNCIATION,
+            )
+        )
+    }
+    var showHangulPronunciation by remember {
+        mutableStateOf(
+            prefs.getBoolean(
+                RootConstants.KEY_HOOK_APPLE_MUSIC_SHOW_HANGUL_PRONUNCIATION,
+                RootConstants.DEFAULT_HOOK_APPLE_MUSIC_SHOW_HANGUL_PRONUNCIATION,
+            )
+        )
+    }
+    var pronunciationSourcePriority by remember {
+        mutableIntStateOf(
+            prefs.getInt(
+                RootConstants.KEY_HOOK_APPLE_MUSIC_PRONUNCIATION_SOURCE_PRIORITY,
+                RootConstants.DEFAULT_HOOK_APPLE_MUSIC_PRONUNCIATION_SOURCE_PRIORITY,
+            ).coerceIn(
+                RootConstants.APPLE_MUSIC_PRONUNCIATION_HANGUL_FIRST,
+                RootConstants.APPLE_MUSIC_PRONUNCIATION_SUPPLEMENT_FIRST,
             )
         )
     }
@@ -254,6 +319,36 @@ fun AppleMusicOptimizationPage(
         contentUiLanguage != RootConstants.APPLE_MUSIC_CONTENT_UI_LANGUAGE_NONE &&
             overrideAccountLanguage
     val metadataLookupEnabled = regionReplacementEnabled || restoreCjkOriginalMetadata
+    // A partial values-ko locale makes lint flag every existing untranslated string.
+    // Scope Korean copy to this new control, leaving the established resource locales intact.
+    val koreanLocale = LocalConfiguration.current.locales.get(0)?.language == "ko"
+    val pronunciationSourceOptions = if (koreanLocale) listOf(
+        "한글 발음 우선 (현재 동작)",
+        "Apple 원본 발음 우선",
+        "온라인 / AI 보완 발음 우선",
+    ) else listOf(
+        stringResource(R.string.option_apple_music_pronunciation_hangul_first),
+        stringResource(R.string.option_apple_music_pronunciation_apple_first),
+        stringResource(R.string.option_apple_music_pronunciation_supplement_first),
+    )
+    val lyricsDisplayModeOptions = if (koreanLocale) listOf(
+        "Apple 기본 표시",
+        "3단 표시 (원문 + 발음 + 번역) · 실험적",
+        "개별 설정",
+    ) else listOf(
+        stringResource(R.string.option_apple_music_lyrics_mode_apple),
+        stringResource(R.string.option_apple_music_lyrics_mode_three_line),
+        stringResource(R.string.option_apple_music_lyrics_mode_custom),
+    )
+    val lyricsVisibilityOptions = if (koreanLocale) listOf(
+        "Apple 설정 따르기",
+        "항상 표시",
+        "숨기기",
+    ) else listOf(
+        stringResource(R.string.option_apple_music_lyrics_visibility_apple),
+        stringResource(R.string.option_apple_music_lyrics_visibility_show),
+        stringResource(R.string.option_apple_music_lyrics_visibility_hide),
+    )
     val lyricsBlurEffectOptions = listOf(
         stringResource(R.string.option_apple_music_lyrics_blur_effect_off),
         stringResource(R.string.option_apple_music_lyrics_blur_effect_native),
@@ -498,6 +593,149 @@ fun AppleMusicOptimizationPage(
                         saveConfig(
                             RootConstants.KEY_HOOK_APPLE_MUSIC_NATIVE_ONLINE_TRANSLATION,
                             enabled,
+                        )
+                    },
+                )
+                OverlayDropdownPreference(
+                    title = if (koreanLocale) "가사 표시 방식"
+                        else stringResource(R.string.title_apple_music_lyrics_display_mode),
+                    summary = if (koreanLocale)
+                        "3단 모드에서도 번역과 발음을 각각 숨길 수 있습니다. Apple 원본 가사와 싱크는 유지합니다."
+                        else stringResource(R.string.summary_apple_music_lyrics_display_mode),
+                    items = lyricsDisplayModeOptions,
+                    selectedIndex = lyricsDisplayMode,
+                    onSelectedIndexChange = { selected ->
+                        val value = selected.coerceIn(
+                            RootConstants.APPLE_MUSIC_LYRICS_MODE_APPLE,
+                            RootConstants.APPLE_MUSIC_LYRICS_MODE_CUSTOM,
+                        )
+                        lyricsDisplayMode = value
+                        saveConfig(RootConstants.KEY_HOOK_APPLE_MUSIC_LYRICS_DISPLAY_MODE, value)
+                    },
+                )
+                AnimatedVisibility(
+                    visible = lyricsDisplayMode == RootConstants.APPLE_MUSIC_LYRICS_MODE_CUSTOM ||
+                        lyricsDisplayMode == RootConstants.APPLE_MUSIC_LYRICS_MODE_THREE_LINE
+                ) {
+                    OverlayDropdownPreference(
+                        title = if (koreanLocale) "한국어 번역 표시"
+                            else stringResource(R.string.title_apple_music_translation_visibility),
+                        items = lyricsVisibilityOptions,
+                        selectedIndex = translationVisibility,
+                        onSelectedIndexChange = { selected ->
+                            val value = selected.coerceIn(
+                                RootConstants.APPLE_MUSIC_LYRICS_DISPLAY_FOLLOW_APPLE,
+                                RootConstants.APPLE_MUSIC_LYRICS_DISPLAY_HIDE,
+                            )
+                            translationVisibility = value
+                            saveConfig(
+                                RootConstants.KEY_HOOK_APPLE_MUSIC_TRANSLATION_DISPLAY_OVERRIDE,
+                                value,
+                            )
+                            if (RootApplication.xposedService == null) {
+                                Toast.makeText(
+                                    context,
+                                    if (koreanLocale) "Xposed 서비스가 연결되지 않아 적용 대기 중입니다. 연결 후 Apple Music을 다시 열어주세요."
+                                    else "Xposed service unavailable. Change is queued; reopen Apple Music after reconnect.",
+                                    Toast.LENGTH_LONG,
+                                ).show()
+                            }
+                        },
+                    )
+                }
+                AnimatedVisibility(
+                    visible = lyricsDisplayMode == RootConstants.APPLE_MUSIC_LYRICS_MODE_CUSTOM ||
+                        lyricsDisplayMode == RootConstants.APPLE_MUSIC_LYRICS_MODE_THREE_LINE
+                ) {
+                    OverlayDropdownPreference(
+                        title = if (koreanLocale) "발음 줄 표시"
+                            else stringResource(R.string.title_apple_music_pronunciation_visibility),
+                        summary = if (koreanLocale) "변경 후 Apple Music 가사를 다시 열어주세요. Xposed 연결이 끊긴 경우 재연결 후 적용됩니다."
+                            else "Reopen lyrics to apply. If Xposed is disconnected, waits for reconnection.",
+                        items = lyricsVisibilityOptions,
+                        selectedIndex = pronunciationVisibility,
+                        onSelectedIndexChange = { selected ->
+                            val value = selected.coerceIn(
+                                RootConstants.APPLE_MUSIC_LYRICS_DISPLAY_FOLLOW_APPLE,
+                                RootConstants.APPLE_MUSIC_LYRICS_DISPLAY_HIDE,
+                            )
+                            pronunciationVisibility = value
+                            saveConfig(
+                                RootConstants.KEY_HOOK_APPLE_MUSIC_PRONUNCIATION_DISPLAY_OVERRIDE,
+                                value,
+                            )
+                            if (RootApplication.xposedService == null) {
+                                Toast.makeText(
+                                    context,
+                                    if (koreanLocale) "Xposed 서비스가 연결되지 않아 적용 대기 중입니다. 연결 후 Apple Music을 다시 열어주세요."
+                                    else "Xposed service unavailable. Change is queued; reopen Apple Music after reconnect.",
+                                    Toast.LENGTH_LONG,
+                                ).show()
+                            }
+                        },
+                    )
+                }
+                SwitchPreference(
+                    title = if (koreanLocale) "Apple 기본 발음 표시" else "Show Apple native pronunciation",
+                    summary = if (koreanLocale)
+                        "끄면 Apple의 영문 로마자 발음은 숨기지만, AI가 생성한 한글 발음은 유지합니다."
+                        else "Turn off Apple's native romanization without hiding AI-generated Hangul pronunciation.",
+                    checked = showNativePronunciation,
+                    onCheckedChange = { enabled ->
+                        showNativePronunciation = enabled
+                        saveConfig(
+                            RootConstants.KEY_HOOK_APPLE_MUSIC_SHOW_NATIVE_PRONUNCIATION,
+                            enabled,
+                        )
+                        if (RootApplication.xposedService == null) {
+                            Toast.makeText(
+                                context,
+                                if (koreanLocale) "Xposed 연결 후 Apple Music을 다시 열어 적용하세요."
+                                else "Reconnect Xposed and reopen Apple Music to apply.",
+                                Toast.LENGTH_LONG,
+                            ).show()
+                        }
+                    },
+                )
+                SwitchPreference(
+                    title = if (koreanLocale) "AI/온라인 한글 발음 표시" else "Show AI / online Hangul pronunciation",
+                    summary = if (koreanLocale)
+                        "한글 발음이 도착하면 해당 가사 줄에 표시합니다. Apple 기본 발음 설정과 독립적입니다."
+                        else "Show Hangul phonetics as they arrive, independently from Apple's native pronunciation.",
+                    checked = showHangulPronunciation,
+                    onCheckedChange = { enabled ->
+                        showHangulPronunciation = enabled
+                        saveConfig(
+                            RootConstants.KEY_HOOK_APPLE_MUSIC_SHOW_HANGUL_PRONUNCIATION,
+                            enabled,
+                        )
+                        if (RootApplication.xposedService == null) {
+                            Toast.makeText(
+                                context,
+                                if (koreanLocale) "Xposed 연결 후 Apple Music을 다시 열어 적용하세요."
+                                else "Reconnect Xposed and reopen Apple Music to apply.",
+                                Toast.LENGTH_LONG,
+                            ).show()
+                        }
+                    },
+                )
+                OverlayDropdownPreference(
+                    title = if (koreanLocale) "발음 출처 우선순위"
+                        else stringResource(R.string.title_apple_music_pronunciation_priority),
+                    summary = if (koreanLocale)
+                        "변경 후 Apple Music의 가사 화면을 다시 열어 적용하세요."
+                        else stringResource(R.string.summary_apple_music_pronunciation_priority),
+                    items = pronunciationSourceOptions,
+                    selectedIndex = pronunciationSourcePriority,
+                    onSelectedIndexChange = { selected ->
+                        val priority = selected.coerceIn(
+                            RootConstants.APPLE_MUSIC_PRONUNCIATION_HANGUL_FIRST,
+                            RootConstants.APPLE_MUSIC_PRONUNCIATION_SUPPLEMENT_FIRST,
+                        )
+                        pronunciationSourcePriority = priority
+                        saveConfig(
+                            RootConstants.KEY_HOOK_APPLE_MUSIC_PRONUNCIATION_SOURCE_PRIORITY,
+                            priority,
                         )
                     },
                 )

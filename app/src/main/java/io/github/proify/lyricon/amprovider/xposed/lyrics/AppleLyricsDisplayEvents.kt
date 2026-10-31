@@ -33,5 +33,18 @@ internal fun AppleLyricsSupplementHooks.onAppleLyricsDisplayTrackChanged(songId:
 internal fun AppleLyricsSupplementHooks.onAppleLyricsPresentationCompleted(fragment: Any, songId: String) {
     restoreAppleLyricsScrollSnapshot(fragment, songId)
     scheduleAppleLyricsBlur(resolveAppleLyricsRecyclerView(fragment))
+    // Apple's ViewModel may create the karaoke adapter with its own persisted flags.
+    // Reapply opt-in visibility on the next frame using a complete holder bind.
+    // Original/Apple mode requires no extra work.
+    if (appleLyricsDisplayMode() !=
+        com.juren233.hyperlyricsenhanced.common.RootConstants.APPLE_MUSIC_LYRICS_MODE_APPLE
+    ) {
+        refreshAppleLyricsRecyclerView(
+            fragment = fragment,
+            expectedSongId = songId,
+            expectedRevision = null,
+            syncDisplayFlags = true,
+        )
+    }
     onlineSourceMenuHooks().refreshActiveMenu(songId)
 }

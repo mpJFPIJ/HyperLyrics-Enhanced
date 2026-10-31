@@ -13,6 +13,7 @@ import com.juren233.hyperlyricsenhanced.common.RootConstants
 import com.juren233.hyperlyricsenhanced.common.UIConstants
 import com.juren233.hyperlyricsenhanced.lyric.model.Song
 import com.juren233.hyperlyricsenhanced.lyric.style.AiTranslationConfigs
+import com.juren233.hyperlyricsenhanced.root.aitrans.AiApiKeyStore
 import com.juren233.hyperlyricsenhanced.lyric.style.AiTranslationProvider
 import com.juren233.hyperlyricsenhanced.root.aitrans.AITranslator
 import io.github.proify.extensions.deflate
@@ -47,6 +48,8 @@ class AppleMusicAiTranslationService : Service() {
     private val json = Json { ignoreUnknownKeys = true; coerceInputValues = true }
     private val requestLock = Any()
     private var requestJob: Job? = null
+    private var activeRequestKey: String? = null
+    private var activeReceiver: IAppleMusicTranslationReceiver? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -66,11 +69,56 @@ class AppleMusicAiTranslationService : Service() {
                     packageManager.getPackagesForUid(Binder.getCallingUid())
                 )
             ) return
-            generation.incrementAndGet()
-            LogManager.i(TAG, "stage=request_cancelled")
             synchronized(requestLock) {
+                generation.incrementAndGet()
                 requestJob?.cancel()
                 requestJob = null
+                activeRequestKey = null
+                activeReceiver = null
+            }
+            LogManager.i(TAG, "stage=request_cancelled")
+        }
+
+        override fun clearSongTranslation(
+            compressedSong: ByteArray?,
+            receiver: IAppleMusicTranslationReceiver?,
+        ) {
+            if (!AppleMusicAiTranslationPolicy.isAuthorizedCaller(
+                    packageManager.getPackagesForUid(Binder.getCallingUid())
+                )
+            ) return
+            if (receiver == null || compressedSong == null || compressedSong.isEmpty() ||
+                compressedSong.size > MAX_COMPRESSED_BYTES
+            ) return
+            val song = runCatching {
+                json.decodeFromString<Song>(
+                    compressedSong.inflate().toString(Charsets.UTF_8)
+                )
+            }.getOrNull() ?: return
+            val id = song.id?.takeIf(String::isNotBlank) ?: return
+            val serial = synchronized(requestLock) {
+                val current = generation.incrementAndGet()
+                // The currently executing task may otherwise repopulate the
+                // cache and return a stale result after the user deleted it.
+                requestJob?.cancel()
+                requestJob = null
+                activeRequestKey = null
+                activeReceiver = null
+                current
+            }
+            scope.launch {
+                val ok = runCatching {
+                    val prefs = getSharedPreferences(UIConstants.PREF_NAME, MODE_PRIVATE)
+                    AITranslator.clearSongCache(song, translationConfig(prefs))
+                }.onFailure {
+                    LogManager.w(TAG, "stage=song_clear_failed type=${it.javaClass.simpleName}")
+                }.getOrDefault(false)
+                if (ok && serial == generation.get()) {
+                    LogManager.i(TAG, "stage=song_clear_completed")
+                    runCatching { receiver.onOnlineTranslationCleared(id) }
+                } else if (!ok) {
+                    LogManager.w(TAG, "stage=song_clear_failed reason=cache")
+                }
             }
         }
 
@@ -91,15 +139,35 @@ class AppleMusicAiTranslationService : Service() {
             }
             LogManager.i(TAG, "stage=request_received bytes=${compressedSong.size}")
 
-            val serial = generation.incrementAndGet()
+            // Decode the small lyric payload before cancelling the running request.
+            // A provider often emits multiple variants of the same song within
+            // seconds; cancelling every in-flight Gemini request prevents a
+            // usable translation/pronunciation result from ever reaching Apple.
+            val song = try {
+                json.decodeFromString<Song>(
+                    compressedSong.inflate().toString(Charsets.UTF_8)
+                )
+            } catch (error: Exception) {
+                LogManager.w(TAG, "stage=song_decode_failed type=${error.javaClass.simpleName}")
+                return
+            }
+            val requestKey = AppleMusicAiRequestIdentity.key(song)
             synchronized(requestLock) {
+                if (requestKey == activeRequestKey && requestJob?.isActive == true) {
+                    // Only the receiver changes; original lyrics and line indexes
+                    // are identical, so one translation can serve both requests.
+                    activeReceiver = receiver
+                    LogManager.i(TAG, "stage=request_coalesced lines=${song.lyrics.orEmpty().size}")
+                    return
+                }
+
+                val serial = generation.incrementAndGet()
                 requestJob?.cancel()
+                activeRequestKey = requestKey
+                activeReceiver = receiver
                 requestJob = scope.launch {
                     try {
                         val prefs = getSharedPreferences(UIConstants.PREF_NAME, MODE_PRIVATE)
-                        val song = json.decodeFromString<Song>(
-                            compressedSong.inflate().toString(Charsets.UTF_8)
-                        )
                         LogManager.i(TAG, "stage=song_decoded lines=${song.lyrics.orEmpty().size}")
                         val forceOverride = prefs.getBoolean(
                             RootConstants.KEY_HOOK_AI_TRANS_FORCE_OVERRIDE,
@@ -152,26 +220,48 @@ class AppleMusicAiTranslationService : Service() {
                             LogManager.w(TAG, "stage=no_translation_result")
                             return@launch
                         }
-                        val pronouncedLines = translated.lyrics.orEmpty()
+                        // The AI applicator can retain an incoming third-party
+                        // reading. That is not AI output, so do not tag it as
+                        // such in the standalone callback. The receiver keeps
+                        // any provider reading separately for explicit source
+                        // selection, while AI-first displays only fresh Hangul.
+                        val aiOnly = translated.copy(lyrics = translated.lyrics?.mapIndexed { index, line ->
+                            val inheritedReading = song.lyrics?.getOrNull(index)?.roma
+                            if (line.roma == inheritedReading) line.copy(roma = null) else line
+                        })
+                        val pronouncedLines = aiOnly.lyrics.orEmpty()
                             .count { !it.roma.isNullOrBlank() }
                         LogManager.i(
                             TAG,
                             "stage=translation_completed lines=$translatedLines pronouncedLines=$pronouncedLines"
                         )
 
-                        val result = json.encodeToString(translated)
+                        val result = json.encodeToString(aiOnly)
                             .toByteArray(Charsets.UTF_8).deflate()
                         if (result.size > MAX_COMPRESSED_BYTES ||
                             serial != generation.get()
                         ) return@launch
-                        receiver.onOnlineTranslationResult(result)
-                        LogManager.i(TAG, "stage=result_sent bytes=${result.size}")
+                        // Deliver to the most recent bound receiver for this song.
+                        val target = synchronized(requestLock) {
+                            if (serial == generation.get() && activeRequestKey == requestKey)
+                                activeReceiver else null
+                        }
+                        target?.onOnlineTranslationResult(result)
+                        if (target != null) LogManager.i(TAG, "stage=result_sent bytes=${result.size}")
                     } catch (cancelled: CancellationException) {
                         LogManager.i(TAG, "stage=request_cancelled_inflight")
                         throw cancelled
                     } catch (error: Exception) {
                         // Never log the lyrics, request body, or private API credentials.
                         LogManager.w(TAG, "stage=translation_failed type=${error.javaClass.simpleName}")
+                    } finally {
+                        synchronized(requestLock) {
+                            if (serial == generation.get() && activeRequestKey == requestKey) {
+                                activeRequestKey = null
+                                activeReceiver = null
+                                requestJob = null
+                            }
+                        }
                     }
                 }
             }
@@ -185,13 +275,18 @@ class AppleMusicAiTranslationService : Service() {
         val provider = runCatching { AiTranslationProvider.valueOf(providerName) }
             .getOrDefault(AiTranslationProvider.OPENAI)
 
+        // Keep all keys inside the Enhanced app process. The patched Apple Music
+        // bridge sees lyrics/results only, never API credentials.
+        val keys = AiApiKeyStore.read(this, prefs)
         return AiTranslationConfigs(
             provider = providerName,
             targetLanguage = prefs.getString(
                 RootConstants.KEY_HOOK_AI_TRANS_TARGET_LANG,
                 RootConstants.DEFAULT_HOOK_AI_TRANS_TARGET_LANG,
             ),
-            apiKey = prefs.getString(RootConstants.KEY_HOOK_AI_TRANS_API_KEY, ""),
+            apiKey = keys.firstOrNull(),
+            apiKeys = keys,
+            groqApiKeys = AiApiKeyStore.readGroqKeys(this),
             model = prefs.getString(
                 RootConstants.KEY_HOOK_AI_TRANS_MODEL,
                 RootConstants.DEFAULT_HOOK_AI_TRANS_MODEL,
@@ -213,6 +308,10 @@ class AppleMusicAiTranslationService : Service() {
             ),
             maxTokens = prefs.getInt(
                 RootConstants.KEY_HOOK_AI_TRANS_MAX_TOKENS, AiTranslationConfigs.DEFAULT_MAX_TOKENS
+            ),
+            webSearchEnabled = prefs.getBoolean(
+                RootConstants.KEY_HOOK_AI_TRANS_WEB_SEARCH,
+                RootConstants.DEFAULT_HOOK_AI_TRANS_WEB_SEARCH,
             ),
         )
     }

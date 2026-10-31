@@ -19,6 +19,7 @@ internal class AppleAppAiTranslationClient(
     context: Context,
     private val isSystemUiBridgeActive: () -> Boolean,
     private val onTranslationReceived: (ByteArray) -> Unit,
+    private val onTranslationCleared: (String) -> Unit,
 ) {
     private companion object {
         const val APP_PACKAGE = "com.juren233.hyperlyricsenhanced"
@@ -32,6 +33,10 @@ internal class AppleAppAiTranslationClient(
     private var binding = false
     private var pending: ByteArray? = null
     private var previous: ByteArray? = null
+
+    // Deleting a song must not cause the still-playing song to be translated
+    // again on the next metadata refresh. A new track re-enables translation.
+    private var suppressedSongId: String? = null
 
     @Volatile
     private var generation = 0L
@@ -67,8 +72,13 @@ internal class AppleAppAiTranslationClient(
     }
 
     /** No network work is performed on Apple Music's UI or Binder threads. */
-    fun submit(compressedSong: ByteArray) {
+    fun submit(compressedSong: ByteArray, songId: String?) {
         mainHandler.post {
+            if (songId != null && songId == suppressedSongId) {
+                ProviderLogger.info("standalone_ai stage=song_suppressed_after_clear")
+                return@post
+            }
+            if (songId != suppressedSongId) suppressedSongId = null
             if (previous?.contentEquals(compressedSong) == true) return@post
             previous = compressedSong.copyOf()
             generation += 1
@@ -87,6 +97,48 @@ internal class AppleAppAiTranslationClient(
             bindIfNeeded()
             dispatchPending()
         }
+    }
+
+    /**
+     * A confirmed, song-scoped deletion. Do not request a new translation
+     * until the next playback publication; stale in-flight replies are ignored.
+     */
+    fun clearSong(compressedSong: ByteArray, expectedSongId: String): Boolean {
+        val target = binder ?: return false
+        if (isSystemUiBridgeActive() || compressedSong.isEmpty()) return false
+        generation += 1
+        val currentGeneration = generation
+        pending = null
+        previous = null
+        suppressedSongId = expectedSongId
+        val callback = object : IAppleMusicTranslationReceiver.Stub() {
+            override fun onOnlineTranslationResult(compressedSong: ByteArray) = Unit
+
+            override fun onOnlineTranslationCleared(songId: String?) {
+                if (songId == expectedSongId && generation == currentGeneration) {
+                    onTranslationCleared(expectedSongId)
+                }
+            }
+
+            override fun onMissingLyricsSupplementCleared(songId: String?) = Unit
+            override fun onMissingLyricsSupplementResult(compressedSong: ByteArray) = Unit
+            override fun onOnlineTranslationSourceSwitchResult(
+                requestId: Long,
+                songId: String?,
+                contentType: String?,
+                requestedSource: String?,
+                actualSource: String?,
+                successful: Boolean,
+            ) = Unit
+        }
+        return runCatching {
+            target.clearSongTranslation(compressedSong.copyOf(), callback)
+            ProviderLogger.info("standalone_ai stage=song_clear_requested")
+            true
+        }.onFailure {
+            suppressedSongId = null
+            ProviderLogger.error("standalone_ai stage=song_clear_ipc_failed", it)
+        }.getOrDefault(false)
     }
 
     private fun bindIfNeeded() {

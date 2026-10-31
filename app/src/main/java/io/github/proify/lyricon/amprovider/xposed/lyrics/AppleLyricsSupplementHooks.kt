@@ -140,6 +140,76 @@ internal class AppleLyricsSupplementHooks(
         get() = runtime.mainHandler
     internal val contentUiLanguagePrefs: SharedPreferences?
         get() = preferences()
+    /** Dedicated host-private store: song IDs and offsets never enter the global hook config. */
+    private val lyricsSongOffsetStore by lazy {
+        val prefs = application.getSharedPreferences(
+            "hyperlyrics_enhanced_song_sync_offsets",
+            android.content.Context.MODE_PRIVATE,
+        )
+        AppleLyricsSongOffsetStore(object : AppleLyricsSongOffsetStore.Preferences {
+            override fun read(key: String): Int = prefs.getInt(key, 0)
+            override fun write(key: String, value: Int?) {
+                prefs.edit().apply {
+                    if (value == null) remove(key) else putInt(key, value)
+                }.apply()
+            }
+        })
+    }
+
+    /** User corrections are persisted separately from provider/AI caches and Android backup. */
+    internal val lyricsLineCorrections by lazy {
+        AppleLyricsLineCorrectionStore(AppleLyricsLineCorrectionFileStorage(application))
+    }
+
+    internal fun hasUserTranslationCorrection(songId: String?): Boolean =
+        lyricsLineCorrections.hasAny(songId, AppleLyricsLineCorrectionStore.Field.TRANSLATION)
+
+    internal fun hasUserPronunciationCorrection(songId: String?): Boolean =
+        lyricsLineCorrections.hasAny(songId, AppleLyricsLineCorrectionStore.Field.PRONUNCIATION)
+
+    /** Reject late editor callbacks after a track switch; refresh only the matching song. */
+    internal fun changeUserLineCorrection(
+        songId: String?,
+        begin: Long,
+        end: Long,
+        sourceText: String?,
+        field: AppleLyricsLineCorrectionStore.Field,
+        value: String?,
+    ): Boolean {
+        if (songId.isNullOrBlank() || currentAppleLyricsSongId != songId) return false
+        val changed = lyricsLineCorrections.update(songId, begin, end, sourceText, field, value)
+        if (changed) refreshAppleLyricsSupplementPresentation(expectedSongId = songId)
+        return changed
+    }
+
+    internal fun saveUserLineTranslationAndPronunciation(
+        line: AppleLyricsEditableLine,
+        translation: String?,
+        pronunciation: String?,
+    ): Boolean {
+        if (line.songId != currentAppleLyricsSongId) return false
+        val key = line.line
+        val before = lyricsLineCorrections.correction(line.songId, key.begin, key.end, key.text)
+        val saved = lyricsLineCorrections.replaceTranslationAndPronunciation(
+            line.songId, key.begin, key.end, key.text, translation, pronunciation,
+        )
+        if (saved && before != lyricsLineCorrections.correction(
+                line.songId, key.begin, key.end, key.text,
+            )
+        ) refreshAppleLyricsSupplementPresentation(expectedSongId = line.songId)
+        return saved
+    }
+
+    internal fun lyricSyncOffsetForSong(songId: String?): Int = lyricsSongOffsetStore.get(songId)
+
+    internal fun changeLyricSyncOffset(songId: String?, deltaMs: Int): Int? {
+        if (songId.isNullOrBlank() || currentAppleLyricsSongId != songId) return null
+        val next = AppleLyricsSyncOffset.nextOffsetMs(lyricsSongOffsetStore.get(songId), deltaMs)
+        if (!lyricsSongOffsetStore.set(songId, next)) return null
+        activeLineUpdateController.stop()
+        updateSupplementActiveLine()
+        return next
+    }
     internal val coroutineScope by lazy { CoroutineScope(Dispatchers.Default + SupervisorJob()) }
 
     /** 方法发现与安装去重；各 Hook 家族独立，互不共享第一次安装判定。 */
@@ -304,6 +374,59 @@ internal class AppleLyricsSupplementHooks(
             RootConstants.DEFAULT_HOOK_APPLE_MUSIC_SIMPLIFY_TRADITIONAL_CONTENT,
         ) == true
 
+    /** Read from the existing configuration bridge; unknown values safely use Hangul-first. */
+    internal fun pronunciationSourcePriority(): Int =
+        contentUiLanguagePrefs?.getInt(
+            RootConstants.KEY_HOOK_APPLE_MUSIC_PRONUNCIATION_SOURCE_PRIORITY,
+            RootConstants.DEFAULT_HOOK_APPLE_MUSIC_PRONUNCIATION_SOURCE_PRIORITY,
+        ) ?: RootConstants.DEFAULT_HOOK_APPLE_MUSIC_PRONUNCIATION_SOURCE_PRIORITY
+
+    /** Apple Latin romanization is independent from the AI/online Hangul channel. */
+    internal fun showNativeApplePronunciation(): Boolean =
+        contentUiLanguagePrefs?.getBoolean(
+            RootConstants.KEY_HOOK_APPLE_MUSIC_SHOW_NATIVE_PRONUNCIATION,
+            RootConstants.DEFAULT_HOOK_APPLE_MUSIC_SHOW_NATIVE_PRONUNCIATION,
+        ) ?: RootConstants.DEFAULT_HOOK_APPLE_MUSIC_SHOW_NATIVE_PRONUNCIATION
+
+    internal fun showHangulSupplementPronunciation(): Boolean =
+        contentUiLanguagePrefs?.getBoolean(
+            RootConstants.KEY_HOOK_APPLE_MUSIC_SHOW_HANGUL_PRONUNCIATION,
+            RootConstants.DEFAULT_HOOK_APPLE_MUSIC_SHOW_HANGUL_PRONUNCIATION,
+        ) ?: RootConstants.DEFAULT_HOOK_APPLE_MUSIC_SHOW_HANGUL_PRONUNCIATION
+
+    internal fun koreanTranslationTargetSelected(): Boolean {
+        val target = contentUiLanguagePrefs?.getString(
+            RootConstants.KEY_HOOK_AI_TRANS_TARGET_LANG, "한국어",
+        )?.trim()?.lowercase().orEmpty()
+        return target in setOf("한국어", "한국말", "korean", "ko", "ko-kr")
+    }
+
+    /** Requested row visibility; three-line is opt-in and host defaults are untouched. */
+    internal fun appleLyricsDisplayMode(): Int =
+        contentUiLanguagePrefs?.getInt(
+            RootConstants.KEY_HOOK_APPLE_MUSIC_LYRICS_DISPLAY_MODE,
+            RootConstants.DEFAULT_HOOK_APPLE_MUSIC_LYRICS_DISPLAY_MODE,
+        ) ?: RootConstants.DEFAULT_HOOK_APPLE_MUSIC_LYRICS_DISPLAY_MODE
+
+    internal fun requestedAppleLyricsRowVisibility(): AppleLyricsVisibilityPolicy.Result {
+        val prefs = contentUiLanguagePrefs
+        return AppleLyricsVisibilityPolicy.resolve(
+            appleTranslation = PreferencesMonitor.isTranslationSelected(),
+            applePronunciation = PreferencesMonitor.isPronunciationSelected(),
+            mode = appleLyricsDisplayMode(),
+            translationOverride = prefs?.getInt(
+                RootConstants.KEY_HOOK_APPLE_MUSIC_TRANSLATION_DISPLAY_OVERRIDE,
+                RootConstants.DEFAULT_HOOK_APPLE_MUSIC_LYRICS_DISPLAY_OVERRIDE,
+            ) ?: RootConstants.DEFAULT_HOOK_APPLE_MUSIC_LYRICS_DISPLAY_OVERRIDE,
+            pronunciationOverride = prefs?.getInt(
+                RootConstants.KEY_HOOK_APPLE_MUSIC_PRONUNCIATION_DISPLAY_OVERRIDE,
+                RootConstants.DEFAULT_HOOK_APPLE_MUSIC_LYRICS_DISPLAY_OVERRIDE,
+            ) ?: RootConstants.DEFAULT_HOOK_APPLE_MUSIC_LYRICS_DISPLAY_OVERRIDE,
+            translationMenuSelection = PreferencesMonitor.latestTranslationToggleEvent(),
+            pronunciationMenuSelection = PreferencesMonitor.latestPronunciationToggleEvent(),
+        )
+    }
+
     private val translationPreferenceHitLogged = AtomicBoolean(false)
     private val pronunciationPreferenceHitLogged = AtomicBoolean(false)
 
@@ -344,6 +467,11 @@ internal class AppleLyricsSupplementHooks(
                     }
                     if (pronunciation) PreferencesMonitor.notifyPronunciationSelectedChanged(selected)
                     else PreferencesMonitor.notifyTranslationSelectedChanged(selected)
+                    // Apple's menu can update its saved preference before the
+                    // karaoke adapter sees the new flag. Force a full row bind
+                    // with the effective visibility so Hide takes effect now.
+                    clearPendingApplePronunciationRenderPlans()
+                    refreshAppleLyricsSupplementPresentation(syncDisplayFlags = true)
                 }
             })
             ProviderLogger.debug("Apple Music 歌词${label}偏好 Hook 已安装")
@@ -590,7 +718,9 @@ internal class AppleLyricsSupplementHooks(
             val adapter = appleRecyclerAdapter(recyclerView) ?: return
             val itemCount = appleRecyclerAdapterItemCount(adapter)
             if (itemCount <= 0) return
-            if (syncDisplayFlags) {
+            if (syncDisplayFlags ||
+                appleLyricsDisplayMode() != RootConstants.APPLE_MUSIC_LYRICS_MODE_APPLE
+            ) {
                 syncAppleLyricsAdapterDisplayFlags(adapter)
                 invalidateAppleLyricsVisibleHolderTextCaches(recyclerView)
             }
@@ -631,16 +761,17 @@ internal class AppleLyricsSupplementHooks(
      * 本轮重绑若继续按旧开关执行，adapter 会整段跳过翻译/发音子行的渲染。
      */
     internal fun syncAppleLyricsAdapterDisplayFlags(adapter: Any) {
+        val requested = requestedAppleLyricsRowVisibility()
         syncAppleLyricsAdapterBooleanFlag(
             adapter = adapter,
             member = AppleMusicRuntimeMember.LYRICS_ADAPTER_TRANSLATION_SELECTED_FIELD,
-            selected = PreferencesMonitor.isTranslationSelected(),
+            selected = requested.translation,
             label = "translation",
         )
         syncAppleLyricsAdapterBooleanFlag(
             adapter = adapter,
             member = AppleMusicRuntimeMember.LYRICS_ADAPTER_PRONUNCIATION_SELECTED_FIELD,
-            selected = PreferencesMonitor.isPronunciationSelected(),
+            selected = requested.pronunciation,
             label = "pronunciation",
         )
     }

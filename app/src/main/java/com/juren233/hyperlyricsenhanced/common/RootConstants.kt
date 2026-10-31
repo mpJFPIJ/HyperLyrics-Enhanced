@@ -323,6 +323,21 @@ object RootConstants {
         "key_hook_apple_music_hide_mandarin_pinyin"
     const val KEY_HOOK_APPLE_MUSIC_LUNABEAT_WORD_LYRICS =
         "key_hook_apple_music_lunabeat_word_lyrics"
+    /** Song pronunciation overlay policy; the original Apple preference stays authoritative for visibility. */
+    const val KEY_HOOK_APPLE_MUSIC_PRONUNCIATION_SOURCE_PRIORITY =
+        "key_hook_apple_music_pronunciation_source_priority"
+    /** Applies to the host lyric rows; never rewrites Apple preference storage. */
+    const val KEY_HOOK_APPLE_MUSIC_LYRICS_DISPLAY_MODE =
+        "key_hook_apple_music_lyrics_display_mode"
+    const val KEY_HOOK_APPLE_MUSIC_TRANSLATION_DISPLAY_OVERRIDE =
+        "key_hook_apple_music_translation_display_override"
+    const val KEY_HOOK_APPLE_MUSIC_PRONUNCIATION_DISPLAY_OVERRIDE =
+        "key_hook_apple_music_pronunciation_display_override"
+    /** Keep native Apple romanization separate from the Hangul overlay channel. */
+    const val KEY_HOOK_APPLE_MUSIC_SHOW_NATIVE_PRONUNCIATION =
+        "key_hook_apple_music_show_native_pronunciation"
+    const val KEY_HOOK_APPLE_MUSIC_SHOW_HANGUL_PRONUNCIATION =
+        "key_hook_apple_music_show_hangul_pronunciation"
     const val KEY_HOOK_APPLE_MUSIC_LYRICS_BLUR_EFFECT =
         "key_hook_apple_music_lyrics_blur_effect"
     const val KEY_HOOK_APPLE_MUSIC_LYRICS_BLUR_ANIMATION =
@@ -343,8 +358,11 @@ object RootConstants {
     const val KEY_HOOK_AI_TRANS_AUTO_IGNORE_CHINESE = "key_hook_ai_trans_auto_ignore_chinese"
     const val KEY_HOOK_AI_TRANS_SKIP_EXISTING_TRANSLATION = "key_hook_ai_trans_skip_existing_translation"
     const val KEY_HOOK_AI_TRANS_FORCE_OVERRIDE = "key_hook_ai_trans_force_override"
+    const val KEY_HOOK_AI_TRANS_WEB_SEARCH = "key_hook_ai_trans_web_search"
     const val KEY_HOOK_AI_TRANS_PROVIDER = "key_hook_ai_trans_provider"
     const val KEY_HOOK_AI_TRANS_API_KEY = "key_hook_ai_trans_api_key"
+    /** Local-only multi-key pool. Never synced to the Apple Music/NPatch process. */
+    const val KEY_HOOK_AI_TRANS_API_KEYS = "key_hook_ai_trans_api_keys"
     const val KEY_HOOK_AI_TRANS_MODEL = "key_hook_ai_trans_model"
     const val KEY_HOOK_AI_TRANS_BASE_URL = "key_hook_ai_trans_base_url"
     const val KEY_HOOK_AI_TRANS_TARGET_LANG = "key_hook_ai_trans_target_lang"
@@ -381,6 +399,24 @@ object RootConstants {
     const val DEFAULT_HOOK_APPLE_MUSIC_FILL_MISSING_LYRICS = false
     const val DEFAULT_HOOK_APPLE_MUSIC_HIDE_MANDARIN_PINYIN = false
     const val DEFAULT_HOOK_APPLE_MUSIC_LUNABEAT_WORD_LYRICS = false
+    const val APPLE_MUSIC_PRONUNCIATION_HANGUL_FIRST = 0
+    const val APPLE_MUSIC_PRONUNCIATION_APPLE_FIRST = 1
+    const val APPLE_MUSIC_PRONUNCIATION_SUPPLEMENT_FIRST = 2
+    const val DEFAULT_HOOK_APPLE_MUSIC_PRONUNCIATION_SOURCE_PRIORITY =
+        APPLE_MUSIC_PRONUNCIATION_HANGUL_FIRST
+    // Default preserves the installed behavior for existing users.
+    const val DEFAULT_HOOK_APPLE_MUSIC_SHOW_NATIVE_PRONUNCIATION = true
+    const val DEFAULT_HOOK_APPLE_MUSIC_SHOW_HANGUL_PRONUNCIATION = true
+    const val APPLE_MUSIC_LYRICS_MODE_APPLE = 0
+    const val APPLE_MUSIC_LYRICS_MODE_THREE_LINE = 1
+    const val APPLE_MUSIC_LYRICS_MODE_CUSTOM = 2
+    const val DEFAULT_HOOK_APPLE_MUSIC_LYRICS_DISPLAY_MODE =
+        APPLE_MUSIC_LYRICS_MODE_APPLE
+    const val APPLE_MUSIC_LYRICS_DISPLAY_FOLLOW_APPLE = 0
+    const val APPLE_MUSIC_LYRICS_DISPLAY_SHOW = 1
+    const val APPLE_MUSIC_LYRICS_DISPLAY_HIDE = 2
+    const val DEFAULT_HOOK_APPLE_MUSIC_LYRICS_DISPLAY_OVERRIDE =
+        APPLE_MUSIC_LYRICS_DISPLAY_FOLLOW_APPLE
     const val APPLE_MUSIC_LYRICS_BLUR_EFFECT_OFF = 0
     const val APPLE_MUSIC_LYRICS_BLUR_EFFECT_NATIVE = 1
     const val APPLE_MUSIC_LYRICS_BLUR_EFFECT_ADVANCED_MATERIAL = 2
@@ -675,6 +711,7 @@ object RootConstants {
     const val DEFAULT_HOOK_AI_TRANS_AUTO_IGNORE_CHINESE = false
     const val DEFAULT_HOOK_AI_TRANS_SKIP_EXISTING_TRANSLATION = false
     const val DEFAULT_HOOK_AI_TRANS_FORCE_OVERRIDE = false
+    const val DEFAULT_HOOK_AI_TRANS_WEB_SEARCH = false
     const val DEFAULT_HOOK_AI_TRANS_TARGET_LANG = "中文"
     const val DEFAULT_HOOK_AI_TRANS_MODEL = "mimo-v2-flash"
     const val DEFAULT_HOOK_AI_TRANS_BASE_URL = "https://api.xiaomimimo.com/v1/"

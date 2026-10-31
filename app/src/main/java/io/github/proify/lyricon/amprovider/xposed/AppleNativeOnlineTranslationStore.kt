@@ -34,6 +34,7 @@ internal class AppleNativeOnlineTranslationStore {
         val translationsByTiming: Map<TimingKey, List<Entry>>,
         val hasTranslation: Boolean,
         val hasPronunciation: Boolean,
+        val hasHangulPronunciation: Boolean,
         val translationSource: String?,
         val pronunciationSource: String?,
         val translationMatchStats: Map<String, OnlineTranslationMatchStat>,
@@ -42,6 +43,14 @@ internal class AppleNativeOnlineTranslationStore {
 
     @Volatile
     private var overlay: Overlay? = null
+
+    /**
+     * A genuine standalone-AI callback is tracked separately from immediately
+     * available third-party phonetics. A later provider refresh must not
+     * overwrite the completed AI reading or Korean translation.
+     */
+    @Volatile
+    private var aiOverlay: Overlay? = null
 
     @Volatile
     private var contentRevision = 0L
@@ -63,6 +72,10 @@ internal class AppleNativeOnlineTranslationStore {
     @Synchronized
     fun receive(song: Song, preserveExistingPronunciation: Boolean = false): Receipt {
         val candidate = buildOverlay(song)
+        if (candidate != null) {
+            if (aiOverlay?.songId != candidate.songId) aiOverlay = null
+            if (preserveExistingPronunciation) aiOverlay = candidate
+        }
         val next = if (preserveExistingPronunciation && candidate != null &&
             overlay?.songId == candidate.songId
         ) {
@@ -108,6 +121,9 @@ internal class AppleNativeOnlineTranslationStore {
                 valueTransform = { Entry(it.key.text, it.value) },
             ),
             hasPronunciation = hasPronunciation,
+            hasHangulPronunciation = merged.values.any {
+                RomanizationPolicy.isHangulPronunciation(it.pronunciation)
+            },
             pronunciationSource = next.pronunciationSource
                 ?: previous.pronunciationSource.takeIf { hasPronunciation },
             pronunciationMatchStats = if (next.pronunciationMatchStats.isEmpty() && hasPronunciation) {
@@ -139,6 +155,9 @@ internal class AppleNativeOnlineTranslationStore {
             ),
             hasTranslation = entries.any { it.second.translation != null },
             hasPronunciation = entries.any { it.second.pronunciation != null },
+            hasHangulPronunciation = entries.any {
+                RomanizationPolicy.isHangulPronunciation(it.second.pronunciation)
+            },
             translationSource = song.metadata
                 ?.getString(LyricMetadataKeys.ONLINE_TRANSLATION_SOURCE),
             pronunciationSource = song.metadata
@@ -157,6 +176,7 @@ internal class AppleNativeOnlineTranslationStore {
         val current = overlay ?: return false
         if (!songId.isNullOrBlank() && current.songId != songId) return false
         overlay = null
+        aiOverlay = null
         contentRevision += 1
         return true
     }
@@ -169,6 +189,29 @@ internal class AppleNativeOnlineTranslationStore {
             !songId.isNullOrBlank() &&
             overlay?.songId == songId
 
+    fun hasAiTranslation(songId: String?): Boolean =
+        !songId.isNullOrBlank() &&
+            aiOverlay?.let { it.songId == songId && it.hasTranslation } == true
+
+    fun hasAiHangulPronunciation(songId: String?): Boolean =
+        !songId.isNullOrBlank() &&
+            aiOverlay?.let { it.songId == songId && it.hasHangulPronunciation } == true
+
+    fun aiTranslation(
+        songId: String?,
+        begin: Long,
+        end: Long,
+        text: String?,
+    ): String? = content(songId, begin, end, text, aiOverlay)?.translation
+
+    fun aiHangulPronunciation(
+        songId: String?,
+        begin: Long,
+        end: Long,
+        text: String?,
+    ): String? = content(songId, begin, end, text, aiOverlay)
+        ?.pronunciation?.takeIf(RomanizationPolicy::isHangulPronunciation)
+
     fun hasTranslation(songId: String?): Boolean =
         !songId.isNullOrBlank() &&
             overlay?.let { it.songId == songId && it.hasTranslation } == true
@@ -176,6 +219,10 @@ internal class AppleNativeOnlineTranslationStore {
     fun hasPronunciation(songId: String?): Boolean =
         !songId.isNullOrBlank() &&
             overlay?.let { it.songId == songId && it.hasPronunciation } == true
+
+    fun hasHangulPronunciation(songId: String?): Boolean =
+        !songId.isNullOrBlank() &&
+            overlay?.let { it.songId == songId && it.hasHangulPronunciation } == true
 
     fun translationSource(songId: String?): String? =
         overlay?.takeIf { it.songId == songId && it.hasTranslation }?.translationSource
@@ -216,8 +263,9 @@ internal class AppleNativeOnlineTranslationStore {
         begin: Long,
         end: Long,
         text: String?,
+        current: Overlay? = overlay,
     ): Content? {
-        val current = overlay ?: return null
+        current ?: return null
         if (songId.isNullOrBlank() || current.songId != songId) return null
 
         val timing = TimingKey(begin, end)

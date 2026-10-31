@@ -869,4 +869,19 @@
     <string name="island_touch_forward_value">Seek forward %1$d s</string>
     <string name="island_touch_backward_value">Seek backward %1$d s</string>
     <string name="island_touch_seconds_range">1–300 seconds</string>
+    <string name="title_apple_music_pronunciation_priority">Pronunciation source priority</string>
+    <string name="summary_apple_music_pronunciation_priority">Reopen Apple Music lyrics to apply. Uses only available pronunciations.</string>
+    <string name="option_apple_music_pronunciation_hangul_first">Korean phonetics first (current behavior)</string>
+    <string name="option_apple_music_pronunciation_apple_first">Apple native first</string>
+    <string name="option_apple_music_pronunciation_supplement_first">Online / AI supplement first</string>
+    <string name="title_apple_music_lyrics_display_mode">Lyric layout</string>
+    <string name="summary_apple_music_lyrics_display_mode">Three-line mode needs original text, translation and pronunciation data. Native lyric timing is preserved.</string>
+    <string name="option_apple_music_lyrics_mode_apple">Apple Music default</string>
+    <string name="option_apple_music_lyrics_mode_three_line">Three-line display (experimental)</string>
+    <string name="option_apple_music_lyrics_mode_custom">Independent controls</string>
+    <string name="title_apple_music_translation_visibility">Translation row</string>
+    <string name="title_apple_music_pronunciation_visibility">Pronunciation row</string>
+    <string name="option_apple_music_lyrics_visibility_apple">Follow Apple preference</string>
+    <string name="option_apple_music_lyrics_visibility_show">Show when available</string>
+    <string name="option_apple_music_lyrics_visibility_hide">Hide</string>
 </resources>

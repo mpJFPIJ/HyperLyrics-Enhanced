@@ -467,6 +467,11 @@ internal class AppleLyricsSupplementHooks(
                     }
                     if (pronunciation) PreferencesMonitor.notifyPronunciationSelectedChanged(selected)
                     else PreferencesMonitor.notifyTranslationSelectedChanged(selected)
+                    // Apple's menu can update its saved preference before the
+                    // karaoke adapter sees the new flag. Force a full row bind
+                    // with the effective visibility so Hide takes effect now.
+                    clearPendingApplePronunciationRenderPlans()
+                    refreshAppleLyricsSupplementPresentation(syncDisplayFlags = true)
                 }
             })
             ProviderLogger.debug("Apple Music 歌词${label}偏好 Hook 已安装")

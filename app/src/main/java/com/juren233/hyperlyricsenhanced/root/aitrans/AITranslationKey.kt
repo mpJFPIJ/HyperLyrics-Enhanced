@@ -15,7 +15,7 @@ internal object AITranslationKey {
                 if (GroqApiKeyPool.configured(configs).isEmpty()) "web-reference=free-2.5flash-v2"
                 else "web-reference=groq-gpt-oss-120b-v3"
             )
-            if (GroqApiKeyPool.configured(configs).isNotEmpty()) appendLine("fallback=qwen3.8-27b-v1")
+            if (GroqApiKeyPool.configured(configs).isNotEmpty()) appendLine("fallback=gpt-oss-120b-then-qwen-v2")
             append("title=").appendLine(song.name.orEmpty())
             append("artist=").appendLine(song.artist.orEmpty())
             lines.forEachIndexed { index, line ->

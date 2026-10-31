@@ -132,8 +132,22 @@ internal object OpenAiTranslationClient {
                     }
                     HookLogger.d("OpenAiTranslationClient", "翻译请求完成: code=$responseCode")
                     val parsed = AITranslationResponseParser.parse(content, requestIndices)
-                    return@withContext parsed.takeUnless { it.isNullOrEmpty() }
-                        ?: fallback("empty_response")
+                    if (!KoreanLyricOutputPolicy.accepts(
+                            parsed, requestIndices, configs.targetLanguage,
+                        )
+                    ) {
+                        LogManager.w(
+                            "AppleMusicAiService",
+                            "stage=gemini_quality_rejected translated=" +
+                                parsed.count { it.trans.isNotBlank() },
+                        )
+                        return@withContext fallback("quality_invalid")
+                    }
+                    return@withContext if (isGoogleGemini) {
+                        GroqMultiModelClient.enrichMissingPronunciation(
+                            configs, song, payload, parsed,
+                        )
+                    } else parsed
                 }
 
                 // Never log or persist a provider error body. It may echo private lyrics.

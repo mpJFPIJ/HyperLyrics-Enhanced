@@ -14,6 +14,8 @@ class GroqMultiModelClientTest {
     }
     @Test fun fallbackOnlyForRecoverableErrors() {
         assertTrue(GroqMultiModelClient.isFallbackError("http_503"))
+        assertTrue(GroqMultiModelClient.isFallbackError("quality_invalid"))
+        assertEquals("openai/gpt-oss-120b", GroqMultiModelClient.FALLBACK_MODEL)
         assertTrue(GroqMultiModelClient.isFallbackError("http_429"))
         assertFalse(GroqMultiModelClient.isFallbackError("http_401"))
         assertFalse(GroqMultiModelClient.isFallbackError("http_404"))

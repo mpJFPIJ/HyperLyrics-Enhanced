@@ -233,10 +233,11 @@ internal fun AppleLyricsSupplementHooks.ensureAppleNativeOnlineTranslationHooks(
                 return@installResultOverrideHook original
             }
             val songId = nativeSongId(chain.thisObject)
-            if (!requestedAppleLyricsRowVisibility().translation) {
-                return@installResultOverrideHook false
-            }
-            val resolved = original == true || hasOnlineContent(songId)
+            // Availability describes the presence of a track, not whether it
+            // is currently hidden. Returning false here removes Apple's Show
+            // Translation menu entry and prevents restoring a hidden row.
+            val resolved = original == true || hasOnlineContent(songId) ||
+                nativeOnlineTranslationStore.hasAiTranslation(songId)
             if (BuildConfig.DEBUG) {
                 logTranslationAvailabilityOverride(
                     method = name,
@@ -275,9 +276,8 @@ internal fun AppleLyricsSupplementHooks.ensureAppleNativeOnlineTranslationHooks(
 
         hookRegistrar.installResultOverrideHook(method) { chain, original ->
             val songId = nativeSongId(chain.thisObject)
-            if (!requestedAppleLyricsRowVisibility().pronunciation) {
-                return@installResultOverrideHook false
-            }
+            // Never disguise Hide as missing data: Apple's restore control
+            // still needs the underlying pronunciation availability.
             val requestedLanguage = chain.args.firstOrNull() as? String
             if (
                 shouldHideMandarinPronunciation(
@@ -289,8 +289,14 @@ internal fun AppleLyricsSupplementHooks.ensureAppleNativeOnlineTranslationHooks(
             }
             val hasOnlineRomanization = showHangulSupplementPronunciation() &&
                 (hasUserPronunciationCorrection(songId) ||
-                    (isNativeOnlineTranslationEnabled() &&
-                        nativeOnlineTranslationStore.hasHangulPronunciation(songId)))
+                    (isNativeOnlineTranslationEnabled() && if (
+                        pronunciationSourcePriority() ==
+                            RootConstants.APPLE_MUSIC_PRONUNCIATION_HANGUL_FIRST
+                    ) {
+                        nativeOnlineTranslationStore.hasAiHangulPronunciation(songId)
+                    } else {
+                        nativeOnlineTranslationStore.hasHangulPronunciation(songId)
+                    }))
             val resolved = hasOnlineRomanization ||
                 (showNativeApplePronunciation() &&
                     original == true && hasValidOfficialRomanization(chain.thisObject))

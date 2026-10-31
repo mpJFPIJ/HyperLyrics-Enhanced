@@ -177,14 +177,23 @@ class AppleMusicAiTranslationService : Service() {
                             LogManager.w(TAG, "stage=no_translation_result")
                             return@launch
                         }
-                        val pronouncedLines = translated.lyrics.orEmpty()
+                        // The AI applicator can retain an incoming third-party
+                        // reading. That is not AI output, so do not tag it as
+                        // such in the standalone callback. The receiver keeps
+                        // any provider reading separately for explicit source
+                        // selection, while AI-first displays only fresh Hangul.
+                        val aiOnly = translated.copy(lyrics = translated.lyrics?.mapIndexed { index, line ->
+                            val inheritedReading = song.lyrics?.getOrNull(index)?.roma
+                            if (line.roma == inheritedReading) line.copy(roma = null) else line
+                        })
+                        val pronouncedLines = aiOnly.lyrics.orEmpty()
                             .count { !it.roma.isNullOrBlank() }
                         LogManager.i(
                             TAG,
                             "stage=translation_completed lines=$translatedLines pronouncedLines=$pronouncedLines"
                         )
 
-                        val result = json.encodeToString(translated)
+                        val result = json.encodeToString(aiOnly)
                             .toByteArray(Charsets.UTF_8).deflate()
                         if (result.size > MAX_COMPRESSED_BYTES ||
                             serial != generation.get()

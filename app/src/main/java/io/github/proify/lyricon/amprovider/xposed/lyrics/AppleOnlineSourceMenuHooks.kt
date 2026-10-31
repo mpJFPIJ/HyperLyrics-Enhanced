@@ -373,17 +373,13 @@ internal class AppleOnlineSourceMenuHooks(
                 0,
             )
         }
-        if (
-            pronunciationPresentation != null &&
-            pronunciationSelected &&
-            !pronunciationHidden
-        ) {
+        if (pronunciationPresentation != null && !pronunciationHidden) {
             menu.addView(
                 createMenuItem(menu, songId, "pronunciation", pronunciationPresentation),
                 if (hasLyricsSupplement) 2 else 1,
             )
         }
-        if (translationPresentation != null && translationSelected) {
+        if (translationPresentation != null) {
             menu.addView(createMenuItem(menu, songId, "translation", translationPresentation))
         }
         // Apple-native songs do not necessarily expose the supplemental lyrics

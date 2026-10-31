@@ -130,6 +130,13 @@ internal fun AppleLyricsSupplementHooks.onlineTranslationForNativeLine(line: Any
         lyricsNativeCall(line, AppleMusicRuntimeMember.LYRICS_NATIVE_LINE_TEXT_METHOD) as? String
     }
     val songId = currentAppleLyricsSongId
+    val aiTranslation = nativeOnlineTranslationStore.aiTranslation(
+        songId = songId, begin = begin, end = end, text = text,
+    )
+    if (koreanTranslationTargetSelected() &&
+        aiTranslation != null &&
+        KoreanLyricsDisplayPolicy.isKoreanDisplayLine(aiTranslation)
+    ) return aiTranslation
     return nativeOnlineTranslationStore.translation(
         songId = songId,
         begin = begin,
@@ -145,7 +152,10 @@ internal fun AppleLyricsSupplementHooks.onlineTranslationForNativeLine(line: Any
 
 internal fun AppleLyricsSupplementHooks.hasAnyOnlineTranslation(songId: String?): Boolean =
     hasUserTranslationCorrection(songId) ||
-        (isNativeOnlineTranslationEnabled() && nativeOnlineTranslationStore.hasTranslation(songId)) ||
+        (isNativeOnlineTranslationEnabled() && (
+            nativeOnlineTranslationStore.hasTranslation(songId) ||
+                nativeOnlineTranslationStore.hasAiTranslation(songId)
+        )) ||
         missingLyricsSupplement().hasTranslation(songId)
 // 注意：这里刻意不计入 hasLunaBeatSource。LB 来源的歌曲靠
 // ensureMissingLyricsTranslationButtonVisible（hasSupplementContent）强制保留
@@ -167,14 +177,23 @@ internal fun AppleLyricsSupplementHooks.onlinePronunciationForNativeLine(line: A
         lyricsNativeCall(line, AppleMusicRuntimeMember.LYRICS_NATIVE_LINE_TEXT_METHOD)
             as? String
     }
+    val reading = if (
+        pronunciationSourcePriority() ==
+        com.juren233.hyperlyricsenhanced.common.RootConstants.APPLE_MUSIC_PRONUNCIATION_HANGUL_FIRST
+    ) {
+        // Suppress quick, often inaccurate provider Hangul before Gemini/Groq
+        // finishes. Other source priorities keep the user's legacy choices.
+        nativeOnlineTranslationStore.aiHangulPronunciation(
+            songId = currentAppleLyricsSongId, begin = begin, end = end, text = text,
+        )
+    } else {
+        nativeOnlineTranslationStore.pronunciation(
+            songId = currentAppleLyricsSongId, begin = begin, end = end, text = text,
+        )
+    }
     return RomanizationPolicy.sanitizeSupplement(
         originalText = text,
-        pronunciation = nativeOnlineTranslationStore.pronunciation(
-            songId = currentAppleLyricsSongId,
-            begin = begin,
-            end = end,
-            text = text,
-        ).takeIf { isNativeOnlineTranslationEnabled() },
+        pronunciation = reading.takeIf { isNativeOnlineTranslationEnabled() },
     )
 }
 

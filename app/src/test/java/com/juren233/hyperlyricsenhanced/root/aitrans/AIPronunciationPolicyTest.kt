@@ -34,7 +34,7 @@ class AIPronunciationPolicyTest {
             RichLyricLine(text = "こんにちは", roma = "콘니치와"),
             RichLyricLine(text = "ありがとう", roma = "아리가토"),
         ))
-        assertFalse(AIPronunciationPolicy.shouldEnrich(hangul))
+        assertTrue(AIPronunciationPolicy.shouldEnrich(hangul))
     }
 
     @Test fun pronunciationCacheDoesNotDestroyLegacyTranslationKey() {

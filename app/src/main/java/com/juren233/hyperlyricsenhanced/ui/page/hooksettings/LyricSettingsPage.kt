@@ -530,5 +530,20 @@ fun LyricSettingsPage() {
                 }
             }
         }
+        item(key = "ai_cache_management") {
+            Card(
+                modifier = Modifier.padding(horizontal = 12.dp)
+                    .padding(bottom = 12.dp).fillMaxWidth()
+            ) {
+                ArrowPreference(
+                    title = if (koreanLocale) "곡별 AI 번역 관리"
+                        else "Manage saved AI translations",
+                    summary = if (koreanLocale)
+                        "HyperLyrics 앱에서 저장된 곡의 번역·한글 발음 캐시를 개별 삭제합니다."
+                    else "Review saved songs and delete each song's translation and phonetics cache.",
+                    onClick = { navigator.navigate(Route.AiTranslationCache) },
+                )
+            }
+        }
     }
 }

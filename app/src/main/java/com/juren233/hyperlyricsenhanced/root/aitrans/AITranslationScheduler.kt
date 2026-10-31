@@ -160,7 +160,7 @@ internal class AITranslationScheduler(
             if (!apiResults.isNullOrEmpty() && job.generation == generation.get()) {
                 HookLogger.d(TAG, "翻译任务完成: song=${job.songName}, cached=true")
                 cache.putMemory(job.key, apiResults)
-                cache.saveToDb(job.key, apiResults)
+                cache.saveToDb(job.key, apiResults, job.song, job.originalLines)
             }
             job.state = TranslationJobState.COMPLETED
             job.deferred.complete(apiResults)

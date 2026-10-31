@@ -383,9 +383,7 @@ internal class AppleOnlineSourceMenuHooks(
         if (translationPresentation != null) {
             menu.addView(createMenuItem(menu, songId, "translation", translationPresentation))
         }
-        // This action stays available even after the visible overlay was
-        // cleared, because the song's cached translation may still exist.
-        menu.addView(createCurrentSongTranslationClearItem(popup, menu, songId))
+        // Per-song AI cache deletion now belongs to HyperLyrics's settings app.
         // Apple-native songs do not necessarily expose the supplemental lyrics
         // source dialog, so the line editor must also be reachable from the
         // existing native lyrics actions menu itself.

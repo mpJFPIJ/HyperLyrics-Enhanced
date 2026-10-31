@@ -93,6 +93,17 @@ object AITranslator {
         return cache.removeKeys(keys)
     }
 
+    /** The HyperLyrics settings app uses its own cache, not Apple Music's UI. */
+    suspend fun listCachedSongs(): List<AiCachedSong> = cache.listSavedSongs()
+
+    suspend fun deleteCachedSong(groupId: String): Boolean {
+        val keys = cache.keysForGroup(groupId)
+        if (keys.isEmpty()) return false
+        scheduler.cancelKeys(keys)
+        keys.forEach(phoneticsRepairAttemptAt::remove)
+        return cache.removeKeys(keys)
+    }
+
     fun clearCache(callback: () -> Unit) {
         HookLogger.d("AITranslator", "清理记录：正在清空所有本地翻译记录（内存+数据库）")
         scheduler.cancelPending()
@@ -129,6 +140,7 @@ object AITranslator {
         } else null
 
         cache.getFromMemory(songContentId)?.let {
+            cache.attachSongMetadata(songContentId, song, originalLines)
             HookLogger.d("AITranslator", "缓存命中：从内存加载了 ${song.name} 的翻译")
             val restored = maybeRepairCachedPhonetics(
                 songContentId, configs, song, originalLines, includePronunciation, it,
@@ -139,6 +151,7 @@ object AITranslator {
         }
 
         cache.getFromDb(songContentId)?.let {
+            cache.attachSongMetadata(songContentId, song, originalLines)
             HookLogger.d("AITranslator", "记录命中：从本地存储加载了 ${song.name} 的翻译")
             cache.putMemory(songContentId, it)
             val restored = maybeRepairCachedPhonetics(
@@ -189,7 +202,7 @@ object AITranslator {
         )
         if (patched != cached) {
             cache.putMemory(key, patched)
-            cache.saveToDb(key, patched)
+            cache.saveToDb(key, patched, song, originalLines)
         }
         return patched
     }

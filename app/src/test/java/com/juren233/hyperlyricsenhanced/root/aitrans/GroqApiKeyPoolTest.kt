@@ -27,6 +27,34 @@ class GroqApiKeyPoolTest {
         assertTrue(GroqApiKeyPool.orderedForRequest(AiTranslationConfigs()).isEmpty())
     }
 
+
+    @Test fun diagnosticsUseStableOneBasedSlotNumbersWithoutCredentials() {
+        val cfg = AiTranslationConfigs(groqApiKeys = (1..10).map { "sensitive-secret-$it" })
+        val firstSlots = (1..10).map {
+            GroqApiKeyPool.orderedSlotsForRequest(cfg).first()
+        }
+        assertEquals((1..10).toSet(), firstSlots.map { it.index }.toSet())
+        firstSlots.forEach { slot ->
+            assertEquals(10, slot.total)
+            assertEquals("sensitive-secret-${slot.index}", slot.credential)
+            assertEquals("key_index=${slot.index} key_total=10", slot.logLabel)
+            assertFalse(slot.logLabel.contains("sensitive-secret"))
+            assertFalse(slot.toString().contains("sensitive-secret"))
+        }
+    }
+
+    @Test fun diagnosticSlotsStayAlignedWithRotatedCredentials() {
+        val cfg = AiTranslationConfigs(groqApiKeys = listOf("secret-A", "secret-B", "secret-C"))
+        val slots = GroqApiKeyPool.orderedSlotsForRequest(cfg)
+        assertEquals(3, slots.size)
+        slots.forEach { slot ->
+            assertEquals(listOf("secret-A", "secret-B", "secret-C")[slot.index - 1], slot.credential)
+            assertTrue(slot.index in 1..3)
+            assertEquals(3, slot.total)
+        }
+        assertTrue(GroqApiKeyPool.orderedSlotsForRequest(AiTranslationConfigs()).isEmpty())
+    }
+
     @Test fun retriesAreBoundedAndDoNotEvade429() {
         assertTrue(GroqApiKeyPool.canRetryTransient(503, 0, 2))
         assertTrue(GroqApiKeyPool.canRetryTransient(502, 0, 3))

@@ -13,12 +13,34 @@ internal object GroqApiKeyPool {
             configs.groqApiKey,
         )
 
-    fun orderedForRequest(configs: AiTranslationConfigs): List<String> {
+    /**
+     * A key's 1-based input order is stable within the active, normalized pool.
+     * Never print or interpolate [credential] in diagnostics.
+     */
+    internal class KeySlot(
+        val credential: String,
+        val index: Int,
+        val total: Int,
+    ) {
+        val logLabel: String get() = "key_index=$index key_total=$total"
+
+        // Accidentally logging the object must also never disclose its secret.
+        override fun toString(): String = "GroqKeySlot($logLabel)"
+    }
+
+    fun orderedSlotsForRequest(configs: AiTranslationConfigs): List<KeySlot> {
         val keys = configured(configs)
         if (keys.isEmpty()) return emptyList()
         val start = ((cursor.getAndIncrement() and Long.MAX_VALUE) % keys.size).toInt()
-        return List(keys.size) { index -> keys[(start + index) % keys.size] }
+        return List(keys.size) { offset ->
+            val index = (start + offset) % keys.size
+            KeySlot(keys[index], index + 1, keys.size)
+        }
     }
+
+    /** Keep the existing simple rotation API for other call sites. */
+    fun orderedForRequest(configs: AiTranslationConfigs): List<String> =
+        orderedSlotsForRequest(configs).map { it.credential }
 
     fun canRetryTransient(code: Int, attempt: Int, count: Int): Boolean =
         attempt == 0 && count > 1 && code in setOf(500, 502, 503, 504)

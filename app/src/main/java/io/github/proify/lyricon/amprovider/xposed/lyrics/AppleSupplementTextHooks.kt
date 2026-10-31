@@ -233,6 +233,9 @@ internal fun AppleLyricsSupplementHooks.ensureAppleNativeOnlineTranslationHooks(
                 return@installResultOverrideHook original
             }
             val songId = nativeSongId(chain.thisObject)
+            if (!requestedAppleLyricsRowVisibility().translation) {
+                return@installResultOverrideHook false
+            }
             val resolved = original == true || hasOnlineContent(songId)
             if (BuildConfig.DEBUG) {
                 logTranslationAvailabilityOverride(
@@ -272,6 +275,9 @@ internal fun AppleLyricsSupplementHooks.ensureAppleNativeOnlineTranslationHooks(
 
         hookRegistrar.installResultOverrideHook(method) { chain, original ->
             val songId = nativeSongId(chain.thisObject)
+            if (!requestedAppleLyricsRowVisibility().pronunciation) {
+                return@installResultOverrideHook false
+            }
             val requestedLanguage = chain.args.firstOrNull() as? String
             if (
                 shouldHideMandarinPronunciation(

@@ -394,6 +394,13 @@ internal class AppleLyricsSupplementHooks(
             RootConstants.DEFAULT_HOOK_APPLE_MUSIC_SHOW_HANGUL_PRONUNCIATION,
         ) ?: RootConstants.DEFAULT_HOOK_APPLE_MUSIC_SHOW_HANGUL_PRONUNCIATION
 
+    internal fun koreanTranslationTargetSelected(): Boolean {
+        val target = contentUiLanguagePrefs?.getString(
+            RootConstants.KEY_HOOK_AI_TRANS_TARGET_LANG, "한국어",
+        )?.trim()?.lowercase().orEmpty()
+        return target in setOf("한국어", "한국말", "korean", "ko", "ko-kr")
+    }
+
     /** Requested row visibility; three-line is opt-in and host defaults are untouched. */
     internal fun appleLyricsDisplayMode(): Int =
         contentUiLanguagePrefs?.getInt(
@@ -415,6 +422,8 @@ internal class AppleLyricsSupplementHooks(
                 RootConstants.KEY_HOOK_APPLE_MUSIC_PRONUNCIATION_DISPLAY_OVERRIDE,
                 RootConstants.DEFAULT_HOOK_APPLE_MUSIC_LYRICS_DISPLAY_OVERRIDE,
             ) ?: RootConstants.DEFAULT_HOOK_APPLE_MUSIC_LYRICS_DISPLAY_OVERRIDE,
+            translationMenuSelection = PreferencesMonitor.latestTranslationToggleEvent(),
+            pronunciationMenuSelection = PreferencesMonitor.latestPronunciationToggleEvent(),
         )
     }
 

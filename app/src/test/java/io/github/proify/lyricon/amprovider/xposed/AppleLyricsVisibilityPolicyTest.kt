@@ -61,6 +61,48 @@ class AppleLyricsVisibilityPolicyTest {
     }
 
     @Test
+    fun `Apple Music hide buttons take precedence over Enhanced show when available`() {
+        val result = AppleLyricsVisibilityPolicy.resolve(
+            appleTranslation = false,
+            applePronunciation = false,
+            mode = RootConstants.APPLE_MUSIC_LYRICS_MODE_THREE_LINE,
+            translationOverride = RootConstants.APPLE_MUSIC_LYRICS_DISPLAY_SHOW,
+            pronunciationOverride = RootConstants.APPLE_MUSIC_LYRICS_DISPLAY_SHOW,
+            translationMenuSelection = false,
+            pronunciationMenuSelection = false,
+        )
+        assertEquals(AppleLyricsVisibilityPolicy.Result(false, false), result)
+        assertEquals(
+            AppleLyricsVisibilityPolicy.Result(true, false),
+            AppleLyricsVisibilityPolicy.resolve(
+                appleTranslation = false,
+                applePronunciation = false,
+                mode = RootConstants.APPLE_MUSIC_LYRICS_MODE_THREE_LINE,
+                translationOverride = RootConstants.APPLE_MUSIC_LYRICS_DISPLAY_SHOW,
+                pronunciationOverride = RootConstants.APPLE_MUSIC_LYRICS_DISPLAY_SHOW,
+                translationMenuSelection = true,
+                pronunciationMenuSelection = false,
+            ),
+        )
+    }
+
+    @Test
+    fun `Enhanced explicit hide cannot be overridden by Apple show button`() {
+        assertEquals(
+            AppleLyricsVisibilityPolicy.Result(false, false),
+            AppleLyricsVisibilityPolicy.resolve(
+                appleTranslation = true,
+                applePronunciation = true,
+                mode = RootConstants.APPLE_MUSIC_LYRICS_MODE_THREE_LINE,
+                translationOverride = RootConstants.APPLE_MUSIC_LYRICS_DISPLAY_HIDE,
+                pronunciationOverride = RootConstants.APPLE_MUSIC_LYRICS_DISPLAY_HIDE,
+                translationMenuSelection = true,
+                pronunciationMenuSelection = true,
+            ),
+        )
+    }
+
+    @Test
     fun `custom independently shows and hides translation and pronunciation`() {
         assertEquals(
             AppleLyricsVisibilityPolicy.Result(true, false),

@@ -39,14 +39,26 @@ internal fun AppleLyricsSupplementHooks.hookAppleLyricTextGetter(clazz: Class<*>
             lyricsRuntimeMember(
                 AppleMusicRuntimeMember.LYRICS_NATIVE_TRANSLATION_TEXT_METHOD
             ) -> {
-                // An explicit line edit overrides official and AI/provider output without
-                // mutating Apple's translation track or the cached source content.
+                if (!requestedAppleLyricsRowVisibility().translation) {
+                    return@installResultOverrideHook ""
+                }
+                // For Korean-target songs, existing official/third-party Chinese
+                // content must not win over a later AI Hangul translation.
                 val userTranslation = userCorrectionForNativeLine(chain.thisObject)?.translation
-                val text = userTranslation ?: selectAppleLyricsText(
-                    official = AppleNativeOnlineTranslationStore.sanitizeContent(originalText),
-                    fallback = { onlineTranslationForNativeLine(chain.thisObject) },
-                ).text
-                val result = AppleLyricTextTransform.transform(text) ?: original
+                val official = AppleNativeOnlineTranslationStore.sanitizeContent(originalText)
+                val text = if (koreanTranslationTargetSelected()) {
+                    KoreanLyricsDisplayPolicy.select(
+                        userCorrection = userTranslation,
+                        supplement = onlineTranslationForNativeLine(chain.thisObject),
+                        official = official,
+                    )
+                } else {
+                    userTranslation ?: selectAppleLyricsText(
+                        official = official,
+                        fallback = { onlineTranslationForNativeLine(chain.thisObject) },
+                    ).text
+                }
+                val result = AppleLyricTextTransform.transform(text.orEmpty()) ?: text.orEmpty()
                 if (BuildConfig.DEBUG) {
                     ProviderLogger.debug(
                         "[LyricsScrollDiag] getTranslationText: line=${System.identityHashCode(chain.thisObject)}, " +
@@ -58,7 +70,9 @@ internal fun AppleLyricsSupplementHooks.hookAppleLyricTextGetter(clazz: Class<*>
             lyricsRuntimeMember(
                 AppleMusicRuntimeMember.LYRICS_NATIVE_PRONUNCIATION_TEXT_METHOD
             ) -> {
-                if (shouldHideMandarinPronunciation(lyricObject = chain.thisObject)) {
+                if (!requestedAppleLyricsRowVisibility().pronunciation ||
+                    shouldHideMandarinPronunciation(lyricObject = chain.thisObject)
+                ) {
                     return@installResultOverrideHook ""
                 }
                 val officialText = RomanizationPolicy.sanitize(
@@ -112,7 +126,8 @@ internal fun AppleLyricsSupplementHooks.hookAppleLyricTextGetter(clazz: Class<*>
             lyricsRuntimeMember(
                 AppleMusicRuntimeMember.LYRICS_NATIVE_PRONUNCIATION_BACKGROUND_TEXT_METHOD
             ) -> {
-                if (shouldHideMandarinPronunciation(lyricObject = chain.thisObject) ||
+                if (!requestedAppleLyricsRowVisibility().pronunciation ||
+                    shouldHideMandarinPronunciation(lyricObject = chain.thisObject) ||
                     !showNativeApplePronunciation()
                 ) {
                     return@installResultOverrideHook ""
@@ -262,7 +277,8 @@ private fun AppleLyricsSupplementHooks.hookApplePronunciationWordsGetter(
             return@installResultOverrideHook original
         }
         val line = chain.thisObject ?: return@installResultOverrideHook original
-        if (shouldHideMandarinPronunciation(lyricObject = line) ||
+        if (!requestedAppleLyricsRowVisibility().pronunciation ||
+            shouldHideMandarinPronunciation(lyricObject = line) ||
             (!onlineFallback && !showNativeApplePronunciation())
         ) {
             return@installResultOverrideHook emptyApplePronunciationWords(

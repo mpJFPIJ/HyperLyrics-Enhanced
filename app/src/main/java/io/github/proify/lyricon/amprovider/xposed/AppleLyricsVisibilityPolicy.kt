@@ -15,21 +15,35 @@ internal object AppleLyricsVisibilityPolicy {
         mode: Int,
         translationOverride: Int,
         pronunciationOverride: Int,
+        // Null = no native menu interaction observed. A real user action must
+        // win over "Show when available" in three-line/custom mode.
+        translationMenuSelection: Boolean? = null,
+        pronunciationMenuSelection: Boolean? = null,
     ): Result = when (mode) {
         RootConstants.APPLE_MUSIC_LYRICS_MODE_THREE_LINE -> Result(
-            // Three-line remains on by default, but an explicit Hide must win.
-            translation = override(true, translationOverride),
-            pronunciation = override(true, pronunciationOverride),
+            // Preserve opt-in three-line defaults, but the host menu's latest
+            // explicit show/hide action always wins unless Enhanced Hide is set.
+            translation = override(translationMenuSelection ?: true, translationOverride,
+                respectNativeMenu = translationMenuSelection != null),
+            pronunciation = override(pronunciationMenuSelection ?: true, pronunciationOverride,
+                respectNativeMenu = pronunciationMenuSelection != null),
         )
         RootConstants.APPLE_MUSIC_LYRICS_MODE_CUSTOM -> Result(
-            translation = override(appleTranslation, translationOverride),
-            pronunciation = override(applePronunciation, pronunciationOverride),
+            translation = override(translationMenuSelection ?: appleTranslation, translationOverride,
+                respectNativeMenu = translationMenuSelection != null),
+            pronunciation = override(pronunciationMenuSelection ?: applePronunciation, pronunciationOverride,
+                respectNativeMenu = pronunciationMenuSelection != null),
         )
         else -> Result(appleTranslation, applePronunciation)
     }
 
-    private fun override(hostValue: Boolean, value: Int): Boolean = when (value) {
-        RootConstants.APPLE_MUSIC_LYRICS_DISPLAY_SHOW -> true
+    private fun override(
+        hostValue: Boolean,
+        value: Int,
+        respectNativeMenu: Boolean,
+    ): Boolean = when (value) {
+        RootConstants.APPLE_MUSIC_LYRICS_DISPLAY_SHOW ->
+            if (respectNativeMenu) hostValue else true
         RootConstants.APPLE_MUSIC_LYRICS_DISPLAY_HIDE -> false
         else -> hostValue
     }

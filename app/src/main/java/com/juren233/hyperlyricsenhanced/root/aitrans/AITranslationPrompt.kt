@@ -26,7 +26,17 @@ is sung or spoken. "roma" is a legacy field name: its value MUST be Hangul,
 NOT Latin-script Japanese romaji, Hepburn, English spelling, or IPA.
 Write every phonetic syllable in Korean Hangul for every Japanese/English line.
 Even if Apple supplies ja-Latn romanization, do not copy any Latin alphabet into
-"roma". If unsure of a kanji reading, infer it from the entire song context.
+"roma". For Japanese, first determine the standard reading of kanji + kana in the
+ORIGINAL sentence, then transcribe that Japanese SOUND into natural Hangul.
+Do not derive pronunciation from a Chinese interpretation, the Korean meaning,
+or a visually similar kanji. Use the surrounding Japanese grammar to resolve
+ambiguous kanji, and preserve long vowels, small tsu and syllable boundaries.
+Examples of sound accuracy: 駄目 -> 다메 (not 다무);
+脳みそ -> 노미소; 可愛い -> 카와이이; 君の名は -> 키미노 나와.
+Read the exact original line; never fabricate or paraphrase a different lyric.
+For English, preserve the actual spoken syllables, not the English spelling
+or the Korean meaning. Don't arbitrarily omit any original words.
+If uncertain, prefer a conservative common reading, not invented syllables.
 Do not omit "roma" for a Japanese/English line solely because translation exists.
 Examples:
 Japanese "君の名は" -> "키미노 나와" (NOT "kimi no na wa")

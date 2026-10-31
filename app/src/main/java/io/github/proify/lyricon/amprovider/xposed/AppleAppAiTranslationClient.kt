@@ -19,6 +19,7 @@ internal class AppleAppAiTranslationClient(
     context: Context,
     private val isSystemUiBridgeActive: () -> Boolean,
     private val onTranslationReceived: (ByteArray) -> Unit,
+    private val onTranslationCleared: (String) -> Unit,
 ) {
     private companion object {
         const val APP_PACKAGE = "com.juren233.hyperlyricsenhanced"
@@ -87,6 +88,46 @@ internal class AppleAppAiTranslationClient(
             bindIfNeeded()
             dispatchPending()
         }
+    }
+
+    /**
+     * A confirmed, song-scoped deletion. Do not request a new translation
+     * until the next playback publication; stale in-flight replies are ignored.
+     */
+    fun clearSong(compressedSong: ByteArray, expectedSongId: String): Boolean {
+        val target = binder ?: return false
+        if (isSystemUiBridgeActive() || compressedSong.isEmpty()) return false
+        generation += 1
+        val currentGeneration = generation
+        pending = null
+        previous = null
+        val callback = object : IAppleMusicTranslationReceiver.Stub() {
+            override fun onOnlineTranslationResult(compressedSong: ByteArray) = Unit
+
+            override fun onOnlineTranslationCleared(songId: String?) {
+                if (songId == expectedSongId && generation == currentGeneration) {
+                    onTranslationCleared(expectedSongId)
+                }
+            }
+
+            override fun onMissingLyricsSupplementCleared(songId: String?) = Unit
+            override fun onMissingLyricsSupplementResult(compressedSong: ByteArray) = Unit
+            override fun onOnlineTranslationSourceSwitchResult(
+                requestId: Long,
+                songId: String?,
+                contentType: String?,
+                requestedSource: String?,
+                actualSource: String?,
+                successful: Boolean,
+            ) = Unit
+        }
+        return runCatching {
+            target.clearSongTranslation(compressedSong.copyOf(), callback)
+            ProviderLogger.info("standalone_ai stage=song_clear_requested")
+            true
+        }.onFailure {
+            ProviderLogger.error("standalone_ai stage=song_clear_ipc_failed", it)
+        }.getOrDefault(false)
     }
 
     private fun bindIfNeeded() {

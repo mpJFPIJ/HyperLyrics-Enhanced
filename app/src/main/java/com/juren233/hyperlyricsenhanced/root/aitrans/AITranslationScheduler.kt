@@ -77,6 +77,29 @@ internal class AITranslationScheduler(
         }
     }
 
+    /** Cancel only translation jobs for selected song cache keys. */
+    fun cancelKeys(keys: Set<String>) {
+        val toCancel = synchronized(lock) {
+            pending.removeAll { job ->
+                if (job.key !in keys) return@removeAll false
+                job.state = TranslationJobState.CANCELLED
+                jobs.remove(job.key, job)
+                job.deferred.complete(null)
+                true
+            }
+            jobs.values.mapNotNull { job ->
+                if (job.key !in keys || job.state != TranslationJobState.RUNNING)
+                    return@mapNotNull null
+                job.state = TranslationJobState.CANCELLED
+                jobs.remove(job.key, job)
+                running = (running - 1).coerceAtLeast(0)
+                job.deferred.cancel(CancellationException("Song translation cleared"))
+                job.coroutineJob
+            }.also { dispatchNextLocked() }
+        }
+        toCancel.forEach { it.cancel() }
+    }
+
     fun releaseForReload() {
         cancelAll()
         scope.cancel()

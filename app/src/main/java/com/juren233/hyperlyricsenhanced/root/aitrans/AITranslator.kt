@@ -77,6 +77,22 @@ object AITranslator {
         texts: List<String>
     ): List<TranslationItem>? = OpenAiTranslationClient.request(configs, song, texts)
 
+    /**
+     * Clear just the current song, including the older translation-only cache
+     * and its Korean phonetics-enriched variant.
+     */
+    suspend fun clearSongCache(song: Song, configs: AiTranslationConfigs): Boolean {
+        val lines = song.lyrics.orEmpty().map { it.text?.trim().orEmpty() }
+        if (song.id.isNullOrBlank() || lines.isEmpty()) return false
+        val keys = setOf(
+            AITranslationKey.calculate(configs, song, lines, includePronunciation = false),
+            AITranslationKey.calculate(configs, song, lines, includePronunciation = true),
+        )
+        scheduler.cancelKeys(keys)
+        keys.forEach(phoneticsRepairAttemptAt::remove)
+        return cache.removeKeys(keys)
+    }
+
     fun clearCache(callback: () -> Unit) {
         HookLogger.d("AITranslator", "清理记录：正在清空所有本地翻译记录（内存+数据库）")
         scheduler.cancelPending()

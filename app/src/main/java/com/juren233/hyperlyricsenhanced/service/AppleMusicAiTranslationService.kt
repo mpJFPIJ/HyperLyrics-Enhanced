@@ -79,6 +79,49 @@ class AppleMusicAiTranslationService : Service() {
             LogManager.i(TAG, "stage=request_cancelled")
         }
 
+        override fun clearSongTranslation(
+            compressedSong: ByteArray?,
+            receiver: IAppleMusicTranslationReceiver?,
+        ) {
+            if (!AppleMusicAiTranslationPolicy.isAuthorizedCaller(
+                    packageManager.getPackagesForUid(Binder.getCallingUid())
+                )
+            ) return
+            if (receiver == null || compressedSong == null || compressedSong.isEmpty() ||
+                compressedSong.size > MAX_COMPRESSED_BYTES
+            ) return
+            val song = runCatching {
+                json.decodeFromString<Song>(
+                    compressedSong.inflate().toString(Charsets.UTF_8)
+                )
+            }.getOrNull() ?: return
+            val id = song.id?.takeIf(String::isNotBlank) ?: return
+            val serial = synchronized(requestLock) {
+                val current = generation.incrementAndGet()
+                // The currently executing task may otherwise repopulate the
+                // cache and return a stale result after the user deleted it.
+                requestJob?.cancel()
+                requestJob = null
+                activeRequestKey = null
+                activeReceiver = null
+                current
+            }
+            scope.launch {
+                val ok = runCatching {
+                    val prefs = getSharedPreferences(UIConstants.PREF_NAME, MODE_PRIVATE)
+                    AITranslator.clearSongCache(song, translationConfig(prefs))
+                }.onFailure {
+                    LogManager.w(TAG, "stage=song_clear_failed type=${it.javaClass.simpleName}")
+                }.getOrDefault(false)
+                if (ok && serial == generation.get()) {
+                    LogManager.i(TAG, "stage=song_clear_completed")
+                    runCatching { receiver.onOnlineTranslationCleared(id) }
+                } else if (!ok) {
+                    LogManager.w(TAG, "stage=song_clear_failed reason=cache")
+                }
+            }
+        }
+
         override fun translate(compressedSong: ByteArray?, receiver: IAppleMusicTranslationReceiver?) {
             val callingUid = Binder.getCallingUid()
             val allowed = AppleMusicAiTranslationPolicy.isAuthorizedCaller(

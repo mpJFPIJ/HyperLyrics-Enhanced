@@ -69,6 +69,7 @@ internal class AppleOnlineSourceMenuHooks(
     internal val missingLyricsPronunciationMatchPercentage: (String?, String) -> Int?,
     internal val missingLyricsPronunciationSource: (String?) -> String?,
     internal val requestOnlineSource: (Long, String, String, String) -> Boolean,
+    internal val clearCurrentAiTranslation: (String) -> Boolean = { false },
     internal val debugValue: (Any?) -> String,
     internal val lyricSyncOffsetForSong: (String) -> Int = { 0 },
     internal val changeLyricSyncOffset: (String, Int) -> Int? = { _, _ -> null },
@@ -382,6 +383,9 @@ internal class AppleOnlineSourceMenuHooks(
         if (translationPresentation != null) {
             menu.addView(createMenuItem(menu, songId, "translation", translationPresentation))
         }
+        // This action stays available even after the visible overlay was
+        // cleared, because the song's cached translation may still exist.
+        menu.addView(createCurrentSongTranslationClearItem(popup, menu, songId))
         // Apple-native songs do not necessarily expose the supplemental lyrics
         // source dialog, so the line editor must also be reachable from the
         // existing native lyrics actions menu itself.
@@ -473,6 +477,54 @@ internal class AppleOnlineSourceMenuHooks(
         item.setCompoundDrawablesRelativeWithIntrinsicBounds(0, 0, iconId, 0)
         item.setOnClickListener {
             showSourceDialog(menu.context, songId, "lyrics")
+        }
+        return item
+    }
+
+    private fun createCurrentSongTranslationClearItem(
+        popup: PopupWindow,
+        menu: LinearLayout,
+        songId: String,
+    ): TextView {
+        val layoutId = runtime.application.resources.getIdentifier(
+            "menu_item_lyrics_translations", "layout", APPLE_MUSIC_PACKAGE,
+        )
+        val item = LayoutInflater.from(menu.context).inflate(layoutId, menu, false) as TextView
+        item.tag = ONLINE_SOURCE_MENU_ITEM_TAG
+        item.background = menu.getChildAt(0)?.background
+            ?.constantState?.newDrawable(menu.resources)
+        val isKorean = menu.resources.configuration.locales.get(0)?.language == "ko"
+        item.text = if (isKorean) "현재 곡 AI 번역 삭제" else "Delete this song's AI translation"
+        item.setCompoundDrawablesRelativeWithIntrinsicBounds(
+            0, 0, android.R.drawable.ic_menu_delete, 0,
+        )
+        item.setOnClickListener {
+            popup.dismiss()
+            if (currentSongId() != songId) {
+                Toast.makeText(menu.context, "재생 중인 곡이 바뀌었어요", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            AlertDialog.Builder(menu.context)
+                .setTitle(if (isKorean) "현재 곡 AI 번역 삭제" else "Delete AI translation")
+                .setMessage(if (isKorean)
+                    "이 곡의 AI 번역·한글 발음과 저장된 캐시를 삭제할까요? " +
+                        "다른 곡의 번역과 원본 가사는 유지됩니다. 다음 재생 때 새로 번역할 수 있어요."
+                    else "Remove this song's AI translation, pronunciation, and cached result? " +
+                        "Other songs and original lyrics remain unchanged.")
+                .setNegativeButton(if (isKorean) "취소" else "Cancel", null)
+                .setPositiveButton(if (isKorean) "삭제" else "Delete") { _, _ ->
+                    if (currentSongId() != songId) return@setPositiveButton
+                    val submitted = clearCurrentAiTranslation(songId)
+                    if (!submitted) {
+                        Toast.makeText(
+                            menu.context,
+                            if (isKorean) "AI 번역 앱에 연결되지 않아 삭제하지 못했어요"
+                            else "AI translation service is unavailable",
+                            Toast.LENGTH_SHORT,
+                        ).show()
+                    }
+                }
+                .show()
         }
         return item
     }

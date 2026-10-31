@@ -372,6 +372,9 @@ internal class AppleOrchestratorLyricsPlaybackAssembly(
                     null
                 }
             },
+            clearCurrentAiTranslation = { songId ->
+                directPlayer?.clearCurrentSongAiTranslation(songId) == true
+            },
             requestOnlineSource = { requestId, songId, contentType, source ->
                 directPlayer?.requestOnlineLyricContentSource(
                     requestId = requestId,

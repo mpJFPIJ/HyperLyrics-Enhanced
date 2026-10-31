@@ -99,6 +99,26 @@ internal class AITranslationCache(
         }
     }
 
+    /**
+     * Delete a single song's derived cache variants from memory and SQLite.
+     * Other songs' translations and pronunciation caches remain intact.
+     */
+    suspend fun removeKeys(keys: Set<String>): Boolean = dbMutex.withLock {
+        if (keys.isEmpty()) return@withLock false
+        val db = dbHelper?.writableDatabase ?: return@withLock false
+        val removed = runCatching {
+            val selection = keys.joinToString(prefix = "${DatabaseHelper.COLUMN_ID} IN (",
+                postfix = ")", separator = ",") { "?" }
+            db.delete(DatabaseHelper.TABLE_NAME, selection, keys.toTypedArray())
+            true
+        }.getOrElse {
+            HookLogger.e(TAG, "删除当前歌曲翻译缓存失败", it)
+            false
+        }
+        if (removed) keys.forEach(memory::remove)
+        removed
+    }
+
     fun clear(callback: () -> Unit) {
         generation.incrementAndGet()
         memory.clear()

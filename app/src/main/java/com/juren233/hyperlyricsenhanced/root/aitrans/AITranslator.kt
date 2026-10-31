@@ -10,6 +10,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * SystemUI 进程内的 AI 歌词翻译门面。
@@ -28,6 +29,9 @@ object AITranslator {
     private const val MAX_PENDING_TRANSLATIONS = 5
 
     private val cacheGeneration = AtomicInteger(0)
+    // Do not repeat a rate-limited phonetics repair on every playback event.
+    private val phoneticsRepairAttemptAt = ConcurrentHashMap<String, Long>()
+    private const val PHONETICS_RETRY_DELAY_MS = 10L * 60L * 1000L
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val cache = AITranslationCache(
         maxCacheSize = MAX_CACHE_SIZE,
@@ -110,13 +114,23 @@ object AITranslator {
 
         cache.getFromMemory(songContentId)?.let {
             HookLogger.d("AITranslator", "缓存命中：从内存加载了 ${song.name} 的翻译")
-            return AITranslationApplicator.apply(song, mergeWithLegacyTranslations(legacyResults, it), forceOverride)
+            val restored = maybeRepairCachedPhonetics(
+                songContentId, configs, song, originalLines, includePronunciation, it,
+            )
+            return AITranslationApplicator.apply(
+                song, mergeWithLegacyTranslations(legacyResults, restored), forceOverride,
+            )
         }
 
         cache.getFromDb(songContentId)?.let {
             HookLogger.d("AITranslator", "记录命中：从本地存储加载了 ${song.name} 的翻译")
             cache.putMemory(songContentId, it)
-            return AITranslationApplicator.apply(song, mergeWithLegacyTranslations(legacyResults, it), forceOverride)
+            val restored = maybeRepairCachedPhonetics(
+                songContentId, configs, song, originalLines, includePronunciation, it,
+            )
+            return AITranslationApplicator.apply(
+                song, mergeWithLegacyTranslations(legacyResults, restored), forceOverride,
+            )
         }
 
         HookLogger.d("AITranslator", "正在请求 AI：本地无记录，准备发起在线翻译")
@@ -128,6 +142,40 @@ object AITranslator {
         return AITranslationApplicator.apply(
             song, mergeWithLegacyTranslations(legacyResults, apiResults), forceOverride,
         )
+    }
+
+    /**
+     * Keep the successful Korean translation cached, but allow a later visit
+     * to repair missing Hangul without re-translating the entire song.
+     * This avoids permanently caching a 22-translations/0-pronunciations result.
+     */
+    private suspend fun maybeRepairCachedPhonetics(
+        key: String,
+        configs: AiTranslationConfigs,
+        song: Song,
+        originalLines: List<String>,
+        includePronunciation: Boolean,
+        cached: List<TranslationItem>,
+    ): List<TranslationItem> {
+        if (!includePronunciation ||
+            !KoreanLyricOutputPolicy.needsPronunciationRepair(cached, originalLines.size) ||
+            GroqApiKeyPool.configured(configs).isEmpty()
+        ) return cached
+        val now = System.nanoTime() / 1_000_000L
+        val last = phoneticsRepairAttemptAt[key]
+        if (last != null && now - last < PHONETICS_RETRY_DELAY_MS) return cached
+        phoneticsRepairAttemptAt[key] = now
+        val request = TranslationRequest(originalLines.mapIndexed { index, line ->
+            TranslationRequestItem(index, line)
+        })
+        val patched = GroqMultiModelClient.enrichMissingPronunciation(
+            configs, song, request, cached,
+        )
+        if (patched != cached) {
+            cache.putMemory(key, patched)
+            cache.saveToDb(key, patched)
+        }
+        return patched
     }
 
     private fun mergeWithLegacyTranslations(

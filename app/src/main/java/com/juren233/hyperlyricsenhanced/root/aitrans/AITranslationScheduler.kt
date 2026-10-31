@@ -78,17 +78,24 @@ internal class AITranslationScheduler(
     }
 
     /** Cancel only translation jobs for selected song cache keys. */
-    fun cancelKeys(keys: Set<String>) {
+    fun cancelKeys(keys: Set<String>) = cancelMatching { it.key in keys }
+
+    /** A pending variant may not be in SQLite yet; match its original song content. */
+    fun cancelSongGroup(groupId: String) = cancelMatching { job ->
+        AiCachedSongCatalog.groupId(job.song.name, job.song.artist, job.originalLines) == groupId
+    }
+
+    private fun cancelMatching(matches: (TranslationJob) -> Boolean) {
         val toCancel = synchronized(lock) {
             pending.removeAll { job ->
-                if (job.key !in keys) return@removeAll false
+                if (!matches(job)) return@removeAll false
                 job.state = TranslationJobState.CANCELLED
                 jobs.remove(job.key, job)
                 job.deferred.complete(null)
                 true
             }
             jobs.values.mapNotNull { job ->
-                if (job.key !in keys || job.state != TranslationJobState.RUNNING)
+                if (!matches(job) || job.state != TranslationJobState.RUNNING)
                     return@mapNotNull null
                 job.state = TranslationJobState.CANCELLED
                 jobs.remove(job.key, job)
@@ -154,13 +161,18 @@ internal class AITranslationScheduler(
 
     private suspend fun runJob(job: TranslationJob) {
         try {
+            val groupId = AiCachedSongCatalog.groupId(
+                job.song.name, job.song.artist, job.originalLines,
+            )
+            val epoch = cache.currentGroupEpoch(groupId)
             val apiResults =
                 OpenAiTranslationClient.request(job.configs, job.song, job.originalLines)
             if (job.state == TranslationJobState.CANCELLED) return
             if (!apiResults.isNullOrEmpty() && job.generation == generation.get()) {
-                HookLogger.d(TAG, "翻译任务完成: song=${job.songName}, cached=true")
-                cache.putMemory(job.key, apiResults)
-                cache.saveToDb(job.key, apiResults, job.song, job.originalLines)
+                val saved = cache.saveToDb(
+                    job.key, apiResults, job.song, job.originalLines, expectedEpoch = epoch,
+                )
+                HookLogger.d(TAG, "翻译任务完成: song=${job.songName}, cached=$saved")
             }
             job.state = TranslationJobState.COMPLETED
             job.deferred.complete(apiResults)

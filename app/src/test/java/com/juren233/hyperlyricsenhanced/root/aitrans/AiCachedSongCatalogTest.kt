@@ -47,4 +47,26 @@ class AiCachedSongCatalogTest {
         assertEquals(setOf("legacy-cache-two"),
             AiCachedSongCatalog.keysForGroup(songs.first().groupId, rows))
     }
+
+    @Test fun migratedLegacyTranslationAndEnrichedVariantDeleteTogetherAfterBackfill() {
+        val group = AiCachedSongCatalog.groupId("Song", "Singer", listOf("original lyrics"))
+        val rows = listOf(
+            AiCachedSongRow("old-translation-key", group, "Song", "Singer", 100L),
+            AiCachedSongRow("new-pronunciation-key", group, "Song", "Singer", 200L),
+        )
+        assertEquals(setOf("old-translation-key", "new-pronunciation-key"),
+            AiCachedSongCatalog.keysForGroup(group, rows))
+        assertEquals(1, AiCachedSongCatalog.groupRows(rows).size)
+    }
+
+    @Test fun deletionEpochRejectsStaleRepairWithoutBlockingOtherSongs() {
+        val epochs = AiCacheGroupEpochs()
+        val songA = epochs.current("song-a")
+        val songB = epochs.current("song-b")
+        epochs.advance("song-a")
+
+        assertFalse(epochs.isCurrent("song-a", songA))
+        assertTrue(epochs.isCurrent("song-b", songB))
+        assertTrue(epochs.isCurrent("song-a", epochs.current("song-a")))
+    }
 }

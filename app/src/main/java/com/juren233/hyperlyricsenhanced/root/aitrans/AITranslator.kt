@@ -88,9 +88,11 @@ object AITranslator {
             AITranslationKey.calculate(configs, song, lines, includePronunciation = false),
             AITranslationKey.calculate(configs, song, lines, includePronunciation = true),
         )
+        val groupId = AiCachedSongCatalog.groupId(song.name, song.artist, lines)
+        scheduler.cancelSongGroup(groupId)
         scheduler.cancelKeys(keys)
         keys.forEach(phoneticsRepairAttemptAt::remove)
-        return cache.removeKeys(keys)
+        return cache.removeKeys(keys, groupId)
     }
 
     /** The HyperLyrics settings app uses its own cache, not Apple Music's UI. */
@@ -99,9 +101,10 @@ object AITranslator {
     suspend fun deleteCachedSong(groupId: String): Boolean {
         val keys = cache.keysForGroup(groupId)
         if (keys.isEmpty()) return false
+        scheduler.cancelSongGroup(groupId)
         scheduler.cancelKeys(keys)
         keys.forEach(phoneticsRepairAttemptAt::remove)
-        return cache.removeKeys(keys)
+        return cache.removeKeys(keys, groupId)
     }
 
     fun clearCache(callback: () -> Unit) {
@@ -127,6 +130,8 @@ object AITranslator {
         val currentLyrics = song.lyrics ?: return song
         val originalLines = currentLyrics.map { it.text?.trim() ?: "" }
         val includePronunciation = AIPronunciationPolicy.shouldEnrich(song)
+        val groupId = AiCachedSongCatalog.groupId(song.name, song.artist, originalLines)
+        val startingEpoch = cache.currentGroupEpoch(groupId)
         val songContentId = AITranslationKey.calculate(
             configs, song, originalLines, includePronunciation = includePronunciation,
         )
@@ -136,15 +141,18 @@ object AITranslator {
         // for Korean translation + Japanese/English pronunciation together.
         val legacyResults = if (includePronunciation) {
             val oldKey = AITranslationKey.calculate(configs, song, originalLines)
-            cache.getFromMemory(oldKey) ?: cache.getFromDb(oldKey)
+            (cache.getFromMemory(oldKey) ?: cache.getFromDb(oldKey))?.also {
+                cache.attachSongMetadata(oldKey, song, originalLines)
+            }
         } else null
 
         cache.getFromMemory(songContentId)?.let {
             cache.attachSongMetadata(songContentId, song, originalLines)
             HookLogger.d("AITranslator", "缓存命中：从内存加载了 ${song.name} 的翻译")
             val restored = maybeRepairCachedPhonetics(
-                songContentId, configs, song, originalLines, includePronunciation, it,
+                songContentId, configs, song, originalLines, includePronunciation, it, startingEpoch,
             )
+            if (cache.currentGroupEpoch(groupId) != startingEpoch) return song
             return AITranslationApplicator.apply(
                 song, mergeWithLegacyTranslations(legacyResults, restored), forceOverride,
             )
@@ -153,10 +161,10 @@ object AITranslator {
         cache.getFromDb(songContentId)?.let {
             cache.attachSongMetadata(songContentId, song, originalLines)
             HookLogger.d("AITranslator", "记录命中：从本地存储加载了 ${song.name} 的翻译")
-            cache.putMemory(songContentId, it)
             val restored = maybeRepairCachedPhonetics(
-                songContentId, configs, song, originalLines, includePronunciation, it,
+                songContentId, configs, song, originalLines, includePronunciation, it, startingEpoch,
             )
+            if (cache.currentGroupEpoch(groupId) != startingEpoch) return song
             return AITranslationApplicator.apply(
                 song, mergeWithLegacyTranslations(legacyResults, restored), forceOverride,
             )
@@ -164,6 +172,7 @@ object AITranslator {
 
         HookLogger.d("AITranslator", "正在请求 AI：本地无记录，准备发起在线翻译")
         val apiResults = scheduler.getOrEnqueue(songContentId, configs, song, originalLines).await()
+        if (cache.currentGroupEpoch(groupId) != startingEpoch) return song
         if (apiResults.isNullOrEmpty()) {
             HookLogger.w("AITranslator", "翻译失败：未能获取到 ${song.name} 的 AI 翻译")
             return legacyResults?.let { AITranslationApplicator.apply(song, it, forceOverride) } ?: song
@@ -185,6 +194,7 @@ object AITranslator {
         originalLines: List<String>,
         includePronunciation: Boolean,
         cached: List<TranslationItem>,
+        expectedEpoch: Long,
     ): List<TranslationItem> {
         if (!includePronunciation ||
             !KoreanLyricOutputPolicy.needsPronunciationRepair(cached, originalLines.size) ||
@@ -201,8 +211,7 @@ object AITranslator {
             configs, song, request, cached,
         )
         if (patched != cached) {
-            cache.putMemory(key, patched)
-            cache.saveToDb(key, patched, song, originalLines)
+            cache.saveToDb(key, patched, song, originalLines, expectedEpoch = expectedEpoch)
         }
         return patched
     }

@@ -52,3 +52,19 @@ internal object AiCachedSongCatalog {
             )
         }.sortedWith(compareByDescending<AiCachedSong> { it.updatedAt }.thenBy { it.groupId })
 }
+
+/** A per-song write fence: old network callbacks cannot revive deleted cache entries. */
+internal class AiCacheGroupEpochs {
+    private val values = mutableMapOf<String, Long>()
+
+    @Synchronized fun current(groupId: String): Long = values[groupId] ?: 0L
+
+    @Synchronized fun advance(groupId: String): Long {
+        val next = current(groupId) + 1L
+        values[groupId] = next
+        return next
+    }
+
+    @Synchronized fun isCurrent(groupId: String, expected: Long): Boolean =
+        current(groupId) == expected
+}

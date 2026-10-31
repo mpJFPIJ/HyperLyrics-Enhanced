@@ -360,7 +360,7 @@ internal class AppleDirectPlayer(
         latestSongPayload = payload
         latestSongIdForAiClear = song?.id
         // Clear any older fallback request once SystemUI's regular bridge is active.
-        appAiTranslation.submit(if (isActive) byteArrayOf() else payload)
+        appAiTranslation.submit(if (isActive) byteArrayOf() else payload, song?.id)
         return send(reconnectIfMissing = true) { target -> target.onSongChanged(payload) }
     }
 

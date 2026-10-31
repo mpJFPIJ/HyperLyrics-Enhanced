@@ -34,6 +34,10 @@ internal class AppleAppAiTranslationClient(
     private var pending: ByteArray? = null
     private var previous: ByteArray? = null
 
+    // Deleting a song must not cause the still-playing song to be translated
+    // again on the next metadata refresh. A new track re-enables translation.
+    private var suppressedSongId: String? = null
+
     @Volatile
     private var generation = 0L
 
@@ -68,8 +72,13 @@ internal class AppleAppAiTranslationClient(
     }
 
     /** No network work is performed on Apple Music's UI or Binder threads. */
-    fun submit(compressedSong: ByteArray) {
+    fun submit(compressedSong: ByteArray, songId: String?) {
         mainHandler.post {
+            if (songId != null && songId == suppressedSongId) {
+                ProviderLogger.info("standalone_ai stage=song_suppressed_after_clear")
+                return@post
+            }
+            if (songId != suppressedSongId) suppressedSongId = null
             if (previous?.contentEquals(compressedSong) == true) return@post
             previous = compressedSong.copyOf()
             generation += 1
@@ -101,6 +110,7 @@ internal class AppleAppAiTranslationClient(
         val currentGeneration = generation
         pending = null
         previous = null
+        suppressedSongId = expectedSongId
         val callback = object : IAppleMusicTranslationReceiver.Stub() {
             override fun onOnlineTranslationResult(compressedSong: ByteArray) = Unit
 
@@ -126,6 +136,7 @@ internal class AppleAppAiTranslationClient(
             ProviderLogger.info("standalone_ai stage=song_clear_requested")
             true
         }.onFailure {
+            suppressedSongId = null
             ProviderLogger.error("standalone_ai stage=song_clear_ipc_failed", it)
         }.getOrDefault(false)
     }

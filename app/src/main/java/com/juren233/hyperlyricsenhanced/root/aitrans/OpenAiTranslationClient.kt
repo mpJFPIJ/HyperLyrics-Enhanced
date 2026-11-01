@@ -56,10 +56,14 @@ internal object OpenAiTranslationClient {
                 GroqMultiModelClient.research(configs, it, texts)
             else GeminiWebReferenceClient.search(configs, it, texts)
         }
+        val groqAvailable = GroqApiKeyPool.configured(configs).isNotEmpty()
         suspend fun fallback(reason: String): List<TranslationItem>? =
-            if (isGoogleGemini) GroqMultiModelClient.fallbackTranslate(
-                configs, song, payload, requestIndices, webReference, reason,
-            ) else null
+            if (AiTranslationRecoveryPolicy.shouldUseGroqFallback(reason, groqAvailable)) {
+                LogManager.w("AppleMusicAiService", "stage=primary_fallback reason=$reason")
+                GroqMultiModelClient.fallbackTranslate(
+                    configs, song, payload, requestIndices, webReference, reason,
+                )
+            } else null
         val chatRequest = OpenAiChatRequest(
             model = configs.model.orEmpty(),
             messages = buildList {
@@ -95,6 +99,9 @@ internal object OpenAiTranslationClient {
         // quota failures and permanent 4xx never enter a retry loop.
         val requestBody = chatRequest.toJson()
         val url = URL(apiUrl)
+        val readTimeoutMs = AiTranslationRecoveryPolicy.readTimeoutMillis(
+            isGoogleGemini, requestItems.size,
+        )
         for (attempt in 0 until OpenAiHttpRetryPolicy.MAX_ATTEMPTS) {
             // A new request starts on the next key; transient retries use the next
             // configured key without repeating the entire song translation queue.
@@ -102,6 +109,11 @@ internal object OpenAiTranslationClient {
             var connection: HttpURLConnection? = null
             var retryDelayMs: Long? = null
             try {
+                LogManager.i(
+                    "AppleMusicAiService",
+                    "stage=primary_request model=${configs.model.orEmpty().take(80)} " +
+                        "attempt=${attempt + 1} read_timeout_ms=$readTimeoutMs",
+                )
                 HookLogger.d(
                     "OpenAiTranslationClient",
                     "发送翻译请求: model=${configs.model}, url=$apiUrl, attempt=${attempt + 1}"
@@ -111,7 +123,7 @@ internal object OpenAiTranslationClient {
                     // Timed-out requests must reach Qwen fallback promptly rather
                     // than leave a song with neither translation nor Hangul phonetics.
                     connectTimeout = 20 * 1000
-                    readTimeout = if (isGoogleGemini) 150_000 else 180_000
+                    readTimeout = readTimeoutMs
                     doOutput = true
                     setRequestProperty("Content-Type", "application/json")
                     setRequestProperty("Authorization", "Bearer $selectedKey")
@@ -128,7 +140,7 @@ internal object OpenAiTranslationClient {
                     val responseObj = json.decodeFromString<OpenAiChatResponse>(responseBody)
                     val content = responseObj.choices.firstOrNull()?.message?.content ?: run {
                         HookLogger.w("OpenAiTranslationClient", "翻译响应为空")
-                        return@withContext null
+                        return@withContext fallback("empty_response")
                     }
                     HookLogger.d("OpenAiTranslationClient", "翻译请求完成: code=$responseCode")
                     val parsed = AITranslationResponseParser.parse(content, requestIndices)
@@ -143,7 +155,11 @@ internal object OpenAiTranslationClient {
                         )
                         return@withContext fallback("quality_invalid")
                     }
-                    return@withContext if (isGoogleGemini) {
+                    return@withContext if (AiTranslationRecoveryPolicy.shouldRepairAfterSuccess(
+                            song != null && AIPronunciationPolicy.shouldEnrich(song) &&
+                                KoreanLyricOutputPolicy.needsPronunciationRepair(parsed, payload.lyrics.size),
+                            groqAvailable,
+                        )) {
                         GroqMultiModelClient.enrichMissingPronunciation(
                             configs, song, payload, parsed,
                         )
@@ -175,8 +191,7 @@ internal object OpenAiTranslationClient {
                         "stage=http_rejected code=$responseCode reason=$reason"
                     )
                     HookLogger.e("OpenAiTranslationClient", "翻译请求失败: code=$responseCode")
-                    return@withContext if (responseCode == 429 || responseCode in 500..599)
-                        fallback("http_$responseCode") else null
+                    return@withContext fallback("http_$responseCode")
                 }
             } catch (e: CancellationException) {
                 throw e

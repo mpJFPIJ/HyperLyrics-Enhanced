@@ -35,10 +35,7 @@ internal object GroqMultiModelClient {
             !title.equals("Unknown Track", true) && !artist.equals("Unknown Artist", true)
 
     internal fun isFallbackError(reason: String): Boolean =
-        reason.startsWith("http_5") || reason == "http_429" ||
-            reason == "EOFException" || reason == "network_error" ||
-            reason == "retry_exhausted" || reason == "empty_response" ||
-            reason == "quality_invalid"
+        AiTranslationRecoveryPolicy.shouldUseGroqFallback(reason, true)
 
     suspend fun research(configs: AiTranslationConfigs, song: Song, lines: List<String>): String? =
         withContext(Dispatchers.IO) {

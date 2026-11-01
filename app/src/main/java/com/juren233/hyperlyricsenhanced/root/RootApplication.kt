@@ -22,6 +22,7 @@ import io.github.libxposed.service.XposedService
 import io.github.libxposed.service.XposedServiceHelper
 
 class RootApplication : Application() {
+    private val serviceBindingTracker = ServiceBindingTracker<XposedService>()
 
     override fun onCreate() {
         super.onCreate()
@@ -43,12 +44,14 @@ class RootApplication : Application() {
 
         XposedServiceHelper.registerListener(object : XposedServiceHelper.OnServiceListener {
             override fun onServiceBind(service: XposedService) {
+                if (!serviceBindingTracker.bind(service)) return
                 xposedService = service
                 LogManager.i("PrefsBridge", "xposed_service_bound")
                 syncAllPreferences(this@RootApplication)
                 OfficialProviderScopeManager.requestConfiguredScopes(service)
             }
             override fun onServiceDied(service: XposedService) {
+                if (!serviceBindingTracker.died(service)) return
                 xposedService = null
                 LogManager.w("PrefsBridge", "xposed_service_died")
                 OfficialProviderScopeManager.onServiceDied()

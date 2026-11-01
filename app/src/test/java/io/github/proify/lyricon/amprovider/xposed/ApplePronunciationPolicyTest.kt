@@ -157,9 +157,9 @@ class ApplePronunciationPolicyTest {
     }
 
     @Test
-    fun `spreads Hangul pronunciation across native Japanese karaoke words`() {
+    fun `preserves complete Hangul words when Japanese karaoke has more word cells`() {
         assertEquals(
-            listOf("키", "미", "노", "나와"),
+            listOf("키미노", "", "", "나와"),
             ApplePronunciationPolicy.displaySegments(
                 pronunciation = "키미노 나와",
                 mainWordTexts = listOf("君", "の", "名", "は"),
@@ -170,6 +170,17 @@ class ApplePronunciationPolicyTest {
             ApplePronunciationPolicy.displaySegments(
                 pronunciation = "아이 러브 유",
                 mainWordTexts = listOf("I", "love", "you"),
+            ),
+        )
+    }
+
+    @Test
+    fun `never cuts a Korean reading in the middle of a word`() {
+        assertEquals(
+            listOf("이마", "코노세데", "키미", "다케", "", "다이세이카이"),
+            ApplePronunciationPolicy.displaySegments(
+                pronunciation = "이마 코노세데 키미 다케 다이세이카이",
+                mainWordTexts = listOf("今", "この世で", "君", "だけ", "大正", "解"),
             ),
         )
     }

@@ -72,6 +72,7 @@ class AppleMusicAiTranslationService : Service() {
             synchronized(requestLock) {
                 generation.incrementAndGet()
                 requestJob?.cancel()
+                AITranslator.cancelActiveRequests()
                 requestJob = null
                 activeRequestKey = null
                 activeReceiver = null
@@ -101,6 +102,7 @@ class AppleMusicAiTranslationService : Service() {
                 // The currently executing task may otherwise repopulate the
                 // cache and return a stale result after the user deleted it.
                 requestJob?.cancel()
+                AITranslator.cancelActiveRequests()
                 requestJob = null
                 activeRequestKey = null
                 activeReceiver = null
@@ -163,6 +165,9 @@ class AppleMusicAiTranslationService : Service() {
 
                 val serial = generation.incrementAndGet()
                 requestJob?.cancel()
+                // The scheduler has an independent IO scope: cancelling just
+                // this Binder coroutine leaves the HTTP request running.
+                AITranslator.cancelActiveRequests()
                 activeRequestKey = requestKey
                 activeReceiver = receiver
                 requestJob = scope.launch {
@@ -318,6 +323,7 @@ class AppleMusicAiTranslationService : Service() {
 
     override fun onDestroy() {
         synchronized(requestLock) { requestJob?.cancel() }
+        AITranslator.cancelActiveRequests()
         scope.cancel()
         super.onDestroy()
     }

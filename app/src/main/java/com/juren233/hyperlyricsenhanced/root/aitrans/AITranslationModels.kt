@@ -23,6 +23,10 @@ internal data class OpenAiChatRequest(
     val temperature: Float? = null,
     @SerialName("top_p") val topP: Float? = null,
     @SerialName("max_tokens") val maxTokens: Int? = null,
+    @SerialName("max_completion_tokens") val maxCompletionTokens: Int? = null,
+    @SerialName("reasoning_format") val reasoningFormat: String? = null,
+    @SerialName("reasoning_effort") val reasoningEffort: String? = null,
+    val stream: Boolean? = null,
     @SerialName("presence_penalty") val presencePenalty: Float? = null,
     @SerialName("frequency_penalty") val frequencyPenalty: Float? = null
 )
@@ -45,5 +49,6 @@ internal data class OpenAiChatResponse(
 
 @Serializable
 internal data class Choice(
-    val message: ChatMessage
+    val message: ChatMessage,
+    @SerialName("finish_reason") val finishReason: String? = null,
 )

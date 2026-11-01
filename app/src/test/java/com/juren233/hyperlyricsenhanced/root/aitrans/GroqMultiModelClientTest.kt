@@ -5,6 +5,36 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class GroqMultiModelClientTest {
+    @org.junit.Test fun reasoningFormatIsModelSpecific() {
+        org.junit.Assert.assertNull(
+            GroqMultiModelClient.reasoningFormatFor(GroqMultiModelClient.FALLBACK_MODEL),
+        )
+        org.junit.Assert.assertEquals(
+            "hidden",
+            GroqMultiModelClient.reasoningFormatFor(GroqMultiModelClient.SECONDARY_FALLBACK_MODEL),
+        )
+    }
+
+    @org.junit.Test fun groqErrorCategoryCannotLeakProviderMessage() {
+        org.junit.Assert.assertEquals(
+            "invalid_request_error",
+            GroqMultiModelClient.safeErrorCategory(
+                "{\"error\":{\"type\":\"invalid_request_error\",\"message\":\"private lyric\"}}",
+            ),
+        )
+        org.junit.Assert.assertEquals(
+            "unknown",
+            GroqMultiModelClient.safeErrorCategory(
+                "{\"error\":{\"type\":\"private lyric\"}}",
+            ),
+        )
+        org.junit.Assert.assertEquals(
+            "response_format",
+            GroqMultiModelClient.safeErrorParameter(
+                "{\"error\":{\"param\":\"response_format\",\"message\":\"private lyric\"}}",
+            ),
+        )
+    }
     @Test fun researchRequiresConsentKeyAndSongIdentity() {
         val cfg = AiTranslationConfigs(webSearchEnabled = true, groqApiKey = "groq-secret")
         assertTrue(GroqMultiModelClient.canResearch(cfg, "Song", "Artist"))

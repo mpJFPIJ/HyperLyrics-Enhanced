@@ -8,7 +8,10 @@ import com.juren233.hyperlyricsenhanced.lyric.model.Song
 import com.juren233.hyperlyricsenhanced.lyric.style.AiTranslationConfigs
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import java.io.EOFException
 import java.io.OutputStreamWriter
@@ -49,6 +52,7 @@ internal object OpenAiTranslationClient {
         val payload = TranslationRequest(lyrics = requestItems)
         val requestIndices = requestItems.map { it.index }.toSet()
         val isGoogleGemini = OpenAiRequestCompatibility.isGoogleGemini(configs.model, baseUrl)
+        val useStreaming = AiTranslationRecoveryPolicy.useNvidiaStreaming(baseUrl)
         // Search research is a bounded, optional precursor. Failure never blocks the
         // existing Gemini/OpenAI-compatible translation and Hangul pronunciation path.
         val webReference = song?.let {
@@ -86,7 +90,10 @@ internal object OpenAiTranslationClient {
             // Leave these absent so the Gemini endpoint uses safe defaults.
             temperature = configs.temperature.takeUnless { isGoogleGemini },
             topP = configs.topP.takeUnless { isGoogleGemini },
-            maxTokens = configs.maxTokens.takeIf { it > 0 },
+            maxTokens = if (useStreaming) AiTranslationRecoveryPolicy.outputTokenBudget(
+                configs.maxTokens, requestItems.size,
+            ) else configs.maxTokens.takeIf { it > 0 },
+            stream = true.takeIf { useStreaming },
             presencePenalty = configs.presencePenalty.takeUnless { isGoogleGemini },
             frequencyPenalty = configs.frequencyPenalty.takeUnless { isGoogleGemini }
         )
@@ -99,20 +106,22 @@ internal object OpenAiTranslationClient {
         // quota failures and permanent 4xx never enter a retry loop.
         val requestBody = chatRequest.toJson()
         val url = URL(apiUrl)
-        val readTimeoutMs = AiTranslationRecoveryPolicy.readTimeoutMillis(
-            isGoogleGemini, requestItems.size,
-        )
+        val readTimeoutMs = if (useStreaming) AiTranslationRecoveryPolicy.streamReadTimeoutMillis()
+            else AiTranslationRecoveryPolicy.readTimeoutMillis(isGoogleGemini, requestItems.size)
         for (attempt in 0 until OpenAiHttpRetryPolicy.MAX_ATTEMPTS) {
             // A new request starts on the next key; transient retries use the next
             // configured key without repeating the entire song translation queue.
             val selectedKey = orderedKeys[attempt % orderedKeys.size]
             var connection: HttpURLConnection? = null
+            var cancellationWatcher: Job? = null
             var retryDelayMs: Long? = null
+            val startedAt = System.nanoTime()
             try {
                 LogManager.i(
                     "AppleMusicAiService",
                     "stage=primary_request model=${configs.model.orEmpty().take(80)} " +
-                        "attempt=${attempt + 1} read_timeout_ms=$readTimeoutMs",
+                        "attempt=${attempt + 1} read_timeout_ms=$readTimeoutMs " +
+                        "stream=$useStreaming max_tokens=${chatRequest.maxTokens ?: 0}",
                 )
                 HookLogger.d(
                     "OpenAiTranslationClient",
@@ -127,18 +136,43 @@ internal object OpenAiTranslationClient {
                     doOutput = true
                     setRequestProperty("Content-Type", "application/json")
                     setRequestProperty("Authorization", "Bearer $selectedKey")
+                    if (useStreaming) setRequestProperty("Accept", "text/event-stream")
                 }
+                cancellationWatcher = HttpConnectionCancellation.watch(connection)
 
-                OutputStreamWriter(connection.outputStream).use {
+                OutputStreamWriter(connection.outputStream, Charsets.UTF_8).use {
                     it.write(requestBody)
                 }
 
                 val responseCode = connection.responseCode
                 if (responseCode == HttpURLConnection.HTTP_OK) {
-                    LogManager.i("AppleMusicAiService", "stage=http_success code=$responseCode")
-                    val responseBody = connection.inputStream.bufferedReader().use { it.readText() }
-                    val responseObj = json.decodeFromString<OpenAiChatResponse>(responseBody)
-                    val content = responseObj.choices.firstOrNull()?.message?.content ?: run {
+                    val completion = if (useStreaming) {
+                        connection.inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
+                            OpenAiStreamResponseParser.read(
+                                reader, startedAt + AiTranslationRecoveryPolicy.streamDeadlineMillis() * 1_000_000L,
+                            )
+                        }
+                    } else {
+                        val responseBody = connection.inputStream.bufferedReader(Charsets.UTF_8)
+                            .use { it.readText() }
+                        val choice = json.decodeFromString<OpenAiChatResponse>(responseBody)
+                            .choices.firstOrNull()
+                        OpenAiStreamResponseParser.Completion(
+                            choice?.message?.content.orEmpty(), choice?.finishReason,
+                        )
+                    }
+                    currentCoroutineContext().ensureActive()
+                    val elapsedMs = (System.nanoTime() - startedAt) / 1_000_000L
+                    LogManager.i(
+                        "AppleMusicAiService",
+                        "stage=http_success code=$responseCode duration_ms=$elapsedMs " +
+                            "finish_reason=${completion.finishReason.orEmpty()}",
+                    )
+                    if (completion.finishReason == "length") {
+                        LogManager.w("AppleMusicAiService", "stage=primary_truncated")
+                        return@withContext fallback("quality_invalid")
+                    }
+                    val content = completion.content.takeIf { it.isNotBlank() } ?: run {
                         HookLogger.w("OpenAiTranslationClient", "翻译响应为空")
                         return@withContext fallback("empty_response")
                     }
@@ -150,8 +184,9 @@ internal object OpenAiTranslationClient {
                     ) {
                         LogManager.w(
                             "AppleMusicAiService",
-                            "stage=gemini_quality_rejected translated=" +
-                                parsed.count { it.trans.isNotBlank() },
+                            "stage=primary_quality_rejected translated=" +
+                                parsed.count { it.trans.isNotBlank() } +
+                                " expected=${requestIndices.size} finish_reason=${completion.finishReason.orEmpty()}",
                         )
                         return@withContext fallback("quality_invalid")
                     }
@@ -196,10 +231,12 @@ internal object OpenAiTranslationClient {
             } catch (e: CancellationException) {
                 throw e
             } catch (_: EOFException) {
+                currentCoroutineContext().ensureActive()
                 LogManager.w("AppleMusicAiService", "stage=http_io_failed type=EOFException")
                 HookLogger.w("OpenAiTranslationClient", "翻译连接意外关闭: reason=EOF")
                 return@withContext fallback("EOFException")
             } catch (e: Exception) {
+                currentCoroutineContext().ensureActive()
                 LogManager.w(
                     "AppleMusicAiService",
                     "stage=http_io_failed type=${e.javaClass.simpleName}"
@@ -211,6 +248,7 @@ internal object OpenAiTranslationClient {
                 )
                 return@withContext fallback("network_error")
             } finally {
+                cancellationWatcher?.cancel()
                 connection?.disconnect()
             }
             // Delay after disconnecting, so no open connection is held during backoff.

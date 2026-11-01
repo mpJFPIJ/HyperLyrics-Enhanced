@@ -18,4 +18,17 @@ internal object AiTranslationRecoveryPolicy {
 
     fun shouldRepairAfterSuccess(needsPronunciation: Boolean, groqAvailable: Boolean): Boolean =
         needsPronunciation && groqAvailable
+
+    /** NVIDIA NIM supports streamed chat completions; use it to avoid idle read timeouts. */
+    fun useNvidiaStreaming(baseUrl: String): Boolean = runCatching {
+        java.net.URI(baseUrl).host.equals("integrate.api.nvidia.com", ignoreCase = true)
+    }.getOrDefault(false)
+
+    /** The NIM default of 4096 output tokens can truncate multi-line Korean+Hangul JSON. */
+    fun outputTokenBudget(configured: Int, lineCount: Int): Int =
+        if (configured > 0) configured else (lineCount * 140).coerceIn(4096, 16_000)
+
+    fun streamReadTimeoutMillis(): Int = 45_000
+
+    fun streamDeadlineMillis(): Long = 180_000L
 }

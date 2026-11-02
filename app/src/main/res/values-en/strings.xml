@@ -884,4 +884,15 @@
     <string name="option_apple_music_lyrics_visibility_apple">Follow Apple preference</string>
     <string name="option_apple_music_lyrics_visibility_show">Show when available</string>
     <string name="option_apple_music_lyrics_visibility_hide">Hide</string>
+    <string name="diagnostics_auto_title">Automatic diagnostic upload</string>
+    <string name="diagnostics_auto_summary">Uploads structured error codes and status only; never lyrics or tokens. Off by default.</string>
+    <string name="diagnostics_setup_title">Private GitHub diagnostics</string>
+    <string name="diagnostics_not_configured">Not configured</string>
+    <string name="diagnostics_upload_now">Upload diagnostics now</string>
+    <string name="diagnostics_queued">Waiting for network job</string>
+    <string name="diagnostics_private_warning">Private repositories only. Use a fine-grained token with Contents read/write for this repository alone. Git history can retain older reports.</string>
+    <string name="diagnostics_repository">Repository (owner/repo)</string>
+    <string name="diagnostics_token">GitHub fine-grained token</string>
+    <string name="diagnostics_token_optional">Leave blank to keep the existing saved token</string>
+    <string name="diagnostics_disconnect">Disconnect</string>
 </resources>

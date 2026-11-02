@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="diagnostics_auto_title">진단 로그 자동 전송</string>
+    <string name="diagnostics_auto_summary">가사·API 키는 제외하고 오류 코드와 상태만 전송합니다. 기본적으로 꺼져 있습니다.</string>
+    <string name="diagnostics_setup_title">비공개 GitHub 진단 저장소</string>
+    <string name="diagnostics_not_configured">설정되지 않음</string>
+    <string name="diagnostics_upload_now">지금 진단 로그 전송</string>
+    <string name="diagnostics_queued">네트워크 작업 대기 중</string>
+    <string name="diagnostics_private_warning">비공개 저장소만 허용합니다. 해당 저장소에만 Contents 읽기/쓰기 권한을 가진 Fine-grained 토큰을 사용하세요. 이전 로그는 Git 기록에 남을 수 있습니다.</string>
+    <string name="diagnostics_repository">저장소 (owner/repo)</string>
+    <string name="diagnostics_token">GitHub Fine-grained 토큰</string>
+    <string name="diagnostics_token_optional">비워 두면 기존 토큰이 유지됩니다</string>
+    <string name="diagnostics_disconnect">연결 해제</string>
+</resources>

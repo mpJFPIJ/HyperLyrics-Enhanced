@@ -610,6 +610,7 @@ private fun LazyListScope.settingsSections(
                     title = stringResource(R.string.export_all_logs),
                     onClick = onExportAllLogs,
                 )
+                DiagnosticGitHubSettingsControls()
             }
         }
     }

@@ -3,9 +3,11 @@
     <cloud-backup>
         <!-- Never export private AI API key pools to a cloud backup. -->
         <exclude domain="sharedpref" path="hyperlyricsenhanced_private_ai_credentials.xml" />
+        <exclude domain="sharedpref" path="hyperlyricsenhanced_private_diagnostics.xml" />
     </cloud-backup>
     <device-transfer>
         <!-- New devices must opt in by entering their own API credentials. -->
         <exclude domain="sharedpref" path="hyperlyricsenhanced_private_ai_credentials.xml" />
+        <exclude domain="sharedpref" path="hyperlyricsenhanced_private_diagnostics.xml" />
     </device-transfer>
 </data-extraction-rules>

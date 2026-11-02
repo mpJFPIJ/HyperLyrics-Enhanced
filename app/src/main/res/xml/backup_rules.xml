@@ -2,4 +2,5 @@
 <full-backup-content>
     <!-- Multi-key AI credentials stay on this device, not in Android cloud backups. -->
     <exclude domain="sharedpref" path="hyperlyricsenhanced_private_ai_credentials.xml" />
+    <exclude domain="sharedpref" path="hyperlyricsenhanced_private_diagnostics.xml" />
 </full-backup-content>

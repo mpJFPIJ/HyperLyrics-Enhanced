@@ -886,4 +886,15 @@
     <string name="option_apple_music_lyrics_visibility_apple">遵循 Apple 设置</string>
     <string name="option_apple_music_lyrics_visibility_show">显示（有内容时）</string>
     <string name="option_apple_music_lyrics_visibility_hide">隐藏</string>
+    <string name="diagnostics_auto_title">自动上传诊断日志</string>
+    <string name="diagnostics_auto_summary">仅上传已过滤的错误代码和状态，不包含歌词或密钥。默认关闭。</string>
+    <string name="diagnostics_setup_title">设置私有 GitHub 诊断仓库</string>
+    <string name="diagnostics_not_configured">尚未配置</string>
+    <string name="diagnostics_upload_now">立即上传诊断</string>
+    <string name="diagnostics_queued">等待联网任务运行</string>
+    <string name="diagnostics_private_warning">仅允许私有仓库。请使用仅可访问该仓库、具有 Contents 读写权限的细粒度令牌。Git 历史记录可能保留旧日志。</string>
+    <string name="diagnostics_repository">仓库 (owner/repo)</string>
+    <string name="diagnostics_token">GitHub 细粒度访问令牌</string>
+    <string name="diagnostics_token_optional">留空以保留已保存的令牌</string>
+    <string name="diagnostics_disconnect">断开连接</string>
 </resources>

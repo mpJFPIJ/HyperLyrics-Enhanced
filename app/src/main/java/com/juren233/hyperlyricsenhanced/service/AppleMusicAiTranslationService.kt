@@ -7,6 +7,7 @@ import android.os.Binder
 import android.os.IBinder
 import android.util.Log
 import com.juren233.hyperlyricsenhanced.utils.LogManager
+import com.juren233.hyperlyricsenhanced.utils.diagnostics.DiagnosticUploadScheduler
 import com.juren233.hyperlyricsenhanced.IAppleMusicAiTranslator
 import com.juren233.hyperlyricsenhanced.IAppleMusicTranslationReceiver
 import com.juren233.hyperlyricsenhanced.common.RootConstants
@@ -223,6 +224,7 @@ class AppleMusicAiTranslationService : Service() {
                             .count { !it.translation.isNullOrBlank() }
                         if (translated === song || translatedLines == 0) {
                             LogManager.w(TAG, "stage=no_translation_result")
+                            DiagnosticUploadScheduler.onTranslationFailure(this@AppleMusicAiTranslationService)
                             return@launch
                         }
                         // The AI applicator can retain an incoming third-party
@@ -259,6 +261,7 @@ class AppleMusicAiTranslationService : Service() {
                     } catch (error: Exception) {
                         // Never log the lyrics, request body, or private API credentials.
                         LogManager.w(TAG, "stage=translation_failed type=${error.javaClass.simpleName}")
+                        DiagnosticUploadScheduler.onTranslationFailure(this@AppleMusicAiTranslationService)
                     } finally {
                         synchronized(requestLock) {
                             if (serial == generation.get() && activeRequestKey == requestKey) {

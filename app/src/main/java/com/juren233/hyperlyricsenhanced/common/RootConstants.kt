@@ -359,6 +359,8 @@ object RootConstants {
     const val KEY_HOOK_AI_TRANS_SKIP_EXISTING_TRANSLATION = "key_hook_ai_trans_skip_existing_translation"
     const val KEY_HOOK_AI_TRANS_FORCE_OVERRIDE = "key_hook_ai_trans_force_override"
     const val KEY_HOOK_AI_TRANS_WEB_SEARCH = "key_hook_ai_trans_web_search"
+    /** Safe status counters in Apple Music, never raw prompts, responses, or API keys. */
+    const val KEY_HOOK_AI_TRANS_SHOW_PROGRESS = "key_hook_ai_trans_show_progress"
     const val KEY_HOOK_AI_TRANS_PROVIDER = "key_hook_ai_trans_provider"
     const val KEY_HOOK_AI_TRANS_API_KEY = "key_hook_ai_trans_api_key"
     /** Local-only multi-key pool. Never synced to the Apple Music/NPatch process. */
@@ -712,6 +714,7 @@ object RootConstants {
     const val DEFAULT_HOOK_AI_TRANS_SKIP_EXISTING_TRANSLATION = false
     const val DEFAULT_HOOK_AI_TRANS_FORCE_OVERRIDE = false
     const val DEFAULT_HOOK_AI_TRANS_WEB_SEARCH = false
+    const val DEFAULT_HOOK_AI_TRANS_SHOW_PROGRESS = false
     const val DEFAULT_HOOK_AI_TRANS_TARGET_LANG = "中文"
     const val DEFAULT_HOOK_AI_TRANS_MODEL = "mimo-v2-flash"
     const val DEFAULT_HOOK_AI_TRANS_BASE_URL = "https://api.xiaomimimo.com/v1/"

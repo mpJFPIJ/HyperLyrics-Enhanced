@@ -53,6 +53,7 @@ object AITranslator {
         song: Song,
         configs: AiTranslationConfigs,
         forceOverride: Boolean = false,
+        onProgress: ((AiTranslationProgress) -> Unit)? = null,
     ): Song {
         if (!configs.isUsable) {
             HookLogger.w("AITranslator", "跳过翻译：配置不完整，API Key 或其他配置为空")
@@ -62,7 +63,7 @@ object AITranslator {
 
         HookLogger.d("AITranslator", "正在翻译：${song.name}（共 ${song.lyrics?.size ?: 0} 行）")
         return try {
-            translateSong(song, configs, forceOverride)
+            translateSong(song, configs, forceOverride, onProgress)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -125,7 +126,8 @@ object AITranslator {
     private suspend fun translateSong(
         song: Song,
         configs: AiTranslationConfigs,
-        forceOverride: Boolean
+        forceOverride: Boolean,
+        onProgress: ((AiTranslationProgress) -> Unit)? = null,
     ): Song {
         val currentLyrics = song.lyrics ?: return song
         val originalLines = currentLyrics.map { it.text?.trim() ?: "" }
@@ -171,7 +173,9 @@ object AITranslator {
         }
 
         HookLogger.d("AITranslator", "正在请求 AI：本地无记录，准备发起在线翻译")
-        val apiResults = scheduler.getOrEnqueue(songContentId, configs, song, originalLines).await()
+        val apiResults = scheduler.getOrEnqueue(
+            songContentId, configs, song, originalLines, onProgress,
+        ).await()
         if (cache.currentGroupEpoch(groupId) != startingEpoch) return song
         if (apiResults.isNullOrEmpty()) {
             HookLogger.w("AITranslator", "翻译失败：未能获取到 ${song.name} 的 AI 翻译")

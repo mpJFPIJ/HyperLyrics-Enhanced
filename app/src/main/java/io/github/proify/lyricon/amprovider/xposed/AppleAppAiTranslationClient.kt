@@ -82,6 +82,7 @@ internal class AppleAppAiTranslationClient(
             if (previous?.contentEquals(compressedSong) == true) return@post
             previous = compressedSong.copyOf()
             generation += 1
+            AppleAiProgressOverlay.update("preparing")
             pending = compressedSong.takeIf { it.isNotEmpty() }?.copyOf()
             ProviderLogger.info(
                 "standalone_ai stage=song_submitted bytes=${compressedSong.size} " +
@@ -89,6 +90,7 @@ internal class AppleAppAiTranslationClient(
             )
             if (pending == null || isSystemUiBridgeActive()) {
                 pending = null
+                AppleAiProgressOverlay.update("cancelled")
                 // Stop spending API tokens on a song that has ended or was
                 // handed back to the regular SystemUI path.
                 runCatching { binder?.cancel() }
@@ -114,6 +116,10 @@ internal class AppleAppAiTranslationClient(
         val callback = object : IAppleMusicTranslationReceiver.Stub() {
             override fun onOnlineTranslationResult(compressedSong: ByteArray) = Unit
 
+            override fun onAiTranslationProgress(
+                stage: String?, batch: Int, totalBatches: Int, fragments: Int,
+            ) = Unit
+
             override fun onOnlineTranslationCleared(songId: String?) {
                 if (songId == expectedSongId && generation == currentGeneration) {
                     onTranslationCleared(expectedSongId)
@@ -133,6 +139,7 @@ internal class AppleAppAiTranslationClient(
         }
         return runCatching {
             target.clearSongTranslation(compressedSong.copyOf(), callback)
+            AppleAiProgressOverlay.update("cancelled")
             ProviderLogger.info("standalone_ai stage=song_clear_requested")
             true
         }.onFailure {
@@ -154,6 +161,7 @@ internal class AppleAppAiTranslationClient(
             // The separately installed app may not be present yet. Do not
             // permanently deduplicate this song if connecting was impossible.
             previous = null
+            AppleAiProgressOverlay.update("failed")
             ProviderLogger.info("Apple Music standalone AI service unavailable")
         }
     }
@@ -180,6 +188,15 @@ internal class AppleAppAiTranslationClient(
                 )
                 if (current) {
                     onTranslationReceived(compressedSong)
+                    AppleAiProgressOverlay.update("completed")
+                }
+            }
+
+            override fun onAiTranslationProgress(
+                stage: String?, batch: Int, totalBatches: Int, fragments: Int,
+            ) {
+                if (requestGeneration == generation && !isSystemUiBridgeActive()) {
+                    AppleAiProgressOverlay.update(stage ?: return, batch, totalBatches, fragments)
                 }
             }
 
@@ -205,6 +222,7 @@ internal class AppleAppAiTranslationClient(
             // The service may have died after connection; allow a later song
             // publication to retry instead of silently losing the request.
             previous = null
+            AppleAiProgressOverlay.update("failed")
             ProviderLogger.error(
                 "standalone_ai stage=ipc_failed type=${it.javaClass.simpleName}"
             )

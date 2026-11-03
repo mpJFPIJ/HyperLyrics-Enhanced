@@ -17,6 +17,7 @@ import com.juren233.hyperlyricsenhanced.lyric.style.AiTranslationConfigs
 import com.juren233.hyperlyricsenhanced.root.aitrans.AiApiKeyStore
 import com.juren233.hyperlyricsenhanced.lyric.style.AiTranslationProvider
 import com.juren233.hyperlyricsenhanced.root.aitrans.AITranslator
+import com.juren233.hyperlyricsenhanced.root.aitrans.AiTranslationProgress
 import io.github.proify.extensions.deflate
 import io.github.proify.extensions.inflate
 import kotlinx.coroutines.CancellationException
@@ -51,6 +52,28 @@ class AppleMusicAiTranslationService : Service() {
     private var requestJob: Job? = null
     private var activeRequestKey: String? = null
     private var activeReceiver: IAppleMusicTranslationReceiver? = null
+
+    private fun sendProgress(
+        serial: Long,
+        requestKey: String,
+        progress: AiTranslationProgress,
+    ) {
+        val enabled = getSharedPreferences(UIConstants.PREF_NAME, MODE_PRIVATE).getBoolean(
+            RootConstants.KEY_HOOK_AI_TRANS_SHOW_PROGRESS,
+            RootConstants.DEFAULT_HOOK_AI_TRANS_SHOW_PROGRESS,
+        )
+        if (!enabled) return
+        val receiver = synchronized(requestLock) {
+            if (serial == generation.get() && activeRequestKey == requestKey) activeReceiver else null
+        }
+        runCatching {
+            receiver?.onAiTranslationProgress(
+                progress.stage, progress.batch, progress.totalBatches, progress.fragments,
+            )
+        }.onFailure {
+            LogManager.w(TAG, "stage=progress_callback_failed type=${it.javaClass.simpleName}")
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -173,6 +196,7 @@ class AppleMusicAiTranslationService : Service() {
                 activeReceiver = receiver
                 requestJob = scope.launch {
                     try {
+                        sendProgress(serial, requestKey, AiTranslationProgress("preparing"))
                         val prefs = getSharedPreferences(UIConstants.PREF_NAME, MODE_PRIVATE)
                         LogManager.i(TAG, "stage=song_decoded lines=${song.lyrics.orEmpty().size}")
                         val forceOverride = prefs.getBoolean(
@@ -197,6 +221,7 @@ class AppleMusicAiTranslationService : Service() {
                                 forceOverride = forceOverride,
                             )
                         ) {
+                            sendProgress(serial, requestKey, AiTranslationProgress("skipped"))
                             LogManager.i(
                                 TAG, "stage=request_skipped enabled=$enabled " +
                                     "hasLyrics=${!song.lyrics.isNullOrEmpty()} " +
@@ -207,6 +232,7 @@ class AppleMusicAiTranslationService : Service() {
 
                         val config = translationConfig(prefs)
                         if (!config.isUsable) {
+                            sendProgress(serial, requestKey, AiTranslationProgress("failed"))
                             LogManager.w(TAG, "stage=config_incomplete")
                             return@launch
                         }
@@ -215,6 +241,7 @@ class AppleMusicAiTranslationService : Service() {
                             song = song,
                             configs = config,
                             forceOverride = forceOverride,
+                            onProgress = { progress -> sendProgress(serial, requestKey, progress) },
                         )
                         if (serial != generation.get()) {
                             LogManager.i(TAG, "stage=result_stale")
@@ -223,6 +250,7 @@ class AppleMusicAiTranslationService : Service() {
                         val translatedLines = translated.lyrics.orEmpty()
                             .count { !it.translation.isNullOrBlank() }
                         if (translated === song || translatedLines == 0) {
+                            sendProgress(serial, requestKey, AiTranslationProgress("failed"))
                             LogManager.w(TAG, "stage=no_translation_result")
                             DiagnosticUploadScheduler.onTranslationFailure(this@AppleMusicAiTranslationService)
                             return@launch
@@ -254,11 +282,15 @@ class AppleMusicAiTranslationService : Service() {
                                 activeReceiver else null
                         }
                         target?.onOnlineTranslationResult(result)
-                        if (target != null) LogManager.i(TAG, "stage=result_sent bytes=${result.size}")
+                        if (target != null) {
+                            sendProgress(serial, requestKey, AiTranslationProgress("completed"))
+                            LogManager.i(TAG, "stage=result_sent bytes=${result.size}")
+                        }
                     } catch (cancelled: CancellationException) {
                         LogManager.i(TAG, "stage=request_cancelled_inflight")
                         throw cancelled
                     } catch (error: Exception) {
+                        sendProgress(serial, requestKey, AiTranslationProgress("failed"))
                         // Never log the lyrics, request body, or private API credentials.
                         LogManager.w(TAG, "stage=translation_failed type=${error.javaClass.simpleName}")
                         DiagnosticUploadScheduler.onTranslationFailure(this@AppleMusicAiTranslationService)

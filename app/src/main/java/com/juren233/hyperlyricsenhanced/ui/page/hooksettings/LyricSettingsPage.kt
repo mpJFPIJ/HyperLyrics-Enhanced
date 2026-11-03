@@ -134,6 +134,14 @@ fun LyricSettingsPage() {
             )
         )
     }
+    var appleAiProgressEnabled by remember {
+        mutableStateOf(
+            prefs.getBoolean(
+                RootConstants.KEY_HOOK_AI_TRANS_SHOW_PROGRESS,
+                RootConstants.DEFAULT_HOOK_AI_TRANS_SHOW_PROGRESS,
+            )
+        )
+    }
     var apiKeys by remember {
         mutableStateOf(AiApiKeyStore.read(context, prefs).joinToString("\n"))
     }
@@ -386,6 +394,18 @@ fun LyricSettingsPage() {
                     )
                     AnimatedVisibility(visible = aiTransEnabled) {
                         Column {
+                            SwitchPreference(
+                                title = if (koreanLocale) "Apple Music에서 AI 진행 상황 표시"
+                                    else "Show AI progress in Apple Music",
+                                summary = if (koreanLocale)
+                                    "번역 요청·응답 수신·완료·오류를 Apple Music 화면에 잠시 표시합니다. 가사와 API 키는 표시하지 않습니다."
+                                else "Show a small request/stream/completion status inside Apple Music. Never shows lyrics or API keys.",
+                                checked = appleAiProgressEnabled,
+                                onCheckedChange = {
+                                    appleAiProgressEnabled = it
+                                    saveConfig(RootConstants.KEY_HOOK_AI_TRANS_SHOW_PROGRESS, it)
+                                },
+                            )
                             SwitchPreference(
                                 title = stringResource(
                                     R.string.title_ai_trans_auto_ignore_chinese

@@ -37,10 +37,12 @@ internal class AITranslationScheduler(
         key: String,
         configs: AiTranslationConfigs,
         song: Song,
-        originalLines: List<String>
+        originalLines: List<String>,
+        onProgress: ((AiTranslationProgress) -> Unit)? = null,
     ): Deferred<List<TranslationItem>?> {
         synchronized(lock) {
             jobs[key]?.let {
+                if (onProgress != null) it.onProgress = onProgress
                 HookLogger.d(TAG, "复用翻译任务: song=${song.name}, key=$key")
                 return it.deferred
             }
@@ -51,7 +53,8 @@ internal class AITranslationScheduler(
                 configs = configs,
                 song = song,
                 originalLines = originalLines,
-                generation = generation.get()
+                generation = generation.get(),
+                onProgress = onProgress,
             )
             jobs[key] = job
             pending.addLast(job)
@@ -166,7 +169,9 @@ internal class AITranslationScheduler(
             )
             val epoch = cache.currentGroupEpoch(groupId)
             val apiResults =
-                OpenAiTranslationClient.request(job.configs, job.song, job.originalLines)
+                OpenAiTranslationClient.request(job.configs, job.song, job.originalLines) {
+                    job.onProgress?.invoke(it)
+                }
             if (job.state == TranslationJobState.CANCELLED) return
             if (!apiResults.isNullOrEmpty() && job.generation == generation.get()) {
                 val saved = cache.saveToDb(
@@ -201,6 +206,7 @@ internal class AITranslationScheduler(
         val song: Song,
         val originalLines: List<String>,
         val generation: Int,
+        @Volatile var onProgress: ((AiTranslationProgress) -> Unit)? = null,
         val deferred: CompletableDeferred<List<TranslationItem>?> = CompletableDeferred(),
         var coroutineJob: Job? = null,
         @Volatile

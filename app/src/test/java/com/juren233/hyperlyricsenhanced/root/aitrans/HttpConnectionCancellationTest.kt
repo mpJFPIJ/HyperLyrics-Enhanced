@@ -7,8 +7,10 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -29,5 +31,25 @@ class HttpConnectionCancellationTest {
         ready.await()
         worker.cancelAndJoin()
         assertTrue(disconnected.get())
+    }
+
+    @Test fun elapsedNvidiaDeadlineDisconnectsBlockedHttpConnection() = runBlocking {
+        val disconnected = AtomicBoolean(false)
+        val connection = object : HttpURLConnection(URL("https://example.com")) {
+            override fun connect() = Unit
+            override fun disconnect() { disconnected.set(true) }
+            override fun usingProxy(): Boolean = false
+        }
+        val watcher = HttpConnectionCancellation.watch(
+            connection, System.nanoTime() + 30_000_000L,
+        )
+        try {
+            withTimeout(2_000L) {
+                while (!disconnected.get()) delay(5L)
+            }
+            assertTrue(disconnected.get())
+        } finally {
+            watcher.cancelAndJoin()
+        }
     }
 }

@@ -88,6 +88,12 @@ internal class AppleDirectPlayer(
     private var registered = false
 
     private val translationReceiver = object : IAppleMusicTranslationReceiver.Stub() {
+        override fun onAiTranslationProgress(
+            stage: String?, batch: Int, totalBatches: Int, fragments: Int,
+        ) {
+            AppleAiProgressOverlay.update(stage ?: return, batch, totalBatches, fragments)
+        }
+
         override fun onOnlineTranslationResult(compressedSong: ByteArray) {
             val callbackStartedAtNanos = SystemClock.elapsedRealtimeNanos()
             pronunciationDiagnostic(

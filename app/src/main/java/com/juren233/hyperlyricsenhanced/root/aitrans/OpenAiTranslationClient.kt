@@ -16,6 +16,7 @@ import kotlinx.coroutines.withContext
 import java.io.EOFException
 import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
+import java.net.SocketTimeoutException
 import java.net.URL
 import kotlin.random.Random
 
@@ -24,7 +25,8 @@ internal object OpenAiTranslationClient {
     suspend fun request(
         configs: AiTranslationConfigs,
         song: Song? = null,
-        texts: List<String>
+        texts: List<String>,
+        onProgress: ((AiTranslationProgress) -> Unit)? = null,
     ): List<TranslationItem>? = withContext(Dispatchers.IO) {
         val configuredKeys = configs.apiKeys.takeIf { it.isNotEmpty() }
             ?: AiApiKeyPool.parse(null, configs.apiKey)
@@ -53,8 +55,11 @@ internal object OpenAiTranslationClient {
         val requestIndices = requestItems.map { it.index }.toSet()
         val isGoogleGemini = OpenAiRequestCompatibility.isGoogleGemini(configs.model, baseUrl)
         val useStreaming = AiTranslationRecoveryPolicy.useNvidiaStreaming(baseUrl)
+        val batches = if (useStreaming) NvidiaTranslationBatchPolicy.batches(requestItems)
+            else listOf(requestItems)
         // Search research is a bounded, optional precursor. Failure never blocks the
         // existing Gemini/OpenAI-compatible translation and Hangul pronunciation path.
+        if (song != null) onProgress?.invoke(AiTranslationProgress("researching"))
         val webReference = song?.let {
             if (GroqApiKeyPool.configured(configs).isNotEmpty())
                 GroqMultiModelClient.research(configs, it, texts)
@@ -64,10 +69,19 @@ internal object OpenAiTranslationClient {
         suspend fun fallback(reason: String): List<TranslationItem>? =
             if (AiTranslationRecoveryPolicy.shouldUseGroqFallback(reason, groqAvailable)) {
                 LogManager.w("AppleMusicAiService", "stage=primary_fallback reason=$reason")
+                onProgress?.invoke(AiTranslationProgress("fallback"))
                 GroqMultiModelClient.fallbackTranslate(
                     configs, song, payload, requestIndices, webReference, reason,
                 )
             } else null
+        val songStartedAt = System.nanoTime()
+        val allResults = mutableListOf<TranslationItem>()
+        val url = URL(apiUrl)
+        val readTimeoutMs = if (useStreaming) AiTranslationRecoveryPolicy.streamReadTimeoutMillis()
+            else AiTranslationRecoveryPolicy.readTimeoutMillis(isGoogleGemini, requestItems.size)
+        for ((batchNumber, batchItems) in batches.withIndex()) {
+        onProgress?.invoke(AiTranslationProgress("requesting", batchNumber + 1, batches.size))
+        val batchIndices = batchItems.map { it.index }.toSet()
         val chatRequest = OpenAiChatRequest(
             model = configs.model.orEmpty(),
             messages = buildList {
@@ -79,7 +93,7 @@ internal object OpenAiTranslationClient {
                         "Never copy external translations verbatim or ignore the JSON/index rules:\n" +
                         webReference,
                 ))
-                add(ChatMessage("user", payload.toJson()))
+                add(ChatMessage("user", TranslationRequest(batchItems).toJson()))
             },
             // Google's officially documented OpenAI-compatible call requires
             // only model + messages. The prompt already specifies the JSON
@@ -91,7 +105,7 @@ internal object OpenAiTranslationClient {
             temperature = configs.temperature.takeUnless { isGoogleGemini },
             topP = configs.topP.takeUnless { isGoogleGemini },
             maxTokens = if (useStreaming) AiTranslationRecoveryPolicy.outputTokenBudget(
-                configs.maxTokens, requestItems.size,
+                configs.maxTokens, batchItems.size,
             ) else configs.maxTokens.takeIf { it > 0 },
             stream = true.takeIf { useStreaming },
             presencePenalty = configs.presencePenalty.takeUnless { isGoogleGemini },
@@ -105,23 +119,39 @@ internal object OpenAiTranslationClient {
         // its short Retry-After header and classified reason permit it; hard
         // quota failures and permanent 4xx never enter a retry loop.
         val requestBody = chatRequest.toJson()
-        val url = URL(apiUrl)
-        val readTimeoutMs = if (useStreaming) AiTranslationRecoveryPolicy.streamReadTimeoutMillis()
-            else AiTranslationRecoveryPolicy.readTimeoutMillis(isGoogleGemini, requestItems.size)
+        var batchCompleted = false
         for (attempt in 0 until OpenAiHttpRetryPolicy.MAX_ATTEMPTS) {
             // A new request starts on the next key; transient retries use the next
             // configured key without repeating the entire song translation queue.
-            val selectedKey = orderedKeys[attempt % orderedKeys.size]
+            val selectedKey = orderedKeys[
+                NvidiaTranslationBatchPolicy.keySlot(batchNumber, attempt, orderedKeys.size)
+            ]
             var connection: HttpURLConnection? = null
             var cancellationWatcher: Job? = null
             var retryDelayMs: Long? = null
+            var lastStreamProgress: OpenAiStreamResponseParser.Progress? = null
+            var firstContentLogged = false
+            var lastReportedFragment = 0
+            var lastProgressReportAt = 0L
             val startedAt = System.nanoTime()
+            val deadlineNanos = if (useStreaming) {
+                NvidiaTranslationBatchPolicy.deadlineNanos(songStartedAt, startedAt)
+            } else Long.MAX_VALUE
+            if (useStreaming && deadlineNanos - startedAt <= 0L) {
+                LogManager.w("AppleMusicAiService", "stage=primary_time_budget_exhausted batch=${batchNumber + 1}/${batches.size}")
+                return@withContext fallback("network_error")
+            }
+            val remainingMillis = if (useStreaming) {
+                ((deadlineNanos - startedAt) / 1_000_000L).coerceAtLeast(1L)
+                    .coerceAtMost(readTimeoutMs.toLong()).toInt()
+            } else readTimeoutMs
             try {
                 LogManager.i(
                     "AppleMusicAiService",
                     "stage=primary_request model=${configs.model.orEmpty().take(80)} " +
-                        "attempt=${attempt + 1} read_timeout_ms=$readTimeoutMs " +
-                        "stream=$useStreaming max_tokens=${chatRequest.maxTokens ?: 0}",
+                        "attempt=${attempt + 1} read_timeout_ms=$remainingMillis " +
+                        "stream=$useStreaming max_tokens=${chatRequest.maxTokens ?: 0} " +
+                        "batch=${batchNumber + 1}/${batches.size} lines=${batchItems.size}",
                 )
                 HookLogger.d(
                     "OpenAiTranslationClient",
@@ -131,14 +161,16 @@ internal object OpenAiTranslationClient {
                     requestMethod = "POST"
                     // Timed-out requests must reach Qwen fallback promptly rather
                     // than leave a song with neither translation nor Hangul phonetics.
-                    connectTimeout = 20 * 1000
-                    readTimeout = readTimeoutMs
+                    connectTimeout = minOf(20 * 1000, remainingMillis)
+                    readTimeout = remainingMillis
                     doOutput = true
                     setRequestProperty("Content-Type", "application/json")
                     setRequestProperty("Authorization", "Bearer $selectedKey")
                     if (useStreaming) setRequestProperty("Accept", "text/event-stream")
                 }
-                cancellationWatcher = HttpConnectionCancellation.watch(connection)
+                cancellationWatcher = HttpConnectionCancellation.watch(
+                    connection, deadlineNanos.takeIf { useStreaming },
+                )
 
                 OutputStreamWriter(connection.outputStream, Charsets.UTF_8).use {
                     it.write(requestBody)
@@ -146,11 +178,40 @@ internal object OpenAiTranslationClient {
 
                 val responseCode = connection.responseCode
                 if (responseCode == HttpURLConnection.HTTP_OK) {
+                    if (useStreaming) LogManager.i(
+                        "AppleMusicAiService",
+                        "stage=primary_http_accepted code=$responseCode " +
+                            "duration_ms=${(System.nanoTime() - startedAt) / 1_000_000L} " +
+                            "batch=${batchNumber + 1}/${batches.size}",
+                    )
                     val completion = if (useStreaming) {
                         connection.inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
-                            OpenAiStreamResponseParser.read(
-                                reader, startedAt + AiTranslationRecoveryPolicy.streamDeadlineMillis() * 1_000_000L,
-                            )
+                            OpenAiStreamResponseParser.read(reader, deadlineNanos) { progress ->
+                                if (progress.eventsSeen == 1) {
+                                    LogManager.i("AppleMusicAiService",
+                                        "stage=primary_first_sse_event duration_ms=${(System.nanoTime() - startedAt) / 1_000_000L} " +
+                                            "batch=${batchNumber + 1}/${batches.size}")
+                                }
+                                if (!firstContentLogged && progress.contentFragments > 0) {
+                                    firstContentLogged = true
+                                    LogManager.i("AppleMusicAiService",
+                                        "stage=primary_first_content duration_ms=${(System.nanoTime() - startedAt) / 1_000_000L} " +
+                                            "batch=${batchNumber + 1}/${batches.size}")
+                                }
+                                lastStreamProgress = progress
+                                if (progress.contentFragments > 0 &&
+                                    (progress.contentFragments == 1 ||
+                                        progress.contentFragments - lastReportedFragment >= 12 ||
+                                        System.nanoTime() - lastProgressReportAt >= 1_000_000_000L)
+                                ) {
+                                    lastReportedFragment = progress.contentFragments
+                                    lastProgressReportAt = System.nanoTime()
+                                    onProgress?.invoke(AiTranslationProgress(
+                                        "streaming", batchNumber + 1, batches.size,
+                                        progress.contentFragments,
+                                    ))
+                                }
+                            }
                         }
                     } else {
                         val responseBody = connection.inputStream.bufferedReader(Charsets.UTF_8)
@@ -166,7 +227,8 @@ internal object OpenAiTranslationClient {
                     LogManager.i(
                         "AppleMusicAiService",
                         "stage=http_success code=$responseCode duration_ms=$elapsedMs " +
-                            "finish_reason=${completion.finishReason.orEmpty()}",
+                            "finish_reason=${completion.finishReason.orEmpty()} " +
+                            "batch=${batchNumber + 1}/${batches.size}",
                     )
                     if (completion.finishReason == "length") {
                         LogManager.w("AppleMusicAiService", "stage=primary_truncated")
@@ -177,28 +239,24 @@ internal object OpenAiTranslationClient {
                         return@withContext fallback("empty_response")
                     }
                     HookLogger.d("OpenAiTranslationClient", "翻译请求完成: code=$responseCode")
-                    val parsed = AITranslationResponseParser.parse(content, requestIndices)
+                    val parsed = AITranslationResponseParser.parse(content, batchIndices)
                     if (!KoreanLyricOutputPolicy.accepts(
-                            parsed, requestIndices, configs.targetLanguage,
-                        )
+                            parsed, batchIndices, configs.targetLanguage,
+                        ) || (useStreaming && !NvidiaTranslationBatchPolicy.isComplete(batchItems, parsed))
                     ) {
                         LogManager.w(
                             "AppleMusicAiService",
                             "stage=primary_quality_rejected translated=" +
                                 parsed.count { it.trans.isNotBlank() } +
-                                " expected=${requestIndices.size} finish_reason=${completion.finishReason.orEmpty()}",
+                                " expected=${batchIndices.size} finish_reason=${completion.finishReason.orEmpty()} " +
+                                "batch=${batchNumber + 1}/${batches.size}",
                         )
                         return@withContext fallback("quality_invalid")
                     }
-                    return@withContext if (AiTranslationRecoveryPolicy.shouldRepairAfterSuccess(
-                            song != null && AIPronunciationPolicy.shouldEnrich(song) &&
-                                KoreanLyricOutputPolicy.needsPronunciationRepair(parsed, payload.lyrics.size),
-                            groqAvailable,
-                        )) {
-                        GroqMultiModelClient.enrichMissingPronunciation(
-                            configs, song, payload, parsed,
-                        )
-                    } else parsed
+                    allResults.addAll(parsed)
+                    onProgress?.invoke(AiTranslationProgress("batch_done", batchNumber + 1, batches.size))
+                    batchCompleted = true
+                    break
                 }
 
                 // Never log or persist a provider error body. It may echo private lyrics.
@@ -237,9 +295,24 @@ internal object OpenAiTranslationClient {
                 return@withContext fallback("EOFException")
             } catch (e: Exception) {
                 currentCoroutineContext().ensureActive()
+                val streamFailure = e as? OpenAiStreamResponseParser.Failure
+                val failureReason = when {
+                    streamFailure != null -> streamFailure.reason
+                    useStreaming && System.nanoTime() - deadlineNanos >= 0L -> "sse_deadline"
+                    e is SocketTimeoutException -> "socket_timeout"
+                    else -> "io_failure"
+                }
                 LogManager.w(
                     "AppleMusicAiService",
-                    "stage=http_io_failed type=${e.javaClass.simpleName}"
+                    "stage=http_io_failed type=${e.javaClass.simpleName} reason=$failureReason" +
+                        (streamFailure?.let {
+                            " events=${it.eventsSeen} content_fragments=${it.contentFragments} " +
+                                "reasoning_fragments=${it.reasoningFragments}"
+                        } ?: lastStreamProgress?.let {
+                            " events=${it.eventsSeen} content_fragments=${it.contentFragments} " +
+                                "reasoning_fragments=${it.reasoningFragments}"
+                        }.orEmpty()) +
+                        " batch=${batchNumber + 1}/${batches.size}"
                 )
                 HookLogger.e(
                     "OpenAiTranslationClient",
@@ -254,7 +327,21 @@ internal object OpenAiTranslationClient {
             // Delay after disconnecting, so no open connection is held during backoff.
             delay(retryDelayMs ?: return@withContext null)
         }
-        fallback("retry_exhausted")
+        if (!batchCompleted) return@withContext fallback("retry_exhausted")
+        }
+        val orderedResults = allResults.sortedBy { it.index }
+        if (useStreaming) LogManager.i(
+            "AppleMusicAiService",
+            "stage=primary_batches_completed count=${batches.size} translated=${orderedResults.size} " +
+                "duration_ms=${(System.nanoTime() - songStartedAt) / 1_000_000L}",
+        )
+        if (AiTranslationRecoveryPolicy.shouldRepairAfterSuccess(
+                song != null && AIPronunciationPolicy.shouldEnrich(song) &&
+                    KoreanLyricOutputPolicy.needsPronunciationRepair(orderedResults, payload.lyrics.size),
+                groqAvailable,
+            )) {
+            GroqMultiModelClient.enrichMissingPronunciation(configs, song, payload, orderedResults)
+        } else orderedResults
     }
 
     private fun shouldRequestTranslation(text: String): Boolean {

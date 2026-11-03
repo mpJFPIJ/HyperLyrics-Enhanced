@@ -55,9 +55,11 @@ internal object ApplePronunciationPolicy {
     /**
      * 将整行发音文本按 Apple 原生主句 word 的实际文本权重分配。
      *
-     * Apple 可能把多个汉字合并为一个 word，例如“潇洒 / 的 / 放 / 屁”只有 4 个
-     * native word，但需要容纳 5 个粤拼音节。只按 word 数均分会使后续音节错位，
-     * 因此东亚文字按字符数计权，其他非空 word 按一个发音单位计权。
+     * Preserve whole Hangul phonetic words when the AI's spaces do not match
+     * Apple's karaoke cells. Splitting every Hangul syllable by source-text
+     * length creates false readings (e.g. 今 = "이", この世で = "마코노세데").
+     * When exact word alignment is unavailable, leave some native cells empty
+     * instead of inventing incorrect pronunciation boundaries.
      *
      * 这里只生成显示片段，不创建新的 native LyricsWord。实际渲染继续复用主句 word，
      * 因而每个片段都保留 Apple 原生父歌词行、lineId、wordId 与时间轴。
@@ -69,19 +71,25 @@ internal object ApplePronunciationPolicy {
         if (mainWordTexts.isEmpty()) return emptyList()
         val groupedTokens = pronunciation.trim().split(Regex("\\s+"))
             .filter(String::isNotEmpty)
-        // Hangul text is usually grouped into natural Korean words, but the
-        // Apple karaoke timeline can contain more Japanese/English word cells.
-        // Distribute Hangul syllables when whole-word grouping would leave
-        // most native word cells without a pronunciation.
-        val splitHangulSyllables =
-            RomanizationPolicy.isHangulPronunciation(pronunciation) &&
-                groupedTokens.size < mainWordTexts.size
-        val tokens = if (splitHangulSyllables) {
-            pronunciation.codePoints().toArray()
-                .filter(Character::isLetter)
-                .map { String(Character.toChars(it)) }
-        } else groupedTokens
+        val tokens = groupedTokens
         if (tokens.isEmpty()) return emptyList()
+
+        // A single unspaced Hangul phrase cannot be assigned to one timed
+        // native word without making its entire reading flash at that word.
+        if (shouldUseLineTextOnly(pronunciation, mainWordTexts.size)) return emptyList()
+
+        if (RomanizationPolicy.isHangulPronunciation(pronunciation)) {
+            if (tokens.size == mainWordTexts.size) return tokens
+            if (tokens.size < mainWordTexts.size) {
+                val slots = MutableList(mainWordTexts.size) { "" }
+                tokens.forEachIndexed { index, token ->
+                    val target = if (tokens.size == 1) 0 else
+                        index * (slots.size - 1) / (tokens.size - 1)
+                    slots[target] = token
+                }
+                return slots
+            }
+        }
 
         val measuredWeights = mainWordTexts.map(::pronunciationUnitCount)
         val weights = if (measuredWeights.any { it > 0 }) {
@@ -95,11 +103,13 @@ internal object ApplePronunciationPolicy {
             val tokenStart = consumedWeight * tokens.size / totalWeight
             consumedWeight += weight
             val tokenEnd = consumedWeight * tokens.size / totalWeight
-            tokens.subList(tokenStart, tokenEnd).joinToString(
-                if (splitHangulSyllables) "" else " "
-            )
+            tokens.subList(tokenStart, tokenEnd).joinToString(" ")
         }
     }
+
+    fun shouldUseLineTextOnly(pronunciation: String, mainWordCount: Int): Boolean =
+        mainWordCount > 1 && RomanizationPolicy.isHangulPronunciation(pronunciation) &&
+            pronunciation.trim().split(Regex("\\s+")).size == 1
 
     private fun pronunciationUnitCount(text: String): Int {
         val visibleText = text.replace(HTML_TAG, " ").trim()

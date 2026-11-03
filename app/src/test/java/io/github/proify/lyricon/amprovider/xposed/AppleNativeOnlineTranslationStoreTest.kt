@@ -508,6 +508,52 @@ class AppleNativeOnlineTranslationStoreTest {
         assertFalse(store.hasTranslation("100"))
     }
 
+    @Test
+    fun `AI phonetics do not appear before AI response and survive provider refresh`() {
+        val store = AppleNativeOnlineTranslationStore()
+        val online = song("100", RichLyricLine(
+            begin = 1000, end = 2000, text = "君の名は",
+            translation = "你的名字", roma = "키미노 나와아",
+        ))
+        store.receive(online)
+        assertTrue(store.hasHangulPronunciation("100"))
+        assertFalse(store.hasAiHangulPronunciation("100"))
+        assertNull(store.aiHangulPronunciation("100", 1000, 2000, "君の名は"))
+
+        val ai = song("100", RichLyricLine(
+            begin = 1000, end = 2000, text = "君の名は",
+            translation = "너의 이름은", roma = "키미노 나와",
+        ))
+        store.receive(ai, preserveExistingPronunciation = true)
+        assertTrue(store.hasAiHangulPronunciation("100"))
+        assertEquals("키미노 나와", store.aiHangulPronunciation("100", 1000, 2000, "君の名は"))
+        assertEquals("너의 이름은", store.aiTranslation("100", 1000, 2000, "君の名は"))
+
+        // Auto provider updates must not replace separately pinned AI result.
+        store.receive(online)
+        assertEquals("키미노 나와", store.aiHangulPronunciation("100", 1000, 2000, "君の名は"))
+        assertEquals("너의 이름은", store.aiTranslation("100", 1000, 2000, "君の名は"))
+        store.receive(online.copy(id = "200"))
+        assertFalse(store.hasAiHangulPronunciation("100"))
+        assertNull(store.aiTranslation("100", 1000, 2000, "君の名は"))
+    }
+
+    @Test
+    fun `AI translation without generated pronunciation does not label provider as AI`() {
+        val store = AppleNativeOnlineTranslationStore()
+        store.receive(song("100", RichLyricLine(
+            begin = 1000, end = 2000, text = "君の名は", roma = "키미노 나와아",
+        )))
+        store.receive(song("100", RichLyricLine(
+            begin = 1000, end = 2000, text = "君の名は",
+            translation = "너의 이름은", roma = null,
+        )), preserveExistingPronunciation = true)
+        assertTrue(store.hasPronunciation("100"))
+        assertFalse(store.hasAiHangulPronunciation("100"))
+        assertNull(store.aiHangulPronunciation("100", 1000, 2000, "君の名は"))
+        assertEquals("너의 이름은", store.aiTranslation("100", 1000, 2000, "君の名は"))
+    }
+
     private fun assertReceipt(
         store: AppleNativeOnlineTranslationStore,
         song: Song,

@@ -13,4 +13,6 @@ oneway interface IAppleMusicTranslationReceiver {
         boolean successful
     );
     void onMissingLyricsSupplementResult(in byte[] compressedSong);
+    /** Status labels and counters only. Never contains keys, lyrics, or AI response text. */
+    void onAiTranslationProgress(String stage, int batch, int totalBatches, int fragments);
 }

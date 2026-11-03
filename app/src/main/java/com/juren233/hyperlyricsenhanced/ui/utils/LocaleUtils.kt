@@ -22,6 +22,7 @@ object LocaleUtils {
     const val LANGUAGE_SYSTEM = 0
     const val LANGUAGE_SIMPLIFIED_CHINESE = 1
     const val LANGUAGE_ENGLISH = 2
+    const val LANGUAGE_KOREAN = 3
 
     /** App labels follow the phone language even when HLE has its own display language. */
     fun systemLanguageContext(context: Context): Context = context.createConfigurationContext(
@@ -91,6 +92,7 @@ object LocaleUtils {
                 val locales = when (languageMode) {
                     LANGUAGE_SIMPLIFIED_CHINESE -> LocaleList.forLanguageTags("zh-Hans")
                     LANGUAGE_ENGLISH -> LocaleList.forLanguageTags("en")
+                    LANGUAGE_KOREAN -> LocaleList.forLanguageTags("ko")
                     else -> Resources.getSystem().configuration.locales
                 }
                 setLocales(locales)

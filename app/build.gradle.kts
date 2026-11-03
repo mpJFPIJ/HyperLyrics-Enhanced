@@ -125,7 +125,9 @@ android {
 
     // The Sudachi dictionary is too large for source control. Bundle the
     // pinned V1 core edition in the APK so on-device reading works offline.
-    sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("generated/sudachiAssets"))
+    sourceSets.getByName("main").assets.directories.add(
+        layout.buildDirectory.dir("generated/sudachiAssets").get().asFile,
+    )
 
 }
 

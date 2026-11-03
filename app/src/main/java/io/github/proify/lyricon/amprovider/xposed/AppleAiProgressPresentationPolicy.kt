@@ -10,6 +10,7 @@ internal object AppleAiProgressPresentationPolicy {
             "requesting" -> "AI 응답 대기 중$suffix"
             "streaming" -> "AI 응답 수신 중$suffix · ${fragments.coerceAtLeast(0)}조각"
             "batch_done" -> "AI 번역 처리 중$suffix"
+            "reviewing" -> "일본어 한자 발음 검수 중"
             "fallback" -> "다른 AI로 재시도 중"
             "completed" -> "AI 번역 완료"
             "failed" -> "AI 번역 실패"

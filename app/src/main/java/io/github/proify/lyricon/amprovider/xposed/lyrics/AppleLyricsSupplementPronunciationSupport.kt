@@ -371,7 +371,18 @@ private fun AppleLyricsSupplementHooks.hookApplePronunciationWordsGetter(
         val resolvedWords = when (wordTrack) {
             ApplePronunciationWordTrack.OFFICIAL -> original
             ApplePronunciationWordTrack.MAIN_LINE_TIMING -> {
-                mainWords?.takeIf { nativeVectorSize(it) > 0 }?.also { vector ->
+                if (ApplePronunciationPolicy.shouldUseLineTextOnly(
+                        mainTimingPronunciation.orEmpty(), nativeRenderableWordBegins(mainWords).size,
+                    )
+                ) {
+                    // Let the separate line-text getter expose the whole reading.
+                    // Do not attach that reading to the first native karaoke word.
+                    reportApplePronunciationRuntimeDiagnostic(
+                        stage = "line_only_pronunciation",
+                        details = "nativeWords=${nativeVectorSize(mainWords)}",
+                    )
+                    emptyApplePronunciationWords(original, mainWords) ?: original
+                } else mainWords?.takeIf { nativeVectorSize(it) > 0 }?.also { vector ->
                     registerApplePronunciationRenderPlan(
                         vector = vector,
                         pronunciation = requireNotNull(mainTimingPronunciation),
@@ -759,10 +770,9 @@ private fun AppleLyricsSupplementHooks.buildApplePronunciationWordRenderContext(
     if (segments.isEmpty()) return null
     reportApplePronunciationRuntimeDiagnostic(
         stage = "word_segments_mapped",
-        details = "mainWords=${mainWordTexts.joinToString(prefix = "[", postfix = "]")}, " +
-            "segments=${segments.joinToString(prefix = "[", postfix = "]")}",
-        dedupeKey = "word_segments_mapped:${mainWordTexts.joinToString("|")}:" +
-            plan.pronunciation,
+        details = "mainWordCount=${mainWordTexts.size}, " +
+            "segmentCount=${segments.size}, visibleSegments=${segments.count(String::isNotEmpty)}",
+        dedupeKey = "word_segments_mapped:${mainWordTexts.size}:${segments.size}",
     )
 
     val lastVisibleSegment = segments.indexOfLast(String::isNotEmpty)

@@ -74,6 +74,10 @@ internal object ApplePronunciationPolicy {
         val tokens = groupedTokens
         if (tokens.isEmpty()) return emptyList()
 
+        // A single unspaced Hangul phrase cannot be assigned to one timed
+        // native word without making its entire reading flash at that word.
+        if (shouldUseLineTextOnly(pronunciation, mainWordTexts.size)) return emptyList()
+
         if (RomanizationPolicy.isHangulPronunciation(pronunciation)) {
             if (tokens.size == mainWordTexts.size) return tokens
             if (tokens.size < mainWordTexts.size) {
@@ -102,6 +106,10 @@ internal object ApplePronunciationPolicy {
             tokens.subList(tokenStart, tokenEnd).joinToString(" ")
         }
     }
+
+    fun shouldUseLineTextOnly(pronunciation: String, mainWordCount: Int): Boolean =
+        mainWordCount > 1 && RomanizationPolicy.isHangulPronunciation(pronunciation) &&
+            pronunciation.trim().split(Regex("\\s+")).size == 1
 
     private fun pronunciationUnitCount(text: String): Int {
         val visibleText = text.replace(HTML_TAG, " ").trim()

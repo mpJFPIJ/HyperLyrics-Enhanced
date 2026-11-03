@@ -10,7 +10,8 @@ internal object AITranslationKey {
             append("target=").appendLine(configs.targetLanguage.orEmpty())
             // Prevent old low-quality Chinese-biased prompts from poisoning the new translation.
             appendLine("translation=ko-native-editor-v2")
-            if (includePronunciation) appendLine("pronunciation=ja-hangul-en-hangul-v4-accurate-reading")
+            // Invalidate older unreviewed phonetic results without deleting user data.
+            if (includePronunciation) appendLine("pronunciation=ja-hangul-en-hangul-v5-kanji-review")
             if (configs.webSearchEnabled) appendLine(
                 if (GroqApiKeyPool.configured(configs).isEmpty()) "web-reference=free-2.5flash-v2"
                 else "web-reference=groq-gpt-oss-120b-v3"

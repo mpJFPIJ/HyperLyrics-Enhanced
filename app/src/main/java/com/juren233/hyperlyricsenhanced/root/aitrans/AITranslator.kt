@@ -137,6 +137,11 @@ object AITranslator {
         val songContentId = AITranslationKey.calculate(
             configs, song, originalLines, includePronunciation = includePronunciation,
         )
+        val expectedIndices = originalLines.mapIndexedNotNull { index, line ->
+            index.takeIf { line.any(Char::isLetter) }
+        }.toSet()
+        fun usableCache(items: List<TranslationItem>): Boolean =
+            KoreanLyricOutputPolicy.acceptsComplete(items, expectedIndices, configs.targetLanguage)
         // Existing translated songs remain usable even when the pronunciation
         // enrichment request fails or the account is temporarily rate-limited.
         // Enrichment is a one-time new cache entry; new songs require one call
@@ -148,7 +153,7 @@ object AITranslator {
             }
         } else null
 
-        cache.getFromMemory(songContentId)?.let {
+        cache.getFromMemory(songContentId)?.takeIf(::usableCache)?.let {
             cache.attachSongMetadata(songContentId, song, originalLines)
             HookLogger.d("AITranslator", "缓存命中：从内存加载了 ${song.name} 的翻译")
             val restored = maybeRepairCachedPhonetics(
@@ -160,7 +165,7 @@ object AITranslator {
             )
         }
 
-        cache.getFromDb(songContentId)?.let {
+        cache.getFromDb(songContentId)?.takeIf(::usableCache)?.let {
             cache.attachSongMetadata(songContentId, song, originalLines)
             HookLogger.d("AITranslator", "记录命中：从本地存储加载了 ${song.name} 的翻译")
             val restored = maybeRepairCachedPhonetics(

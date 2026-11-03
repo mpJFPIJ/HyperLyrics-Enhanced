@@ -240,7 +240,7 @@ internal object OpenAiTranslationClient {
                     }
                     HookLogger.d("OpenAiTranslationClient", "翻译请求完成: code=$responseCode")
                     val parsed = AITranslationResponseParser.parse(content, batchIndices)
-                    if (!KoreanLyricOutputPolicy.accepts(
+                    if (!KoreanLyricOutputPolicy.acceptsComplete(
                             parsed, batchIndices, configs.targetLanguage,
                         ) || (useStreaming && !NvidiaTranslationBatchPolicy.isComplete(batchItems, parsed))
                     ) {
@@ -335,13 +335,19 @@ internal object OpenAiTranslationClient {
             "stage=primary_batches_completed count=${batches.size} translated=${orderedResults.size} " +
                 "duration_ms=${(System.nanoTime() - songStartedAt) / 1_000_000L}",
         )
+        val reviewedResults = if (groqAvailable && song != null &&
+            JapanesePronunciationReviewPolicy.candidates(payload.lyrics).isNotEmpty()
+        ) {
+            onProgress?.invoke(AiTranslationProgress("reviewing"))
+            GroqMultiModelClient.reviewJapanesePronunciation(configs, payload, orderedResults)
+        } else orderedResults
         if (AiTranslationRecoveryPolicy.shouldRepairAfterSuccess(
                 song != null && AIPronunciationPolicy.shouldEnrich(song) &&
-                    KoreanLyricOutputPolicy.needsPronunciationRepair(orderedResults, payload.lyrics.size),
+                    KoreanLyricOutputPolicy.needsPronunciationRepair(reviewedResults, payload.lyrics.size),
                 groqAvailable,
             )) {
-            GroqMultiModelClient.enrichMissingPronunciation(configs, song, payload, orderedResults)
-        } else orderedResults
+            GroqMultiModelClient.enrichMissingPronunciation(configs, song, payload, reviewedResults)
+        } else reviewedResults
     }
 
     private fun shouldRequestTranslation(text: String): Boolean {

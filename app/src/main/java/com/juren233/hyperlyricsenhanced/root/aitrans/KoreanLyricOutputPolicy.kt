@@ -20,6 +20,15 @@ internal object KoreanLyricOutputPolicy {
         return koreanLines * 4 >= translated.size * 3
     }
 
+    /** Only complete, valid results may be persisted for a new song request. */
+    fun acceptsComplete(items: List<TranslationItem>, indices: Set<Int>, target: String?): Boolean {
+        if (indices.isEmpty()) return false
+        val byIndex = items.filter { it.index in indices }.associateBy(TranslationItem::index)
+        return byIndex.size == indices.size &&
+            indices.all { !byIndex[it]?.trans.isNullOrBlank() } &&
+            accepts(items, indices, target)
+    }
+
     fun hangulPronunciationCount(items: List<TranslationItem>): Int =
         items.count { RomanizationPolicy.isHangulPronunciation(it.roma) }
 

@@ -4,6 +4,22 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class KoreanLyricOutputPolicyTest {
+    @Test fun doesNotAcceptPartialOrForeignLanguageFallbackForCaching() {
+        val expected = setOf(0, 1, 2)
+        assertFalse(KoreanLyricOutputPolicy.acceptsComplete(
+            listOf(TranslationItem(0, "안녕"), TranslationItem(1, "사랑해")),
+            expected, "한국어",
+        ))
+        assertFalse(KoreanLyricOutputPolicy.acceptsComplete(
+            listOf(TranslationItem(0, "안녕"), TranslationItem(1, "你好"), TranslationItem(2, "世界")),
+            expected, "한국어",
+        ))
+        assertTrue(KoreanLyricOutputPolicy.acceptsComplete(
+            listOf(TranslationItem(0, "안녕"), TranslationItem(1, "사랑해"), TranslationItem(2, "고마워")),
+            expected, "한국어",
+        ))
+    }
+
     @Test fun rejectsForeignLanguageAndSparseKoreanOutput() {
         assertFalse(KoreanLyricOutputPolicy.accepts(
             listOf(TranslationItem(0, "你好"), TranslationItem(1, "你的名字")),

@@ -57,6 +57,7 @@ class AIPronunciationPolicyTest {
         assertTrue(jp.contains("한국인이 실제 노래 가사"))
         assertFalse(jp.contains("输入输出规范"))
         assertTrue(jp.contains("키미노 나와"))
+        assertTrue(jp.contains("Do not collapse"))
         assertTrue(english.contains("Korean Hangul"))
         assertFalse(korean.contains("MUST be Hangul"))
     }

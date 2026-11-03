@@ -175,6 +175,19 @@ class ApplePronunciationPolicyTest {
     }
 
     @Test
+    fun `never stuffs an entire unspaced Hangul line into first karaoke word`() {
+        assertTrue(ApplePronunciationPolicy.shouldUseLineTextOnly("키미노나와", 4))
+        assertFalse(ApplePronunciationPolicy.shouldUseLineTextOnly("키미 노 나 와", 4))
+        assertEquals(
+            emptyList<String>(),
+            ApplePronunciationPolicy.displaySegments(
+                pronunciation = "키미노나와",
+                mainWordTexts = listOf("君", "の", "名", "は"),
+            ),
+        )
+    }
+
+    @Test
     fun `never cuts a Korean reading in the middle of a word`() {
         assertEquals(
             listOf("이마", "코노세데", "키미", "다케", "", "다이세이카이"),

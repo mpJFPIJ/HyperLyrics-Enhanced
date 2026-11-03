@@ -31,6 +31,7 @@ import top.yukonga.miuix.kmp.preference.SwitchPreference
 @Composable
 internal fun DiagnosticGitHubSettingsControls() {
     val context = LocalContext.current
+    val queuedStatus = stringResource(R.string.diagnostics_queued)
     var configuration by remember(context) { mutableStateOf(DiagnosticGitHubSettings.configuration(context)) }
     var status by remember(context) { mutableStateOf(DiagnosticGitHubSettings.lastStatus(context)) }
     var showDialog by remember { mutableStateOf(false) }
@@ -82,7 +83,7 @@ internal fun DiagnosticGitHubSettingsControls() {
             summary = status,
             onClick = {
                 DiagnosticUploadScheduler.uploadNow(context)
-                status = context.getString(R.string.diagnostics_queued)
+                status = queuedStatus
             },
         )
     }

@@ -1,4 +1,7 @@
+import java.io.File
+import java.net.URI
 import java.util.Properties
+import java.util.zip.ZipInputStream
 
 plugins {
     alias(libs.plugins.android.application)
@@ -206,17 +209,17 @@ val prepareSudachiDictionary by tasks.registering {
         val target = sudachiAsset.get().asFile
         if (target.isFile && target.length() >= 1_000_000L) return@doLast
         target.parentFile.mkdirs()
-        val archive = java.net.URI(
+        val archive = URI(
             "https://d2ej7fkh96fzlu.cloudfront.net/sudachidict/v1/" +
                 "sudachi-dictionary-20260723-core.zip"
         ).toURL().openConnection().apply {
             connectTimeout = 30_000
             readTimeout = 120_000
         }
-        val temporary = java.io.File(target.parentFile, target.name + ".tmp")
+        val temporary = File(target.parentFile, target.name + ".tmp")
         try {
             var found = false
-            java.util.zip.ZipInputStream(archive.getInputStream()).use { zip ->
+            ZipInputStream(archive.getInputStream()).use { zip ->
                 while (true) {
                     val entry = zip.nextEntry ?: break
                     if (!entry.isDirectory && entry.name.endsWith("system_core.dic")) {

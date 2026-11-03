@@ -19,6 +19,8 @@ class AppleAiProgressPresentationPolicyTest {
     @Test fun clearAndTerminalPhasesNeverExposeProviderPayloads() {
         assertEquals("다른 AI로 재시도 중", AppleAiProgressPresentationPolicy.describe("fallback", 0, 0, 0))
         assertEquals("AI 번역 완료", AppleAiProgressPresentationPolicy.describe("completed", 0, 0, 0))
+        assertEquals("일본어 발음 분석 중 (기기 내 처리)", AppleAiProgressPresentationPolicy.describe("pronouncing", 0, 0, 0))
+        assertEquals("한글 발음 준비 완료 · 번역은 아직 없음", AppleAiProgressPresentationPolicy.describe("phonetics_completed", 0, 0, 0))
         assertEquals("AI 번역 실패", AppleAiProgressPresentationPolicy.describe("failed", 0, 0, 0))
         assertNull(AppleAiProgressPresentationPolicy.describe("cancelled", 0, 0, 0))
         assertNull(AppleAiProgressPresentationPolicy.describe("unknown", 0, 0, 0))

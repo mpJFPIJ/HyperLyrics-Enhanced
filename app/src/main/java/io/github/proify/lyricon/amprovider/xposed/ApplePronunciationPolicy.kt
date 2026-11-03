@@ -74,21 +74,13 @@ internal object ApplePronunciationPolicy {
         val tokens = groupedTokens
         if (tokens.isEmpty()) return emptyList()
 
-        // A single unspaced Hangul phrase cannot be assigned to one timed
-        // native word without making its entire reading flash at that word.
+        // A Hangul token must never be assigned to an unrelated native word.
+        // The complete pronunciation is exposed by the separate line-text
+        // getter whenever there is no exact one-to-one token alignment.
         if (shouldUseLineTextOnly(pronunciation, mainWordTexts.size)) return emptyList()
 
         if (RomanizationPolicy.isHangulPronunciation(pronunciation)) {
-            if (tokens.size == mainWordTexts.size) return tokens
-            if (tokens.size < mainWordTexts.size) {
-                val slots = MutableList(mainWordTexts.size) { "" }
-                tokens.forEachIndexed { index, token ->
-                    val target = if (tokens.size == 1) 0 else
-                        index * (slots.size - 1) / (tokens.size - 1)
-                    slots[target] = token
-                }
-                return slots
-            }
+            return tokens
         }
 
         val measuredWeights = mainWordTexts.map(::pronunciationUnitCount)
@@ -108,8 +100,8 @@ internal object ApplePronunciationPolicy {
     }
 
     fun shouldUseLineTextOnly(pronunciation: String, mainWordCount: Int): Boolean =
-        mainWordCount > 1 && RomanizationPolicy.isHangulPronunciation(pronunciation) &&
-            pronunciation.trim().split(Regex("\\s+")).size == 1
+        mainWordCount > 0 && RomanizationPolicy.isHangulPronunciation(pronunciation) &&
+            pronunciation.trim().split(Regex("\\s+")).count(String::isNotBlank) != mainWordCount
 
     private fun pronunciationUnitCount(text: String): Int {
         val visibleText = text.replace(HTML_TAG, " ").trim()

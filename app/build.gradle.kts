@@ -120,6 +120,10 @@ android {
         aidl = true
     }
 
+    // The Sudachi dictionary is too large for source control. Bundle the
+    // pinned V1 core edition in the APK so on-device reading works offline.
+    sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("generated/sudachiAssets"))
+
 }
 
 dependencies {
@@ -186,6 +190,7 @@ dependencies {
     implementation(libs.retrofit2.retrofit)
     implementation(libs.squareup.okhttp3)
     implementation(libs.retrofit2.kotlinx.serialization.converter)
+    implementation("com.worksap.nlp:sudachi:0.8.2")
 
     // --- 动画库 (YoYo) ---
     implementation(libs.daimajia.animations) { artifact { type = "aar" } }
@@ -193,6 +198,45 @@ dependencies {
 }
 
 apply(from = "fetch_contributors.gradle")
+val sudachiAsset = layout.buildDirectory.file("generated/sudachiAssets/sudachi_system_core.dic")
+val prepareSudachiDictionary by tasks.registering {
+    description = "Bundles the pinned SudachiDict V1 core dictionary for local Japanese readings"
+    outputs.file(sudachiAsset)
+    doLast {
+        val target = sudachiAsset.get().asFile
+        if (target.isFile && target.length() >= 1_000_000L) return@doLast
+        target.parentFile.mkdirs()
+        val archive = java.net.URI(
+            "https://d2ej7fkh96fzlu.cloudfront.net/sudachidict/v1/" +
+                "sudachi-dictionary-20260723-core.zip"
+        ).toURL().openConnection().apply {
+            connectTimeout = 30_000
+            readTimeout = 120_000
+        }
+        val temporary = java.io.File(target.parentFile, target.name + ".tmp")
+        try {
+            var found = false
+            java.util.zip.ZipInputStream(archive.getInputStream()).use { zip ->
+                while (true) {
+                    val entry = zip.nextEntry ?: break
+                    if (!entry.isDirectory && entry.name.endsWith("system_core.dic")) {
+                        temporary.outputStream().use { output -> zip.copyTo(output) }
+                        found = true
+                        break
+                    }
+                    zip.closeEntry()
+                }
+            }
+            check(found && temporary.length() >= 1_000_000L) {
+                "Pinned Sudachi system_core.dic was not found in the official distribution"
+            }
+            check(temporary.renameTo(target)) { "Unable to stage Sudachi dictionary asset" }
+        } finally {
+            temporary.delete()
+        }
+    }
+}
 tasks.named("preBuild") {
     dependsOn("generateContributors")
+    dependsOn(prepareSudachiDictionary)
 }

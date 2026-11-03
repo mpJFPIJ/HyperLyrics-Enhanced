@@ -15,7 +15,9 @@ internal object AITranslationPrompt {
         val prompt = configs.prompt.takeIf { it.isNotBlank() } ?: DEFAULT_PROMPT
 
         val basePrompt = AiTranslationConfigs.getPrompt(target, title, artist, prompt)
-        if (song == null || !AIPronunciationPolicy.shouldEnrich(song)) return basePrompt
+        if (song == null || !AIPronunciationPolicy.shouldEnrich(song) ||
+            !AiProviderCapabilities.forConfig(configs).requestAiPronunciation
+        ) return basePrompt
 
         return basePrompt + """
 

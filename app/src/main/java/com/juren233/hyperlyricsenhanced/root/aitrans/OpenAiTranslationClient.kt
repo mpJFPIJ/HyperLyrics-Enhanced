@@ -53,21 +53,25 @@ internal object OpenAiTranslationClient {
 
         val payload = TranslationRequest(lyrics = requestItems)
         val requestIndices = requestItems.map { it.index }.toSet()
+        val capabilities = AiProviderCapabilities.forConfig(configs)
         val isGoogleGemini = OpenAiRequestCompatibility.isGoogleGemini(configs.model, baseUrl)
         val useStreaming = AiTranslationRecoveryPolicy.useNvidiaStreaming(baseUrl)
         val batches = if (useStreaming) NvidiaTranslationBatchPolicy.batches(requestItems)
             else listOf(requestItems)
         // Search research is a bounded, optional precursor. Failure never blocks the
         // existing Gemini/OpenAI-compatible translation and Hangul pronunciation path.
-        if (song != null) onProgress?.invoke(AiTranslationProgress("researching"))
-        val webReference = song?.let {
+        if (song != null && capabilities.allowGroqFallback) {
+            onProgress?.invoke(AiTranslationProgress("researching"))
+        }
+        val webReference = song?.takeIf { capabilities.allowGroqFallback }?.let {
             if (GroqApiKeyPool.configured(configs).isNotEmpty())
                 GroqMultiModelClient.research(configs, it, texts)
             else GeminiWebReferenceClient.search(configs, it, texts)
         }
         val groqAvailable = GroqApiKeyPool.configured(configs).isNotEmpty()
         suspend fun fallback(reason: String): List<TranslationItem>? =
-            if (AiTranslationRecoveryPolicy.shouldUseGroqFallback(reason, groqAvailable)) {
+            if (capabilities.allowGroqFallback &&
+                AiTranslationRecoveryPolicy.shouldUseGroqFallback(reason, groqAvailable)) {
                 LogManager.w("AppleMusicAiService", "stage=primary_fallback reason=$reason")
                 onProgress?.invoke(AiTranslationProgress("fallback"))
                 GroqMultiModelClient.fallbackTranslate(
@@ -98,18 +102,20 @@ internal object OpenAiTranslationClient {
             // Google's officially documented OpenAI-compatible call requires
             // only model + messages. The prompt already specifies the JSON
             // response structure, and our parser accepts fenced JSON as well.
-            responseFormat = ResponseFormat("json_object").takeUnless { isGoogleGemini },
+            responseFormat = ResponseFormat("json_object").takeIf {
+                !isGoogleGemini && capabilities.useJsonResponseFormat
+            },
             // Gemini 3.6+ deprecates explicit sampling controls. Google's
             // OpenAI-compatible gateway may also reject OpenAI penalties.
             // Leave these absent so the Gemini endpoint uses safe defaults.
-            temperature = configs.temperature.takeUnless { isGoogleGemini },
-            topP = configs.topP.takeUnless { isGoogleGemini },
+            temperature = configs.temperature.takeIf { !isGoogleGemini && capabilities.useCustomSampling },
+            topP = configs.topP.takeIf { !isGoogleGemini && capabilities.useCustomSampling },
             maxTokens = if (useStreaming) AiTranslationRecoveryPolicy.outputTokenBudget(
                 configs.maxTokens, batchItems.size,
             ) else configs.maxTokens.takeIf { it > 0 },
             stream = true.takeIf { useStreaming },
-            presencePenalty = configs.presencePenalty.takeUnless { isGoogleGemini },
-            frequencyPenalty = configs.frequencyPenalty.takeUnless { isGoogleGemini }
+            presencePenalty = configs.presencePenalty.takeIf { !isGoogleGemini && capabilities.useCustomSampling },
+            frequencyPenalty = configs.frequencyPenalty.takeIf { !isGoogleGemini && capabilities.useCustomSampling }
         )
         if (isGoogleGemini) {
             LogManager.i("AppleMusicAiService", "stage=gemini_request_compat model=${configs.model}")
@@ -335,14 +341,14 @@ internal object OpenAiTranslationClient {
             "stage=primary_batches_completed count=${batches.size} translated=${orderedResults.size} " +
                 "duration_ms=${(System.nanoTime() - songStartedAt) / 1_000_000L}",
         )
-        val reviewedResults = if (groqAvailable && song != null &&
+        val reviewedResults = if (capabilities.requestAiPronunciation && groqAvailable && song != null &&
             JapanesePronunciationReviewPolicy.candidates(payload.lyrics).isNotEmpty()
         ) {
             onProgress?.invoke(AiTranslationProgress("reviewing"))
             GroqMultiModelClient.reviewJapanesePronunciation(configs, payload, orderedResults)
         } else orderedResults
         if (AiTranslationRecoveryPolicy.shouldRepairAfterSuccess(
-                song != null && AIPronunciationPolicy.shouldEnrich(song) &&
+                capabilities.requestAiPronunciation && song != null && AIPronunciationPolicy.shouldEnrich(song) &&
                     KoreanLyricOutputPolicy.needsPronunciationRepair(reviewedResults, payload.lyrics.size),
                 groqAvailable,
             )) {

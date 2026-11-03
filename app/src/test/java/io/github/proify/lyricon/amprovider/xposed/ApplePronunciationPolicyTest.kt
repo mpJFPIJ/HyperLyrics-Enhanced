@@ -157,9 +157,9 @@ class ApplePronunciationPolicyTest {
     }
 
     @Test
-    fun `preserves complete Hangul words when Japanese karaoke has more word cells`() {
+    fun `uses line text for Hangul when Japanese karaoke has more word cells`() {
         assertEquals(
-            listOf("키미노", "", "", "나와"),
+            emptyList<String>(),
             ApplePronunciationPolicy.displaySegments(
                 pronunciation = "키미노 나와",
                 mainWordTexts = listOf("君", "の", "名", "は"),
@@ -188,9 +188,9 @@ class ApplePronunciationPolicyTest {
     }
 
     @Test
-    fun `never cuts a Korean reading in the middle of a word`() {
+    fun `never forces Korean reading into mismatched karaoke cells`() {
         assertEquals(
-            listOf("이마", "코노세데", "키미", "다케", "", "다이세이카이"),
+            emptyList<String>(),
             ApplePronunciationPolicy.displaySegments(
                 pronunciation = "이마 코노세데 키미 다케 다이세이카이",
                 mainWordTexts = listOf("今", "この世で", "君", "だけ", "大正", "解"),

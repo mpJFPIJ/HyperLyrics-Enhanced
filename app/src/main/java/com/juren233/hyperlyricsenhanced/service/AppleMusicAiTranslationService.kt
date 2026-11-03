@@ -232,9 +232,10 @@ class AppleMusicAiTranslationService : Service() {
 
                         val config = translationConfig(prefs)
                         if (!config.isUsable) {
-                            sendProgress(serial, requestKey, AiTranslationProgress("failed"))
-                            LogManager.w(TAG, "stage=config_incomplete")
-                            return@launch
+                            // The offline phonetics pipeline must remain available
+                            // when the Cohere trial key is expired or not yet set.
+                            sendProgress(serial, requestKey, AiTranslationProgress("pronouncing"))
+                            LogManager.w(TAG, "stage=config_incomplete_local_phonetics_only")
                         }
                         LogManager.i(TAG, "stage=translation_started")
                         val translated = AITranslator.translateSongSync(
@@ -245,14 +246,6 @@ class AppleMusicAiTranslationService : Service() {
                         )
                         if (serial != generation.get()) {
                             LogManager.i(TAG, "stage=result_stale")
-                            return@launch
-                        }
-                        val translatedLines = translated.lyrics.orEmpty()
-                            .count { !it.translation.isNullOrBlank() }
-                        if (translated === song || translatedLines == 0) {
-                            sendProgress(serial, requestKey, AiTranslationProgress("failed"))
-                            LogManager.w(TAG, "stage=no_translation_result")
-                            DiagnosticUploadScheduler.onTranslationFailure(this@AppleMusicAiTranslationService)
                             return@launch
                         }
                         // The AI applicator can retain an incoming third-party
@@ -266,6 +259,18 @@ class AppleMusicAiTranslationService : Service() {
                         })
                         val pronouncedLines = aiOnly.lyrics.orEmpty()
                             .count { !it.roma.isNullOrBlank() }
+                        val translatedLines = aiOnly.lyrics.orEmpty()
+                            .count { !it.translation.isNullOrBlank() }
+                        if (!AppleMusicAiTranslationPolicy.shouldDeliverResult(
+                                translatedLines = translatedLines,
+                                pronouncedLines = pronouncedLines,
+                            )
+                        ) {
+                            sendProgress(serial, requestKey, AiTranslationProgress("failed"))
+                            LogManager.w(TAG, "stage=no_translation_or_pronunciation_result")
+                            DiagnosticUploadScheduler.onTranslationFailure(this@AppleMusicAiTranslationService)
+                            return@launch
+                        }
                         LogManager.i(
                             TAG,
                             "stage=translation_completed lines=$translatedLines pronouncedLines=$pronouncedLines"
@@ -283,7 +288,9 @@ class AppleMusicAiTranslationService : Service() {
                         }
                         target?.onOnlineTranslationResult(result)
                         if (target != null) {
-                            sendProgress(serial, requestKey, AiTranslationProgress("completed"))
+                            sendProgress(serial, requestKey, AiTranslationProgress(
+                                if (translatedLines > 0) "completed" else "phonetics_completed",
+                            ))
                             LogManager.i(TAG, "stage=result_sent bytes=${result.size}")
                         }
                     } catch (cancelled: CancellationException) {

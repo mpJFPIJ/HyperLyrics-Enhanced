@@ -521,6 +521,25 @@ fun LyricSettingsPage() {
                                 onClick = { showGroqKeyDialog = true },
                             )
                             ArrowPreference(
+                                title = if (koreanLocale) "추천 가사 처리 구조 적용"
+                                    else "Apply recommended lyric pipeline",
+                                summary = if (koreanLocale)
+                                    "Cohere North Small Translate로 한국어 번역, Sudachi로 일본어 한글 발음을 기기에서 별도 처리합니다. 등록한 API 키는 유지됩니다."
+                                    else "Cohere translates into Korean; Sudachi produces offline Japanese readings separately. Existing API keys are preserved.",
+                                onClick = {
+                                    model = "north-small-translate-1.0"
+                                    baseUrl = "https://api.cohere.ai/compatibility/v1"
+                                    targetLang = "한국어"
+                                    aiTransEnabled = true
+                                    webSearchEnabled = false
+                                    saveConfig(RootConstants.KEY_HOOK_AI_TRANS_MODEL, model)
+                                    saveConfig(RootConstants.KEY_HOOK_AI_TRANS_BASE_URL, baseUrl)
+                                    saveConfig(RootConstants.KEY_HOOK_AI_TRANS_TARGET_LANG, targetLang)
+                                    saveConfig(RootConstants.KEY_HOOK_AI_TRANS_ENABLE, true)
+                                    saveConfig(RootConstants.KEY_HOOK_AI_TRANS_WEB_SEARCH, false)
+                                },
+                            )
+                            ArrowPreference(
                                 title = stringResource(R.string.label_ai_trans_model),
                                 endActions = {
                                     Text(

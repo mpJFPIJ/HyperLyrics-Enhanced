@@ -157,9 +157,9 @@ class ApplePronunciationPolicyTest {
     }
 
     @Test
-    fun `uses line text for Hangul when Japanese karaoke has more word cells`() {
+    fun `renders full Hangul words even when Japanese karaoke has more cells`() {
         assertEquals(
-            emptyList<String>(),
+            listOf("키미노", "", "나와", ""),
             ApplePronunciationPolicy.displaySegments(
                 pronunciation = "키미노 나와",
                 mainWordTexts = listOf("君", "の", "名", "は"),
@@ -175,11 +175,11 @@ class ApplePronunciationPolicyTest {
     }
 
     @Test
-    fun `never stuffs an entire unspaced Hangul line into first karaoke word`() {
+    fun `keeps an unspaced Hangul reading intact when no safe token split exists`() {
         assertTrue(ApplePronunciationPolicy.shouldUseLineTextOnly("키미노나와", 4))
         assertFalse(ApplePronunciationPolicy.shouldUseLineTextOnly("키미 노 나 와", 4))
         assertEquals(
-            emptyList<String>(),
+            listOf("키미노나와", "", "", ""),
             ApplePronunciationPolicy.displaySegments(
                 pronunciation = "키미노나와",
                 mainWordTexts = listOf("君", "の", "名", "は"),
@@ -188,12 +188,23 @@ class ApplePronunciationPolicyTest {
     }
 
     @Test
-    fun `never forces Korean reading into mismatched karaoke cells`() {
+    fun `maps complete Korean words to karaoke cells without splitting syllables`() {
         assertEquals(
-            emptyList<String>(),
+            listOf("이마", "코노세데", "키미", "다케", "다이세이카이", ""),
             ApplePronunciationPolicy.displaySegments(
                 pronunciation = "이마 코노세데 키미 다케 다이세이카이",
                 mainWordTexts = listOf("今", "この世で", "君", "だけ", "大正", "解"),
+            ),
+        )
+    }
+
+    @Test
+    fun `combines whole Hangul words when native karaoke has fewer cells`() {
+        assertEquals(
+            listOf("키미 노", "나 와"),
+            ApplePronunciationPolicy.displaySegments(
+                pronunciation = "키미 노 나 와",
+                mainWordTexts = listOf("君の", "名は"),
             ),
         )
     }

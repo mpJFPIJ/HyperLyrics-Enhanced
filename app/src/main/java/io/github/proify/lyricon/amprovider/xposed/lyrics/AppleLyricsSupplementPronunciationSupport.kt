@@ -375,14 +375,17 @@ private fun AppleLyricsSupplementHooks.hookApplePronunciationWordsGetter(
                         mainTimingPronunciation.orEmpty(), nativeRenderableWordBegins(mainWords).size,
                     )
                 ) {
-                    // Let the separate line-text getter expose the whole reading.
-                    // Do not attach that reading to the first native karaoke word.
+                    // Apple's karaoke UI needs a nonempty pronunciation word
+                    // vector to display the row. Returning an empty vector
+                    // here hid otherwise successfully generated Hangul.
+                    // displaySegments preserves whole syllable groups across
+                    // native cells without manufacturing new native words.
                     reportApplePronunciationRuntimeDiagnostic(
-                        stage = "line_only_pronunciation",
+                        stage = "unaligned_word_pronunciation",
                         details = "nativeWords=${nativeVectorSize(mainWords)}",
                     )
-                    emptyApplePronunciationWords(original, mainWords) ?: original
-                } else mainWords?.takeIf { nativeVectorSize(it) > 0 }?.also { vector ->
+                }
+                mainWords?.takeIf { nativeVectorSize(it) > 0 }?.also { vector ->
                     registerApplePronunciationRenderPlan(
                         vector = vector,
                         pronunciation = requireNotNull(mainTimingPronunciation),

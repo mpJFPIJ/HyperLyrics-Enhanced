@@ -16,7 +16,7 @@ class AiProviderCapabilitiesTest {
         val capabilities = AiProviderCapabilities.forConfig(cohere)
         assertFalse(capabilities.requestAiPronunciation)
         assertFalse(capabilities.allowGroqFallback)
-        assertTrue(capabilities.useJsonResponseFormat)
+        assertFalse(capabilities.useJsonResponseFormat)
     }
 
     @Test fun previousProvidersKeepTheirOriginalBehavior() {

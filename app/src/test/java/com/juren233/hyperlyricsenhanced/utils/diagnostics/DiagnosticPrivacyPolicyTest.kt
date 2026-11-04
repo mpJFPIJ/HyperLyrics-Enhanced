@@ -45,4 +45,18 @@ class DiagnosticPrivacyPolicyTest {
         assertTrue(payload.toByteArray(Charsets.UTF_8).size <= 64 * 1024)
         assertTrue(payload.lines().size <= 202)
     }
+
+    @Test fun preservesOnlyKnownSafeProviderErrorReasons() {
+        val sanitized = DiagnosticPrivacyPolicy.event(
+            "11-04 16:26:44.749", "app",
+            "stage=http_rejected code=400 reason=response_format lyrics=secret_key sk=secret",
+        )!!
+        assertTrue(sanitized.contains("code=400 reason=response_format"))
+        assertFalse(sanitized.contains("secret"))
+        val unexpected = DiagnosticPrivacyPolicy.event(
+            "11-04 16:26:44.749", "app",
+            "stage=http_rejected code=400 reason=user_private_sentence",
+        )!!
+        assertFalse(unexpected.contains("user_private_sentence"))
+    }
 }

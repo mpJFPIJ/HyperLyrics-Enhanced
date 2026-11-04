@@ -16,6 +16,9 @@ internal object DiagnosticPrivacyPolicy {
         "network_error", "retry_exhausted", "empty_response", "quality_invalid",
         "cache", "missing_api_key", "no_translatable_lines", "disabled", "timeout",
         "remote_unavailable", "config_incomplete", "invalid_request", "stale",
+        "response_format", "model_unavailable", "invalid_argument", "unspecified",
+        "temperature", "top_p", "max_tokens", "presence_penalty",
+        "frequency_penalty", "api_key_invalid", "quota",
     )
     private val timePattern = Regex("[0-9 T:.-]{1,35}")
 

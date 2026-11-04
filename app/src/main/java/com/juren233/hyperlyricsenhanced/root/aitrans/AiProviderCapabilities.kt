@@ -18,7 +18,10 @@ internal data class AiProviderCapabilities(
             return AiProviderCapabilities(
                 requestAiPronunciation = !isCohere,
                 allowGroqFallback = !isCohere,
-                useJsonResponseFormat = true,
+                // North uses Cohere's documented native Chat V2 endpoint.
+                // Keep the JSON contract in the prompt, not a model-specific
+                // OpenAI compatibility response_format parameter.
+                useJsonResponseFormat = !isCohere,
                 useCustomSampling = !isCohere,
             )
         }

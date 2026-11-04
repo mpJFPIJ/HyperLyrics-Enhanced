@@ -528,7 +528,7 @@ fun LyricSettingsPage() {
                                     else "Cohere translates into Korean; Sudachi produces offline Japanese readings separately. Existing API keys are preserved.",
                                 onClick = {
                                     model = "north-small-translate-1.0"
-                                    baseUrl = "https://api.cohere.ai/compatibility/v1"
+                                    baseUrl = "https://api.cohere.ai/v2"
                                     targetLang = "한국어"
                                     aiTransEnabled = true
                                     webSearchEnabled = false

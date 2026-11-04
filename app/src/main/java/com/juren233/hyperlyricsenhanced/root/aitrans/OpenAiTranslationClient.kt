@@ -38,8 +38,12 @@ internal object OpenAiTranslationClient {
         }
 
         val baseUrl = configs.baseUrl?.removeSuffix("/") ?: "https://api.openai.com/v1"
-        val apiUrl =
-            if (baseUrl.endsWith("/chat/completions")) baseUrl else "$baseUrl/chat/completions"
+        val isCohereNative = CohereNativeChatPolicy.applies(configs)
+        val apiUrl = when {
+            isCohereNative -> CohereNativeChatPolicy.endpoint()
+            baseUrl.endsWith("/chat/completions") -> baseUrl
+            else -> "$baseUrl/chat/completions"
+        }
 
         val requestItems = texts.mapIndexedNotNull { index, text ->
             text.trim().takeIf(::shouldRequestTranslation)?.let {
@@ -124,7 +128,11 @@ internal object OpenAiTranslationClient {
         // Transient 5xx retries use bounded backoff. A 429 only retries when
         // its short Retry-After header and classified reason permit it; hard
         // quota failures and permanent 4xx never enter a retry loop.
-        val requestBody = chatRequest.toJson()
+        val requestBody = if (isCohereNative) {
+            CohereNativeChatPolicy.requestBody(
+                chatRequest.model, chatRequest.messages, chatRequest.maxTokens,
+            )
+        } else chatRequest.toJson()
         var batchCompleted = false
         for (attempt in 0 until OpenAiHttpRetryPolicy.MAX_ATTEMPTS) {
             // A new request starts on the next key; transient retries use the next
@@ -158,6 +166,9 @@ internal object OpenAiTranslationClient {
                         "attempt=${attempt + 1} read_timeout_ms=$remainingMillis " +
                         "stream=$useStreaming max_tokens=${chatRequest.maxTokens ?: 0} " +
                         "batch=${batchNumber + 1}/${batches.size} lines=${batchItems.size}",
+                )
+                if (isCohereNative) LogManager.i(
+                    "AppleMusicAiService", "stage=cohere_native_v2_request",
                 )
                 HookLogger.d(
                     "OpenAiTranslationClient",
@@ -222,11 +233,16 @@ internal object OpenAiTranslationClient {
                     } else {
                         val responseBody = connection.inputStream.bufferedReader(Charsets.UTF_8)
                             .use { it.readText() }
-                        val choice = json.decodeFromString<OpenAiChatResponse>(responseBody)
-                            .choices.firstOrNull()
-                        OpenAiStreamResponseParser.Completion(
-                            choice?.message?.content.orEmpty(), choice?.finishReason,
-                        )
+                        if (isCohereNative) {
+                            val (content, finishReason) = CohereNativeChatPolicy.parseResponse(responseBody)
+                            OpenAiStreamResponseParser.Completion(content, finishReason)
+                        } else {
+                            val choice = json.decodeFromString<OpenAiChatResponse>(responseBody)
+                                .choices.firstOrNull()
+                            OpenAiStreamResponseParser.Completion(
+                                choice?.message?.content.orEmpty(), choice?.finishReason,
+                            )
+                        }
                     }
                     currentCoroutineContext().ensureActive()
                     val elapsedMs = (System.nanoTime() - startedAt) / 1_000_000L
@@ -236,7 +252,9 @@ internal object OpenAiTranslationClient {
                             "finish_reason=${completion.finishReason.orEmpty()} " +
                             "batch=${batchNumber + 1}/${batches.size}",
                     )
-                    if (completion.finishReason == "length") {
+                    if (completion.finishReason == "length" ||
+                        completion.finishReason == "MAX_TOKENS"
+                    ) {
                         LogManager.w("AppleMusicAiService", "stage=primary_truncated")
                         return@withContext fallback("quality_invalid")
                     }

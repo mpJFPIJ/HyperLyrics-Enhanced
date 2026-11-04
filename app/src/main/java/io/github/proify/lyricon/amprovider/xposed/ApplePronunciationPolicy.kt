@@ -58,8 +58,9 @@ internal object ApplePronunciationPolicy {
      * Preserve whole Hangul phonetic words when the AI's spaces do not match
      * Apple's karaoke cells. Splitting every Hangul syllable by source-text
      * length creates false readings (e.g. 今 = "이", この世で = "마코노세데").
-     * When exact word alignment is unavailable, leave some native cells empty
-     * instead of inventing incorrect pronunciation boundaries.
+     * When exact word alignment is unavailable, keep phonetic words whole and
+     * place them in monotonic order over the native cells. Empty intervening
+     * cells are better than truncating or inventing syllable boundaries.
      *
      * 这里只生成显示片段，不创建新的 native LyricsWord。实际渲染继续复用主句 word，
      * 因而每个片段都保留 Apple 原生父歌词行、lineId、wordId 与时间轴。
@@ -74,13 +75,15 @@ internal object ApplePronunciationPolicy {
         val tokens = groupedTokens
         if (tokens.isEmpty()) return emptyList()
 
-        // A Hangul token must never be assigned to an unrelated native word.
-        // The complete pronunciation is exposed by the separate line-text
-        // getter whenever there is no exact one-to-one token alignment.
-        if (shouldUseLineTextOnly(pronunciation, mainWordTexts.size)) return emptyList()
-
         if (RomanizationPolicy.isHangulPronunciation(pronunciation)) {
-            return tokens
+            if (tokens.size == mainWordTexts.size) return tokens
+            val slots = List(mainWordTexts.size) { mutableListOf<String>() }
+            tokens.forEachIndexed { index, token ->
+                val nativeIndex = (index.toLong() * slots.size / tokens.size).toInt()
+                    .coerceIn(0, slots.lastIndex)
+                slots[nativeIndex].add(token)
+            }
+            return slots.map { it.joinToString(" ") }
         }
 
         val measuredWeights = mainWordTexts.map(::pronunciationUnitCount)

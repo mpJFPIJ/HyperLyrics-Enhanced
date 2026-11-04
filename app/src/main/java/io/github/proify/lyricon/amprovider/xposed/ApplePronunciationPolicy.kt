@@ -55,9 +55,9 @@ internal object ApplePronunciationPolicy {
 
     /**
      * Only display Hangul per karaoke word when its original text and sound have
-     * been verified together. Space counts and kanji character weights do not
-     * encode Japanese spoken-word boundaries. Without a verified map, anchor
-     * the full reading to a single native word rather than inventing timings.
+     * been verified together. A fallback without such a map is approximate, but
+     * must still remain fully visible: placing an entire lyric sentence under
+     * the first native word silently clips every syllable after its width.
      * Never create synthetic Apple LyricsWord objects or alter their timestamps.
      */
     fun displaySegments(
@@ -79,11 +79,22 @@ internal object ApplePronunciationPolicy {
                 } && alignedWords.joinToString("") { it.hangul }.hangulOnly() ==
                     pronunciation.hangulOnly()
             ) return alignedWords.map { it.hangul }
-            // No reliable source-to-sound map: preserve the entire phrase on one
-            // karaoke anchor rather than assigning syllables to unrelated kanji.
-            return listOf(pronunciation.trim()) + List(mainWordTexts.size - 1) { "" }
+            // Last-resort display fallback. Prefer intact space-delimited syllable
+            // groups; an unspaced reading can only be shared as Hangul syllables.
+            // This is visual distribution, not a claim of precise word timing.
+            val fallbackTokens = if (tokens.size == 1 && mainWordTexts.size > 1) {
+                tokens.single().map(Char::toString)
+            } else tokens
+            return distributeByNativeWordWeight(fallbackTokens, mainWordTexts)
         }
 
+        return distributeByNativeWordWeight(tokens, mainWordTexts)
+    }
+
+    private fun distributeByNativeWordWeight(
+        tokens: List<String>,
+        mainWordTexts: List<String>,
+    ): List<String> {
         val measuredWeights = mainWordTexts.map(::pronunciationUnitCount)
         val weights = if (measuredWeights.any { it > 0 }) {
             measuredWeights

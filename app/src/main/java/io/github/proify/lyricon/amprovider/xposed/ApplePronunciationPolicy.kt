@@ -1,6 +1,7 @@
 package io.github.proify.lyricon.amprovider.xposed
 
 import com.juren233.hyperlyricsenhanced.common.lyric.RomanizationPolicy
+import com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation
 
 internal object ApplePronunciationPolicy {
     fun nonNullDisplayText(text: String?): String = text.orEmpty()
@@ -53,21 +54,16 @@ internal object ApplePronunciationPolicy {
     }
 
     /**
-     * 将整行发音文本按 Apple 原生主句 word 的实际文本权重分配。
-     *
-     * Preserve whole Hangul phonetic words when the AI's spaces do not match
-     * Apple's karaoke cells. Splitting every Hangul syllable by source-text
-     * length creates false readings (e.g. 今 = "이", この世で = "마코노세데").
-     * When exact word alignment is unavailable, keep phonetic words whole and
-     * place them in monotonic order over the native cells. Empty intervening
-     * cells are better than truncating or inventing syllable boundaries.
-     *
-     * 这里只生成显示片段，不创建新的 native LyricsWord。实际渲染继续复用主句 word，
-     * 因而每个片段都保留 Apple 原生父歌词行、lineId、wordId 与时间轴。
+     * Only display Hangul per karaoke word when its original text and sound have
+     * been verified together. Space counts and kanji character weights do not
+     * encode Japanese spoken-word boundaries. Without a verified map, anchor
+     * the full reading to a single native word rather than inventing timings.
+     * Never create synthetic Apple LyricsWord objects or alter their timestamps.
      */
     fun displaySegments(
         pronunciation: String,
         mainWordTexts: List<String>,
+        alignedWords: List<LyricWordPronunciation>? = null,
     ): List<String> {
         if (mainWordTexts.isEmpty()) return emptyList()
         val groupedTokens = pronunciation.trim().split(Regex("\\s+"))
@@ -76,14 +72,16 @@ internal object ApplePronunciationPolicy {
         if (tokens.isEmpty()) return emptyList()
 
         if (RomanizationPolicy.isHangulPronunciation(pronunciation)) {
-            if (tokens.size == mainWordTexts.size) return tokens
-            val slots = List(mainWordTexts.size) { mutableListOf<String>() }
-            tokens.forEachIndexed { index, token ->
-                val nativeIndex = (index.toLong() * slots.size / tokens.size).toInt()
-                    .coerceIn(0, slots.lastIndex)
-                slots[nativeIndex].add(token)
-            }
-            return slots.map { it.joinToString(" ") }
+            if (alignedWords != null && alignedWords.size == mainWordTexts.size &&
+                alignedWords.zip(mainWordTexts).all { (reading, source) ->
+                    reading.source.trim() == source.trim() &&
+                        (reading.hangul.isEmpty() || RomanizationPolicy.isHangulPronunciation(reading.hangul))
+                } && alignedWords.joinToString("") { it.hangul }.hangulOnly() ==
+                    pronunciation.hangulOnly()
+            ) return alignedWords.map { it.hangul }
+            // No reliable source-to-sound map: preserve the entire phrase on one
+            // karaoke anchor rather than assigning syllables to unrelated kanji.
+            return listOf(pronunciation.trim()) + List(mainWordTexts.size - 1) { "" }
         }
 
         val measuredWeights = mainWordTexts.map(::pronunciationUnitCount)
@@ -101,6 +99,8 @@ internal object ApplePronunciationPolicy {
             tokens.subList(tokenStart, tokenEnd).joinToString(" ")
         }
     }
+
+    private fun String.hangulOnly(): String = filter { it in '가'..'힣' }
 
     fun shouldUseLineTextOnly(pronunciation: String, mainWordCount: Int): Boolean =
         mainWordCount > 0 && RomanizationPolicy.isHangulPronunciation(pronunciation) &&

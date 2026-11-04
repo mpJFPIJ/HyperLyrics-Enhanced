@@ -386,9 +386,31 @@ private fun AppleLyricsSupplementHooks.hookApplePronunciationWordsGetter(
                     )
                 }
                 mainWords?.takeIf { nativeVectorSize(it) > 0 }?.also { vector ->
+                    // The Enhanced process can provide an exact source-word map
+                    // only when its offline tokenizer agrees with the chosen
+                    // full-line Hangul. No count-based guessing in the hook.
+                    val alignedWords = if (userPronunciation == null &&
+                        selectedPronunciation.fromSupplement &&
+                        mainTimingPronunciation == onlinePronunciation
+                    ) {
+                        val begin = runCatching {
+                            (lyricsNativeCall(line, AppleMusicRuntimeMember.LYRICS_NATIVE_BEGIN_METHOD)
+                                as Number).toLong()
+                        }.getOrNull()
+                        val end = runCatching {
+                            (lyricsNativeCall(line, AppleMusicRuntimeMember.LYRICS_NATIVE_END_METHOD)
+                                as Number).toLong()
+                        }.getOrNull()
+                        if (begin != null && end != null) {
+                            nativeOnlineTranslationStore.aiHangulPronunciationWords(
+                                currentAppleLyricsSongId, begin, end, originalText,
+                            )
+                        } else null
+                    } else null
                     registerApplePronunciationRenderPlan(
                         vector = vector,
                         pronunciation = requireNotNull(mainTimingPronunciation),
+                        alignedWords = alignedWords,
                     )
                     reportApplePronunciationRuntimeDiagnostic(
                         stage = "word_track_registered",
@@ -730,8 +752,9 @@ private fun AppleLyricsSupplementHooks.emptyApplePronunciationWords(
 private fun AppleLyricsSupplementHooks.registerApplePronunciationRenderPlan(
     vector: Any,
     pronunciation: String,
+    alignedWords: List<com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation>? = null,
 ) {
-    pronunciationState.registerRenderPlan(vector, ApplePronunciationRenderPlan(pronunciation))
+    pronunciationState.registerRenderPlan(vector, ApplePronunciationRenderPlan(pronunciation, alignedWords))
 }
 
 private fun AppleLyricsSupplementHooks.consumeApplePronunciationRenderPlan(vector: Any): ApplePronunciationRenderPlan? =
@@ -769,6 +792,7 @@ private fun AppleLyricsSupplementHooks.buildApplePronunciationWordRenderContext(
     val segments = ApplePronunciationPolicy.displaySegments(
         pronunciation = plan.pronunciation,
         mainWordTexts = mainWordTexts,
+        alignedWords = plan.alignedWords,
     )
     if (segments.isEmpty()) return null
     reportApplePronunciationRuntimeDiagnostic(

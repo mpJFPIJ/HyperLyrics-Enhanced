@@ -157,16 +157,16 @@ class ApplePronunciationPolicyTest {
     }
 
     @Test
-    fun `renders full Hangul words even when Japanese karaoke has more cells`() {
+    fun `preserves entire line when Hangul tokens do not match karaoke cells`() {
         assertEquals(
-            listOf("키미노", "", "나와", ""),
+            listOf("키미노 나와", "", "", ""),
             ApplePronunciationPolicy.displaySegments(
                 pronunciation = "키미노 나와",
                 mainWordTexts = listOf("君", "の", "名", "は"),
             ),
         )
         assertEquals(
-            listOf("아이", "러브", "유"),
+            listOf("아이 러브 유", "", ""),
             ApplePronunciationPolicy.displaySegments(
                 pronunciation = "아이 러브 유",
                 mainWordTexts = listOf("I", "love", "you"),
@@ -188,9 +188,9 @@ class ApplePronunciationPolicyTest {
     }
 
     @Test
-    fun `maps complete Korean words to karaoke cells without splitting syllables`() {
+    fun `keeps a whole lyric reading together rather than scattering words by index`() {
         assertEquals(
-            listOf("이마", "코노세데", "키미", "다케", "다이세이카이", ""),
+            listOf("이마 코노세데 키미 다케 다이세이카이", "", "", "", "", ""),
             ApplePronunciationPolicy.displaySegments(
                 pronunciation = "이마 코노세데 키미 다케 다이세이카이",
                 mainWordTexts = listOf("今", "この世で", "君", "だけ", "大正", "解"),
@@ -199,12 +199,46 @@ class ApplePronunciationPolicyTest {
     }
 
     @Test
-    fun `combines whole Hangul words when native karaoke has fewer cells`() {
+    fun `does not redistribute whole Hangul words into unrelated karaoke cells`() {
         assertEquals(
-            listOf("키미 노", "나 와"),
+            listOf("키미 노 나 와", ""),
             ApplePronunciationPolicy.displaySegments(
                 pronunciation = "키미 노 나 와",
                 mainWordTexts = listOf("君の", "名は"),
+            ),
+        )
+    }
+
+    @Test
+    fun `uses individually verified readings for matching Apple native karaoke words`() {
+        val aligned = listOf(
+            com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation("駄目", "다메"),
+            com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation("駄目", "다메"),
+            com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation("脳", "노"),
+            com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation("みそ", "미소"),
+        )
+        assertEquals(
+            listOf("다메", "다메", "노", "미소"),
+            ApplePronunciationPolicy.displaySegments(
+                pronunciation = "다메 다메 노미소",
+                mainWordTexts = listOf("駄目", "駄目", "脳", "みそ"),
+                alignedWords = aligned,
+            ),
+        )
+    }
+
+    @Test
+    fun `rejects stale word alignments from another line`() {
+        val aligned = listOf(
+            com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation("君", "키미"),
+            com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation("名", "나"),
+        )
+        assertEquals(
+            listOf("노미소", ""),
+            ApplePronunciationPolicy.displaySegments(
+                pronunciation = "노미소",
+                mainWordTexts = listOf("脳", "みそ"),
+                alignedWords = aligned,
             ),
         )
     }

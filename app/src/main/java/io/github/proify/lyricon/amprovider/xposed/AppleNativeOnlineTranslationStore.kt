@@ -6,6 +6,7 @@ import com.juren233.hyperlyricsenhanced.common.lyric.OnlineTranslationContentPol
 import com.juren233.hyperlyricsenhanced.common.lyric.OnlineTranslationMatchStat
 import com.juren233.hyperlyricsenhanced.common.lyric.OnlineTranslationMatchStatsCodec
 import com.juren233.hyperlyricsenhanced.lyric.model.Song
+import com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation
 
 internal class AppleNativeOnlineTranslationStore {
     private data class TimingKey(
@@ -21,6 +22,7 @@ internal class AppleNativeOnlineTranslationStore {
     private data class Content(
         val translation: String?,
         val pronunciation: String?,
+        val wordPronunciations: List<LyricWordPronunciation>?,
     )
 
     private data class Entry(
@@ -138,6 +140,7 @@ internal class AppleNativeOnlineTranslationStore {
             val content = Content(
                 translation = sanitizeContent(line.translation),
                 pronunciation = RomanizationPolicy.sanitizeSupplement(line.text, line.roma),
+                wordPronunciations = line.pronunciationWords,
             )
             if (content.translation == null && content.pronunciation == null) {
                 return@mapNotNull null
@@ -211,6 +214,15 @@ internal class AppleNativeOnlineTranslationStore {
         text: String?,
     ): String? = content(songId, begin, end, text, aiOverlay)
         ?.pronunciation?.takeIf(RomanizationPolicy::isHangulPronunciation)
+
+    fun aiHangulPronunciationWords(
+        songId: String?,
+        begin: Long,
+        end: Long,
+        text: String?,
+    ): List<LyricWordPronunciation>? = content(songId, begin, end, text, aiOverlay)
+        ?.takeIf { RomanizationPolicy.isHangulPronunciation(it.pronunciation) }
+        ?.wordPronunciations
 
     fun hasTranslation(songId: String?): Boolean =
         !songId.isNullOrBlank() &&

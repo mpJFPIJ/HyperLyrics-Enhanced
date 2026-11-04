@@ -18,6 +18,8 @@ import com.juren233.hyperlyricsenhanced.root.aitrans.AiApiKeyStore
 import com.juren233.hyperlyricsenhanced.lyric.style.AiTranslationProvider
 import com.juren233.hyperlyricsenhanced.root.aitrans.AITranslator
 import com.juren233.hyperlyricsenhanced.root.aitrans.AiTranslationProgress
+import com.juren233.hyperlyricsenhanced.root.aitrans.LocalJapanesePronunciation
+import com.juren233.hyperlyricsenhanced.root.aitrans.SudachiReadingEngine
 import io.github.proify.extensions.deflate
 import io.github.proify.extensions.inflate
 import kotlinx.coroutines.CancellationException
@@ -255,7 +257,18 @@ class AppleMusicAiTranslationService : Service() {
                         // selection, while AI-first displays only fresh Hangul.
                         val aiOnly = translated.copy(lyrics = translated.lyrics?.mapIndexed { index, line ->
                             val inheritedReading = song.lyrics?.getOrNull(index)?.roma
-                            if (line.roma == inheritedReading) line.copy(roma = null) else line
+                            if (line.roma == inheritedReading) {
+                                line.copy(roma = null, pronunciationWords = null)
+                            } else {
+                                val aligned = line.roma?.let { sound ->
+                                    LocalJapanesePronunciation.alignedWords(
+                                        words = line.words.orEmpty().map { it.text.orEmpty() },
+                                        linePronunciation = sound,
+                                        japaneseReading = SudachiReadingEngine::reading,
+                                    )
+                                }
+                                line.copy(pronunciationWords = aligned)
+                            }
                         })
                         val pronouncedLines = aiOnly.lyrics.orEmpty()
                             .count { !it.roma.isNullOrBlank() }

@@ -1,6 +1,7 @@
 package com.juren233.hyperlyricsenhanced.root.aitrans
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -25,5 +26,25 @@ class LocalJapanesePronunciationTest {
             listOf("君の名は I love you"),
         ) { if (it == "君の名は") "キミノナワ" else null }
         assertEquals("키미노나와 아이 러브 유", result.single().roma)
+    }
+
+    @Test fun alignsActualKaraokeWordReadingsOnlyWhenTheyAgreeWithTheSelectedLine() {
+        val analyzer: (String) -> String? = { when (it) {
+            "駄目" -> "ダメ"
+            "脳" -> "ノウ"
+            "みそ" -> "ミソ"
+            else -> null
+        } }
+        val aligned = LocalJapanesePronunciation.alignedWords(
+            listOf("駄目", "駄目", "脳", "みそ"),
+            linePronunciation = "다메 다메 노미소",
+            japaneseReading = analyzer,
+        )
+        assertEquals(listOf("다메", "다메", "노", "미소"), aligned?.map { it.hangul })
+        assertNull(LocalJapanesePronunciation.alignedWords(
+            listOf("駄目", "駄目", "脳", "みそ"),
+            linePronunciation = "다메 다메 키코",
+            japaneseReading = analyzer,
+        ))
     }
 }

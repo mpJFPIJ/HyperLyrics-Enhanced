@@ -1,5 +1,8 @@
 package com.juren233.hyperlyricsenhanced.root.aitrans
 
+import com.juren233.hyperlyricsenhanced.common.lyric.RomanizationPolicy
+import com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation
+
 /** Indexed, optional Hangul readings, never a substitute for translated meaning. */
 internal object LocalJapanesePronunciation {
     private val scriptRuns = Regex("[\\u3040-\\u30ff\\u3400-\\u9fff\\u3005]+|[A-Za-z]+")
@@ -28,6 +31,30 @@ internal object LocalJapanesePronunciation {
             }
             reading?.let { TranslationItem(index = index, roma = it) }
         }
+
+    /**
+     * Karaoke timing comes from original Apple words, not AI-invented space boundaries.
+     * Only send per-word readings if the concatenated sound equals the selected AI line.
+     * On disagreement, let Apple display the whole line instead of placing false syllables.
+     */
+    fun alignedWords(
+        words: List<String>,
+        linePronunciation: String,
+        japaneseReading: (String) -> String?,
+    ): List<LyricWordPronunciation>? {
+        if (words.isEmpty() || !RomanizationPolicy.isHangulPronunciation(linePronunciation)) return null
+        val aligned = words.filter(String::isNotBlank).map { original ->
+            val result = generate(listOf(original), japaneseReading).firstOrNull()?.roma
+                ?: if (original.none(Char::isLetter)) "" else return null
+            LyricWordPronunciation(original, result)
+        }
+        if (aligned.isEmpty()) return null
+        fun compactHangul(text: String): String = text.filter { it in '가'..'힣' }
+        val assembled = compactHangul(aligned.joinToString("") { it.hangul })
+        return aligned.takeIf {
+            assembled.isNotEmpty() && assembled == compactHangul(linePronunciation)
+        }
+    }
 
     private fun mixedJapaneseEnglishReading(
         text: String,

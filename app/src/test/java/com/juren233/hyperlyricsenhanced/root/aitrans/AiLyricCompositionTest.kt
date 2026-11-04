@@ -4,13 +4,13 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class AiLyricCompositionTest {
-    @Test fun translationAndPronunciationRemainIndependent() {
+    @Test fun verifiedAiPronunciationIsNotOverwrittenByOfflineFallback() {
         val translated = listOf(
-            TranslationItem(index = 0, trans = "안 돼", roma = "다무"),
+            TranslationItem(index = 0, trans = "안 돼", roma = "다메"),
             TranslationItem(index = 2, trans = "너의 이름은"),
         )
         val local = listOf(
-            TranslationItem(index = 0, roma = "다메"),
+            TranslationItem(index = 0, roma = "다무"),
             TranslationItem(index = 2, roma = "키미노 나와"),
             TranslationItem(index = 3, roma = "아이 러브 유"),
         )
@@ -20,6 +20,12 @@ class AiLyricCompositionTest {
         assertEquals("다메", merged[0].roma)
         assertEquals("키미노 나와", merged[1].roma)
         assertEquals("", merged[2].trans)
+    }
+
+    @Test fun invalidAiPronunciationUsesOfflineHangulFallback() {
+        val translated = listOf(TranslationItem(0, "싫어", "dame"))
+        val local = listOf(TranslationItem(0, roma = "다메"))
+        assertEquals("다메", AiLyricComposition.merge(translated, local).single().roma)
     }
 
     @Test fun keepsExistingReadingsWhereLocalAnalysisIsNotAvailable() {

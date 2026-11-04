@@ -1,6 +1,7 @@
 package io.github.proify.lyricon.amprovider.xposed
 
 import com.juren233.hyperlyricsenhanced.lyric.model.RichLyricLine
+import com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation
 import com.juren233.hyperlyricsenhanced.lyric.model.Song
 import com.juren233.hyperlyricsenhanced.lyric.model.lyricMetadataOf
 import com.juren233.hyperlyricsenhanced.common.lyric.LyricMetadataKeys
@@ -11,6 +12,25 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AppleNativeOnlineTranslationStoreTest {
+    @Test
+    fun `retains verified word readings only in matching standalone AI overlay`() {
+        val store = AppleNativeOnlineTranslationStore()
+        val words = listOf(
+            LyricWordPronunciation("駄目", "다메"),
+            LyricWordPronunciation("脳", "노"),
+        )
+        store.receive(
+            Song(id = "100", lyrics = listOf(RichLyricLine(
+                begin = 1_000, end = 2_000, text = "駄目脳", roma = "다메 노",
+                pronunciationWords = words,
+            ))),
+            preserveExistingPronunciation = true,
+        )
+        assertEquals(words, store.aiHangulPronunciationWords("100", 1_000, 2_000, "駄目脳"))
+        assertNull(store.aiHangulPronunciationWords("100", 2_000, 3_000, "駄目脳"))
+        assertNull(store.aiHangulPronunciationWords("200", 1_000, 2_000, "駄目脳"))
+    }
+
     @Test
     fun `exposes independent online content sources only for available content`() {
         val store = AppleNativeOnlineTranslationStore()

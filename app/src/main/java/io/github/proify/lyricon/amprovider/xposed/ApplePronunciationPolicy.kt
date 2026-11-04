@@ -82,10 +82,14 @@ internal object ApplePronunciationPolicy {
             // Last-resort display fallback. Prefer intact space-delimited syllable
             // groups; an unspaced reading can only be shared as Hangul syllables.
             // This is visual distribution, not a claim of precise word timing.
-            val fallbackTokens = if (tokens.size == 1 && mainWordTexts.size > 1) {
+            val splittingUnspacedLine = tokens.size == 1 && mainWordTexts.size > 1
+            val fallbackTokens = if (splittingUnspacedLine) {
                 tokens.single().map(Char::toString)
             } else tokens
-            return distributeByNativeWordWeight(fallbackTokens, mainWordTexts)
+            return distributeByNativeWordWeight(
+                fallbackTokens, mainWordTexts,
+                separator = if (splittingUnspacedLine) "" else " ",
+            )
         }
 
         return distributeByNativeWordWeight(tokens, mainWordTexts)
@@ -94,6 +98,7 @@ internal object ApplePronunciationPolicy {
     private fun distributeByNativeWordWeight(
         tokens: List<String>,
         mainWordTexts: List<String>,
+        separator: String = " ",
     ): List<String> {
         val measuredWeights = mainWordTexts.map(::pronunciationUnitCount)
         val weights = if (measuredWeights.any { it > 0 }) {
@@ -107,7 +112,7 @@ internal object ApplePronunciationPolicy {
             val tokenStart = consumedWeight * tokens.size / totalWeight
             consumedWeight += weight
             val tokenEnd = consumedWeight * tokens.size / totalWeight
-            tokens.subList(tokenStart, tokenEnd).joinToString(" ")
+            tokens.subList(tokenStart, tokenEnd).joinToString(separator)
         }
     }
 

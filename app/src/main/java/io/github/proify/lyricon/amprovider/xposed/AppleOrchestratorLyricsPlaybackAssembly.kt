@@ -372,6 +372,9 @@ internal class AppleOrchestratorLyricsPlaybackAssembly(
                     null
                 }
             },
+            clearCurrentAiTranslation = { songId ->
+                directPlayer?.clearCurrentSongAiTranslation(songId) == true
+            },
             requestOnlineSource = { requestId, songId, contentType, source ->
                 directPlayer?.requestOnlineLyricContentSource(
                     requestId = requestId,
@@ -381,6 +384,19 @@ internal class AppleOrchestratorLyricsPlaybackAssembly(
                 ) == true
             },
             debugValue = lyricsHooks::debugAppleLyricsValue,
+            lyricSyncOffsetForSong = lyricsHooks::lyricSyncOffsetForSong,
+            changeLyricSyncOffset = lyricsHooks::changeLyricSyncOffset,
+            hasKnownNativeLyricsForSong = { songId ->
+                missingLyricsHooks.hasKnownNativeLyricsFor(songId)
+            },
+            currentEditableLine = { songId ->
+                lyricsHooks.currentEditableNativeLine(songId)
+            },
+            saveEditableLine = { line, translation, pronunciation ->
+                lyricsHooks.saveUserLineTranslationAndPronunciation(
+                    line, translation, pronunciation,
+                )
+            },
             configuredOrderedSources = {
                 com.juren233.hyperlyricsenhanced.online.OnlineTranslationSourcePreferences
                     .orderedSources(catalogLanguage.contentUiLanguagePrefs)
@@ -447,6 +463,16 @@ internal class AppleOrchestratorLyricsPlaybackAssembly(
             ) {
                 playbackHooks.onNetworkAutoSkipPreferenceChanged()
             }
+            if (
+                key == RootConstants.KEY_HOOK_APPLE_MUSIC_LYRICS_DISPLAY_MODE ||
+                key == RootConstants.KEY_HOOK_APPLE_MUSIC_TRANSLATION_DISPLAY_OVERRIDE ||
+                key == RootConstants.KEY_HOOK_APPLE_MUSIC_PRONUNCIATION_DISPLAY_OVERRIDE ||
+                key == RootConstants.KEY_HOOK_APPLE_MUSIC_PRONUNCIATION_SOURCE_PRIORITY
+            ) {
+                // Use the existing full-bind refresh to avoid duplicated child translation rows.
+                // Cross-process preference propagation can be delayed; reopening lyrics is a fallback.
+                lyricsHooks.refreshAppleLyricsSupplementPresentation(syncDisplayFlags = true)
+            }
         }
         networkAutoSkipPreferenceListener?.let { previous ->
             runCatching { prefs.unregisterOnSharedPreferenceChangeListener(previous) }
@@ -465,6 +491,7 @@ internal class AppleOrchestratorLyricsPlaybackAssembly(
             onOriginalMetadataRequested =
                 playbackMetadataCoordinator::resolveOriginalMetadataOnDemand,
             onOnlineTranslationReceived = lyricsHooks::receiveNativeOnlineTranslation,
+            onStandaloneAiTranslationReceived = lyricsHooks::receiveStandaloneAiTranslation,
             onOnlineTranslationCleared = lyricsHooks::clearNativeOnlineTranslation,
             onMissingLyricsSupplementReceived = lyricsHooks::receiveMissingLyricsSupplement,
             onMissingLyricsSupplementCleared = missingLyricsHooks::clearSupplement,
@@ -496,6 +523,7 @@ internal class AppleOrchestratorLyricsPlaybackAssembly(
                 },
         ).also { it.start() }
         this.directPlayer = directPlayer
+        ProviderLogger.info("standalone_ai stage=module_initialized support=app_binder_v2")
         val helper = runCatching {
             ProviderLogger.diagnostic("中央注册诊断: stage=provider_creating")
             LyriconFactory.createProvider(

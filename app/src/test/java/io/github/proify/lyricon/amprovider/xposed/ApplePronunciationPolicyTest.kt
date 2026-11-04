@@ -157,6 +157,87 @@ class ApplePronunciationPolicyTest {
     }
 
     @Test
+    fun `fallback never puts an entire long Hangul sentence under one karaoke word`() {
+        val parts = ApplePronunciationPolicy.displaySegments(
+            pronunciation = "다메 다메 다메 노미소노 나카 카라 야메로 바카 토 와메쿠",
+            mainWordTexts = listOf("駄目", "駄目", "駄目", "脳", "みそ", "の", "中", "から"),
+        )
+        assertEquals(8, parts.size)
+        assertTrue(parts.count(String::isNotBlank) > 1)
+        assertEquals(
+            "다메다메다메노미소노나카카라야메로바카토와메쿠",
+            parts.joinToString("").filter { it in '가'..'힣' },
+        )
+    }
+
+    @Test
+    fun `unspaced Hangul remains completely visible across multiple native cells`() {
+        assertTrue(ApplePronunciationPolicy.shouldUseLineTextOnly("키미노나와", 4))
+        assertFalse(ApplePronunciationPolicy.shouldUseLineTextOnly("키미 노 나 와", 4))
+        val parts = ApplePronunciationPolicy.displaySegments(
+            pronunciation = "키미노나와",
+            mainWordTexts = listOf("君", "の", "名", "は"),
+        )
+        assertEquals(4, parts.size)
+        assertEquals("키미노나와", parts.joinToString(""))
+        assertTrue(parts.count(String::isNotBlank) > 1)
+    }
+
+    @Test
+    fun `fallback preserves whole syllable groups without clipping the lyric row`() {
+        val parts = ApplePronunciationPolicy.displaySegments(
+            pronunciation = "이마 코노세데 키미 다케 다이세이카이",
+            mainWordTexts = listOf("今", "この世で", "君", "だけ", "大正", "解"),
+        )
+        assertEquals(6, parts.size)
+        assertEquals("이마코노세데키미다케다이세이카이", parts.joinToString("").filter { it in '가'..'힣' })
+        assertTrue(parts.count(String::isNotBlank) > 1)
+    }
+
+    @Test
+    fun `fallback retains text when source cells and Hangul space groups differ`() {
+        val parts = ApplePronunciationPolicy.displaySegments(
+            pronunciation = "키미 노 나 와",
+            mainWordTexts = listOf("君の", "名は"),
+        )
+        assertEquals(2, parts.size)
+        assertEquals("키미노나와", parts.joinToString("").filter { it in '가'..'힣' })
+    }
+
+    @Test
+    fun `uses individually verified readings for matching Apple native karaoke words`() {
+        val aligned = listOf(
+            com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation("駄目", "다메"),
+            com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation("駄目", "다메"),
+            com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation("脳", "노"),
+            com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation("みそ", "미소"),
+        )
+        assertEquals(
+            listOf("다메", "다메", "노", "미소"),
+            ApplePronunciationPolicy.displaySegments(
+                pronunciation = "다메 다메 노미소",
+                mainWordTexts = listOf("駄目", "駄目", "脳", "みそ"),
+                alignedWords = aligned,
+            ),
+        )
+    }
+
+    @Test
+    fun `rejects stale word alignments from another line`() {
+        val aligned = listOf(
+            com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation("君", "키미"),
+            com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation("名", "나"),
+        )
+        val parts = ApplePronunciationPolicy.displaySegments(
+            pronunciation = "노미소",
+            mainWordTexts = listOf("脳", "みそ"),
+            alignedWords = aligned,
+        )
+        assertEquals(2, parts.size)
+        assertEquals("노미소", parts.joinToString(""))
+    }
+
+    @Test
     fun `groups pronunciation by the Han characters inside native words`() {
         assertEquals(
             listOf("siu sa", "di", "fong", "pei"),

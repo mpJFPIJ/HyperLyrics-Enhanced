@@ -18,10 +18,12 @@ import com.juren233.hyperlyricsenhanced.root.utils.RuntimePerfDiagnostics
 import com.juren233.hyperlyricsenhanced.ui.utils.AppUtils
 import com.juren233.hyperlyricsenhanced.ui.utils.LocaleUtils
 import com.juren233.hyperlyricsenhanced.utils.LogManager
+import com.juren233.hyperlyricsenhanced.utils.diagnostics.DiagnosticUploadScheduler
 import io.github.libxposed.service.XposedService
 import io.github.libxposed.service.XposedServiceHelper
 
 class RootApplication : Application() {
+    private val serviceBindingTracker = ServiceBindingTracker<XposedService>()
 
     override fun onCreate() {
         super.onCreate()
@@ -30,6 +32,7 @@ class RootApplication : Application() {
         AppUtils.initPredictiveBackGesture(this)
         applyBuildDefaultLogLevel()
         LogManager.init(this)
+        DiagnosticUploadScheduler.sync(this)
         // debug 包专用：性能/功耗采样（含设置页窗口帧耗时），release 为空操作。
         RuntimePerfDiagnostics.start(
             app = this,
@@ -43,12 +46,14 @@ class RootApplication : Application() {
 
         XposedServiceHelper.registerListener(object : XposedServiceHelper.OnServiceListener {
             override fun onServiceBind(service: XposedService) {
+                if (!serviceBindingTracker.bind(service)) return
                 xposedService = service
                 LogManager.i("PrefsBridge", "xposed_service_bound")
                 syncAllPreferences(this@RootApplication)
                 OfficialProviderScopeManager.requestConfiguredScopes(service)
             }
             override fun onServiceDied(service: XposedService) {
+                if (!serviceBindingTracker.died(service)) return
                 xposedService = null
                 LogManager.w("PrefsBridge", "xposed_service_died")
                 OfficialProviderScopeManager.onServiceDied()
@@ -103,6 +108,8 @@ class RootApplication : Application() {
 
         @JvmStatic
         fun syncPreference(group: String, key: String, value: Any?) {
+            // Multi-key pool is app-private: never mirror it into the Xposed service.
+            if (key == RootConstants.KEY_HOOK_AI_TRANS_API_KEYS) return
             if (BuildConfig.DEBUG) {
                 LogManager.i(
                     "PrefsBridge",

@@ -2,6 +2,7 @@
 
 import com.juren233.hyperlyricsenhanced.root.utils.HookLogger
 import com.juren233.hyperlyricsenhanced.lyric.model.Song
+import com.juren233.hyperlyricsenhanced.common.lyric.RomanizationPolicy
 
 /** Applies validated translation items back to lyric lines. */
 internal object AITranslationApplicator {
@@ -15,15 +16,27 @@ internal object AITranslationApplicator {
         val newLyrics = song.lyrics?.mapIndexed { index, line ->
             val transText = translationsByIndex[index]?.trans?.trim()
 
-            if (!transText.isNullOrBlank()
-                && (forceOverride || line.translation.isNullOrBlank())
-                && transText.lowercase() != line.text?.trim()?.lowercase()
+            val shouldReplaceTranslation = !transText.isNullOrBlank() &&
+                (forceOverride || line.translation.isNullOrBlank()) &&
+                transText.lowercase() != line.text?.trim()?.lowercase()
+            // Preserve an original reading in the source model, but display
+            // newly requested Korean phonetics instead of Latin romaji.
+            // Invalid AI output never replaces a valid existing pronunciation.
+            val hangulPronunciation = RomanizationPolicy.sanitizeHangulSupplement(
+                line.text, translationsByIndex[index]?.roma,
+            )
+            val preferredPronunciation = hangulPronunciation
+                ?: line.roma?.takeIf(String::isNotBlank)
+            if (shouldReplaceTranslation ||
+                (preferredPronunciation != null && preferredPronunciation != line.roma)
             ) {
-                appliedCount++
-                line.copy(translation = transText, translationWords = null)
-            } else {
-                line
-            }
+                if (shouldReplaceTranslation) appliedCount++
+                line.copy(
+                    translation = if (shouldReplaceTranslation) transText else line.translation,
+                    translationWords = if (shouldReplaceTranslation) null else line.translationWords,
+                    roma = preferredPronunciation,
+                )
+            } else line
         }
         HookLogger.d(
             "AITranslationApplicator",

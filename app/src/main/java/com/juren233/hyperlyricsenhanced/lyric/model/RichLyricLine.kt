@@ -42,7 +42,9 @@ data class RichLyricLine(
     override var secondaryWords: List<LyricWord>? = null,
     override var translation: String? = null,
     override var translationWords: List<LyricWord>? = null,
-    override var roma: String? = null
+    override var roma: String? = null,
+    /** Same-order readings for original karaoke words, validated against [roma]. */
+    var pronunciationWords: List<LyricWordPronunciation>? = null,
 ) : IRichLyricLine, DeepCopyable<RichLyricLine>, Normalize<RichLyricLine> {
 
     init {

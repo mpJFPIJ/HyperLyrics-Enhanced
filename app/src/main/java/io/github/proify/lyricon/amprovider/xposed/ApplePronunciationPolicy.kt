@@ -1,6 +1,7 @@
 package io.github.proify.lyricon.amprovider.xposed
 
 import com.juren233.hyperlyricsenhanced.common.lyric.RomanizationPolicy
+import com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation
 
 internal object ApplePronunciationPolicy {
     fun nonNullDisplayText(text: String?): String = text.orEmpty()
@@ -53,23 +54,52 @@ internal object ApplePronunciationPolicy {
     }
 
     /**
-     * 将整行发音文本按 Apple 原生主句 word 的实际文本权重分配。
-     *
-     * Apple 可能把多个汉字合并为一个 word，例如“潇洒 / 的 / 放 / 屁”只有 4 个
-     * native word，但需要容纳 5 个粤拼音节。只按 word 数均分会使后续音节错位，
-     * 因此东亚文字按字符数计权，其他非空 word 按一个发音单位计权。
-     *
-     * 这里只生成显示片段，不创建新的 native LyricsWord。实际渲染继续复用主句 word，
-     * 因而每个片段都保留 Apple 原生父歌词行、lineId、wordId 与时间轴。
+     * Only display Hangul per karaoke word when its original text and sound have
+     * been verified together. A fallback without such a map is approximate, but
+     * must still remain fully visible: placing an entire lyric sentence under
+     * the first native word silently clips every syllable after its width.
+     * Never create synthetic Apple LyricsWord objects or alter their timestamps.
      */
     fun displaySegments(
         pronunciation: String,
         mainWordTexts: List<String>,
+        alignedWords: List<LyricWordPronunciation>? = null,
     ): List<String> {
         if (mainWordTexts.isEmpty()) return emptyList()
-        val tokens = pronunciation.trim().split(Regex("\\s+")).filter(String::isNotEmpty)
+        val groupedTokens = pronunciation.trim().split(Regex("\\s+"))
+            .filter(String::isNotEmpty)
+        val tokens = groupedTokens
         if (tokens.isEmpty()) return emptyList()
 
+        if (RomanizationPolicy.isHangulPronunciation(pronunciation)) {
+            if (alignedWords != null && alignedWords.size == mainWordTexts.size &&
+                alignedWords.zip(mainWordTexts).all { (reading, source) ->
+                    reading.source.trim() == source.trim() &&
+                        (reading.hangul.isEmpty() || RomanizationPolicy.isHangulPronunciation(reading.hangul))
+                } && alignedWords.joinToString("") { it.hangul }.hangulOnly() ==
+                    pronunciation.hangulOnly()
+            ) return alignedWords.map { it.hangul }
+            // Last-resort display fallback. Prefer intact space-delimited syllable
+            // groups; an unspaced reading can only be shared as Hangul syllables.
+            // This is visual distribution, not a claim of precise word timing.
+            val splittingUnspacedLine = tokens.size == 1 && mainWordTexts.size > 1
+            val fallbackTokens = if (splittingUnspacedLine) {
+                tokens.single().map(Char::toString)
+            } else tokens
+            return distributeByNativeWordWeight(
+                fallbackTokens, mainWordTexts,
+                separator = if (splittingUnspacedLine) "" else " ",
+            )
+        }
+
+        return distributeByNativeWordWeight(tokens, mainWordTexts)
+    }
+
+    private fun distributeByNativeWordWeight(
+        tokens: List<String>,
+        mainWordTexts: List<String>,
+        separator: String = " ",
+    ): List<String> {
         val measuredWeights = mainWordTexts.map(::pronunciationUnitCount)
         val weights = if (measuredWeights.any { it > 0 }) {
             measuredWeights
@@ -82,9 +112,15 @@ internal object ApplePronunciationPolicy {
             val tokenStart = consumedWeight * tokens.size / totalWeight
             consumedWeight += weight
             val tokenEnd = consumedWeight * tokens.size / totalWeight
-            tokens.subList(tokenStart, tokenEnd).joinToString(" ")
+            tokens.subList(tokenStart, tokenEnd).joinToString(separator)
         }
     }
+
+    private fun String.hangulOnly(): String = filter { it in '가'..'힣' }
+
+    fun shouldUseLineTextOnly(pronunciation: String, mainWordCount: Int): Boolean =
+        mainWordCount > 0 && RomanizationPolicy.isHangulPronunciation(pronunciation) &&
+            pronunciation.trim().split(Regex("\\s+")).count(String::isNotBlank) != mainWordCount
 
     private fun pronunciationUnitCount(text: String): Int {
         val visibleText = text.replace(HTML_TAG, " ").trim()

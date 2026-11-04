@@ -1,0 +1,385 @@
+package com.juren233.hyperlyricsenhanced.service
+
+import android.app.Service
+import android.content.Intent
+import android.content.SharedPreferences
+import android.os.Binder
+import android.os.IBinder
+import android.util.Log
+import com.juren233.hyperlyricsenhanced.utils.LogManager
+import com.juren233.hyperlyricsenhanced.utils.diagnostics.DiagnosticUploadScheduler
+import com.juren233.hyperlyricsenhanced.IAppleMusicAiTranslator
+import com.juren233.hyperlyricsenhanced.IAppleMusicTranslationReceiver
+import com.juren233.hyperlyricsenhanced.common.RootConstants
+import com.juren233.hyperlyricsenhanced.common.UIConstants
+import com.juren233.hyperlyricsenhanced.lyric.model.Song
+import com.juren233.hyperlyricsenhanced.lyric.style.AiTranslationConfigs
+import com.juren233.hyperlyricsenhanced.root.aitrans.AiApiKeyStore
+import com.juren233.hyperlyricsenhanced.lyric.style.AiTranslationProvider
+import com.juren233.hyperlyricsenhanced.root.aitrans.AITranslator
+import com.juren233.hyperlyricsenhanced.root.aitrans.AiTranslationProgress
+import com.juren233.hyperlyricsenhanced.root.aitrans.LocalJapanesePronunciation
+import com.juren233.hyperlyricsenhanced.root.aitrans.SudachiReadingEngine
+import io.github.proify.extensions.deflate
+import io.github.proify.extensions.inflate
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+import java.util.concurrent.atomic.AtomicLong
+
+/**
+ * Runs AI translation in the separately installed Enhanced app, not in Apple Music
+ * or SystemUI. This is necessary when NPatch hooks only the Apple Music process.
+ *
+ * This exported endpoint NEVER exposes the configured API key to the patched app.
+ * Each Binder transaction verifies the Android UID belongs to Apple Music.
+ */
+class AppleMusicAiTranslationService : Service() {
+    private companion object {
+        const val TAG = "AppleMusicAiService"
+        const val MAX_COMPRESSED_BYTES = 768 * 1024
+    }
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val generation = AtomicLong()
+    private val json = Json { ignoreUnknownKeys = true; coerceInputValues = true }
+    private val requestLock = Any()
+    private var requestJob: Job? = null
+    private var activeRequestKey: String? = null
+    private var activeReceiver: IAppleMusicTranslationReceiver? = null
+
+    private fun sendProgress(
+        serial: Long,
+        requestKey: String,
+        progress: AiTranslationProgress,
+    ) {
+        val enabled = getSharedPreferences(UIConstants.PREF_NAME, MODE_PRIVATE).getBoolean(
+            RootConstants.KEY_HOOK_AI_TRANS_SHOW_PROGRESS,
+            RootConstants.DEFAULT_HOOK_AI_TRANS_SHOW_PROGRESS,
+        )
+        if (!enabled) return
+        val receiver = synchronized(requestLock) {
+            if (serial == generation.get() && activeRequestKey == requestKey) activeReceiver else null
+        }
+        runCatching {
+            receiver?.onAiTranslationProgress(
+                progress.stage, progress.batch, progress.totalBatches, progress.fragments,
+            )
+        }.onFailure {
+            LogManager.w(TAG, "stage=progress_callback_failed type=${it.javaClass.simpleName}")
+        }
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        LogManager.i(TAG, "stage=service_created")
+        runCatching { AITranslator.init(applicationContext) }
+            .onFailure { LogManager.w(TAG, "stage=service_init_failed type=${it.javaClass.simpleName}") }
+    }
+
+    override fun onBind(intent: Intent?): IBinder {
+        LogManager.i(TAG, "stage=service_bound")
+        return endpoint
+    }
+
+    private val endpoint = object : IAppleMusicAiTranslator.Stub() {
+        override fun cancel() {
+            if (!AppleMusicAiTranslationPolicy.isAuthorizedCaller(
+                    packageManager.getPackagesForUid(Binder.getCallingUid())
+                )
+            ) return
+            synchronized(requestLock) {
+                generation.incrementAndGet()
+                requestJob?.cancel()
+                AITranslator.cancelActiveRequests()
+                requestJob = null
+                activeRequestKey = null
+                activeReceiver = null
+            }
+            LogManager.i(TAG, "stage=request_cancelled")
+        }
+
+        override fun clearSongTranslation(
+            compressedSong: ByteArray?,
+            receiver: IAppleMusicTranslationReceiver?,
+        ) {
+            if (!AppleMusicAiTranslationPolicy.isAuthorizedCaller(
+                    packageManager.getPackagesForUid(Binder.getCallingUid())
+                )
+            ) return
+            if (receiver == null || compressedSong == null || compressedSong.isEmpty() ||
+                compressedSong.size > MAX_COMPRESSED_BYTES
+            ) return
+            val song = runCatching {
+                json.decodeFromString<Song>(
+                    compressedSong.inflate().toString(Charsets.UTF_8)
+                )
+            }.getOrNull() ?: return
+            val id = song.id?.takeIf(String::isNotBlank) ?: return
+            val serial = synchronized(requestLock) {
+                val current = generation.incrementAndGet()
+                // The currently executing task may otherwise repopulate the
+                // cache and return a stale result after the user deleted it.
+                requestJob?.cancel()
+                AITranslator.cancelActiveRequests()
+                requestJob = null
+                activeRequestKey = null
+                activeReceiver = null
+                current
+            }
+            scope.launch {
+                val ok = runCatching {
+                    val prefs = getSharedPreferences(UIConstants.PREF_NAME, MODE_PRIVATE)
+                    AITranslator.clearSongCache(song, translationConfig(prefs))
+                }.onFailure {
+                    LogManager.w(TAG, "stage=song_clear_failed type=${it.javaClass.simpleName}")
+                }.getOrDefault(false)
+                if (ok && serial == generation.get()) {
+                    LogManager.i(TAG, "stage=song_clear_completed")
+                    runCatching { receiver.onOnlineTranslationCleared(id) }
+                } else if (!ok) {
+                    LogManager.w(TAG, "stage=song_clear_failed reason=cache")
+                }
+            }
+        }
+
+        override fun translate(compressedSong: ByteArray?, receiver: IAppleMusicTranslationReceiver?) {
+            val callingUid = Binder.getCallingUid()
+            val allowed = AppleMusicAiTranslationPolicy.isAuthorizedCaller(
+                packageManager.getPackagesForUid(callingUid)
+            )
+            if (!allowed) {
+                LogManager.w(TAG, "stage=caller_rejected")
+                return
+            }
+            if (receiver == null || compressedSong == null ||
+                compressedSong.isEmpty() || compressedSong.size > MAX_COMPRESSED_BYTES
+            ) {
+                LogManager.w(TAG, "stage=invalid_request")
+                return
+            }
+            LogManager.i(TAG, "stage=request_received bytes=${compressedSong.size}")
+
+            // Decode the small lyric payload before cancelling the running request.
+            // A provider often emits multiple variants of the same song within
+            // seconds; cancelling every in-flight Gemini request prevents a
+            // usable translation/pronunciation result from ever reaching Apple.
+            val song = try {
+                json.decodeFromString<Song>(
+                    compressedSong.inflate().toString(Charsets.UTF_8)
+                )
+            } catch (error: Exception) {
+                LogManager.w(TAG, "stage=song_decode_failed type=${error.javaClass.simpleName}")
+                return
+            }
+            val requestKey = AppleMusicAiRequestIdentity.key(song)
+            synchronized(requestLock) {
+                if (requestKey == activeRequestKey && requestJob?.isActive == true) {
+                    // Only the receiver changes; original lyrics and line indexes
+                    // are identical, so one translation can serve both requests.
+                    activeReceiver = receiver
+                    LogManager.i(TAG, "stage=request_coalesced lines=${song.lyrics.orEmpty().size}")
+                    return
+                }
+
+                val serial = generation.incrementAndGet()
+                requestJob?.cancel()
+                // The scheduler has an independent IO scope: cancelling just
+                // this Binder coroutine leaves the HTTP request running.
+                AITranslator.cancelActiveRequests()
+                activeRequestKey = requestKey
+                activeReceiver = receiver
+                requestJob = scope.launch {
+                    try {
+                        sendProgress(serial, requestKey, AiTranslationProgress("preparing"))
+                        val prefs = getSharedPreferences(UIConstants.PREF_NAME, MODE_PRIVATE)
+                        LogManager.i(TAG, "stage=song_decoded lines=${song.lyrics.orEmpty().size}")
+                        val forceOverride = prefs.getBoolean(
+                            RootConstants.KEY_HOOK_AI_TRANS_FORCE_OVERRIDE,
+                            RootConstants.DEFAULT_HOOK_AI_TRANS_FORCE_OVERRIDE
+                        )
+                        val skipExisting = prefs.getBoolean(
+                            RootConstants.KEY_HOOK_AI_TRANS_SKIP_EXISTING_TRANSLATION,
+                            RootConstants.DEFAULT_HOOK_AI_TRANS_SKIP_EXISTING_TRANSLATION
+                        )
+                        val enabled = prefs.getBoolean(
+                            RootConstants.KEY_HOOK_AI_TRANS_ENABLE,
+                            RootConstants.DEFAULT_HOOK_AI_TRANS_ENABLE
+                        )
+                        val hasExisting = song.lyrics.orEmpty()
+                            .any { !it.translation.isNullOrBlank() }
+                        if (!AppleMusicAiTranslationPolicy.shouldTranslate(
+                                enabled = enabled,
+                                hasLyrics = !song.lyrics.isNullOrEmpty(),
+                                hasExistingTranslation = hasExisting,
+                                skipExisting = skipExisting,
+                                forceOverride = forceOverride,
+                            )
+                        ) {
+                            sendProgress(serial, requestKey, AiTranslationProgress("skipped"))
+                            LogManager.i(
+                                TAG, "stage=request_skipped enabled=$enabled " +
+                                    "hasLyrics=${!song.lyrics.isNullOrEmpty()} " +
+                                    "hasExisting=$hasExisting skipExisting=$skipExisting"
+                            )
+                            return@launch
+                        }
+
+                        val config = translationConfig(prefs)
+                        if (!config.isUsable) {
+                            // The offline phonetics pipeline must remain available
+                            // when the Cohere trial key is expired or not yet set.
+                            sendProgress(serial, requestKey, AiTranslationProgress("pronouncing"))
+                            LogManager.w(TAG, "stage=config_incomplete_local_phonetics_only")
+                        }
+                        LogManager.i(TAG, "stage=translation_started")
+                        val translated = AITranslator.translateSongSync(
+                            song = song,
+                            configs = config,
+                            forceOverride = forceOverride,
+                            onProgress = { progress -> sendProgress(serial, requestKey, progress) },
+                        )
+                        if (serial != generation.get()) {
+                            LogManager.i(TAG, "stage=result_stale")
+                            return@launch
+                        }
+                        // The AI applicator can retain an incoming third-party
+                        // reading. That is not AI output, so do not tag it as
+                        // such in the standalone callback. The receiver keeps
+                        // any provider reading separately for explicit source
+                        // selection, while AI-first displays only fresh Hangul.
+                        val aiOnly = translated.copy(lyrics = translated.lyrics?.mapIndexed { index, line ->
+                            val inheritedReading = song.lyrics?.getOrNull(index)?.roma
+                            if (line.roma == inheritedReading) {
+                                line.copy(roma = null, pronunciationWords = null)
+                            } else {
+                                val aligned = line.roma?.let { sound ->
+                                    LocalJapanesePronunciation.alignedWords(
+                                        words = line.words.orEmpty().map { it.text.orEmpty() },
+                                        linePronunciation = sound,
+                                        japaneseReading = SudachiReadingEngine::reading,
+                                    )
+                                }
+                                line.copy(pronunciationWords = aligned)
+                            }
+                        })
+                        val pronouncedLines = aiOnly.lyrics.orEmpty()
+                            .count { !it.roma.isNullOrBlank() }
+                        val translatedLines = aiOnly.lyrics.orEmpty()
+                            .count { !it.translation.isNullOrBlank() }
+                        if (!AppleMusicAiTranslationPolicy.shouldDeliverResult(
+                                translatedLines = translatedLines,
+                                pronouncedLines = pronouncedLines,
+                            )
+                        ) {
+                            sendProgress(serial, requestKey, AiTranslationProgress("failed"))
+                            LogManager.w(TAG, "stage=no_translation_or_pronunciation_result")
+                            DiagnosticUploadScheduler.onTranslationFailure(this@AppleMusicAiTranslationService)
+                            return@launch
+                        }
+                        LogManager.i(
+                            TAG,
+                            "stage=translation_completed lines=$translatedLines pronouncedLines=$pronouncedLines"
+                        )
+
+                        val result = json.encodeToString(aiOnly)
+                            .toByteArray(Charsets.UTF_8).deflate()
+                        if (result.size > MAX_COMPRESSED_BYTES ||
+                            serial != generation.get()
+                        ) return@launch
+                        // Deliver to the most recent bound receiver for this song.
+                        val target = synchronized(requestLock) {
+                            if (serial == generation.get() && activeRequestKey == requestKey)
+                                activeReceiver else null
+                        }
+                        target?.onOnlineTranslationResult(result)
+                        if (target != null) {
+                            sendProgress(serial, requestKey, AiTranslationProgress(
+                                if (translatedLines > 0) "completed" else "phonetics_completed",
+                            ))
+                            LogManager.i(TAG, "stage=result_sent bytes=${result.size}")
+                        }
+                    } catch (cancelled: CancellationException) {
+                        LogManager.i(TAG, "stage=request_cancelled_inflight")
+                        throw cancelled
+                    } catch (error: Exception) {
+                        sendProgress(serial, requestKey, AiTranslationProgress("failed"))
+                        // Never log the lyrics, request body, or private API credentials.
+                        LogManager.w(TAG, "stage=translation_failed type=${error.javaClass.simpleName}")
+                        DiagnosticUploadScheduler.onTranslationFailure(this@AppleMusicAiTranslationService)
+                    } finally {
+                        synchronized(requestLock) {
+                            if (serial == generation.get() && activeRequestKey == requestKey) {
+                                activeRequestKey = null
+                                activeReceiver = null
+                                requestJob = null
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun translationConfig(prefs: SharedPreferences): AiTranslationConfigs {
+        val providerName = prefs.getString(
+            RootConstants.KEY_HOOK_AI_TRANS_PROVIDER, AiTranslationProvider.OPENAI.name
+        ) ?: AiTranslationProvider.OPENAI.name
+        val provider = runCatching { AiTranslationProvider.valueOf(providerName) }
+            .getOrDefault(AiTranslationProvider.OPENAI)
+
+        // Keep all keys inside the Enhanced app process. The patched Apple Music
+        // bridge sees lyrics/results only, never API credentials.
+        val keys = AiApiKeyStore.read(this, prefs)
+        return AiTranslationConfigs(
+            provider = providerName,
+            targetLanguage = prefs.getString(
+                RootConstants.KEY_HOOK_AI_TRANS_TARGET_LANG,
+                RootConstants.DEFAULT_HOOK_AI_TRANS_TARGET_LANG,
+            ),
+            apiKey = keys.firstOrNull(),
+            apiKeys = keys,
+            groqApiKeys = AiApiKeyStore.readGroqKeys(this),
+            model = prefs.getString(
+                RootConstants.KEY_HOOK_AI_TRANS_MODEL,
+                RootConstants.DEFAULT_HOOK_AI_TRANS_MODEL,
+            ).orEmpty().ifBlank { provider.model },
+            baseUrl = prefs.getString(
+                RootConstants.KEY_HOOK_AI_TRANS_BASE_URL,
+                RootConstants.DEFAULT_HOOK_AI_TRANS_BASE_URL,
+            ).orEmpty().ifBlank { provider.url },
+            prompt = prefs.getString(
+                RootConstants.KEY_HOOK_AI_TRANS_PROMPT,
+                RootConstants.DEFAULT_HOOK_AI_TRANS_PROMPT,
+            ) ?: RootConstants.DEFAULT_HOOK_AI_TRANS_PROMPT,
+            temperature = prefs.getFloat(
+                RootConstants.KEY_HOOK_AI_TRANS_TEMPERATURE,
+                AiTranslationConfigs.DEFAULT_TEMPERATURE,
+            ),
+            topP = prefs.getFloat(
+                RootConstants.KEY_HOOK_AI_TRANS_TOP_P, AiTranslationConfigs.DEFAULT_TOP_P
+            ),
+            maxTokens = prefs.getInt(
+                RootConstants.KEY_HOOK_AI_TRANS_MAX_TOKENS, AiTranslationConfigs.DEFAULT_MAX_TOKENS
+            ),
+            webSearchEnabled = prefs.getBoolean(
+                RootConstants.KEY_HOOK_AI_TRANS_WEB_SEARCH,
+                RootConstants.DEFAULT_HOOK_AI_TRANS_WEB_SEARCH,
+            ),
+        )
+    }
+
+    override fun onDestroy() {
+        synchronized(requestLock) { requestJob?.cancel() }
+        AITranslator.cancelActiveRequests()
+        scope.cancel()
+        super.onDestroy()
+    }
+}

@@ -235,7 +235,16 @@ internal fun AppleLyricsSupplementHooks.recoverBlankNativeLyricsPage(
     }
 }
 
-internal fun AppleLyricsSupplementHooks.receiveNativeOnlineTranslation(compressedSong: ByteArray) {
+internal fun AppleLyricsSupplementHooks.receiveNativeOnlineTranslation(compressedSong: ByteArray) =
+    receiveNativeOnlineTranslationPayload(compressedSong, preserveExistingPronunciation = false)
+
+internal fun AppleLyricsSupplementHooks.receiveStandaloneAiTranslation(compressedSong: ByteArray) =
+    receiveNativeOnlineTranslationPayload(compressedSong, preserveExistingPronunciation = true)
+
+private fun AppleLyricsSupplementHooks.receiveNativeOnlineTranslationPayload(
+    compressedSong: ByteArray,
+    preserveExistingPronunciation: Boolean,
+) {
     val callbackStartedAtNanos = SystemClock.elapsedRealtimeNanos()
     ProviderLogger.diagnostic(
         "[SourceSwitchPerf] stage=translation_payload_received, " +
@@ -331,7 +340,9 @@ internal fun AppleLyricsSupplementHooks.receiveNativeOnlineTranslation(compresse
                     stage = "translation_store_update_started",
                     details = "thread=${Thread.currentThread().name}"
                 )
-                val receipt = nativeOnlineTranslationStore.receive(song)
+                val receipt = nativeOnlineTranslationStore.receive(
+                    song, preserveExistingPronunciation = preserveExistingPronunciation,
+                )
                 val displayContentChanged = receipt.displayContentChanged
                 val updated = receipt.updated
                 AppleSourceSwitchPerformanceDiagnostics.stageForSong(

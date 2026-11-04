@@ -4,6 +4,7 @@
 
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
     <uses-permission android:name="android.permission.POST_PROMOTED_NOTIFICATIONS" />
 
@@ -27,7 +28,9 @@
         android:testOnly="false"
         android:theme="@style/Theme.MaterialComponents.DayNight.NoActionBar"
         android:icon="@mipmap/ic_launcher"
-        android:roundIcon="@mipmap/ic_launcher_round">
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:fullBackupContent="@xml/backup_rules"
+        android:dataExtractionRules="@xml/data_extraction_rules">
 
         <meta-data
             android:name="lyricon_module"
@@ -70,6 +73,17 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity-alias>
+
+        <!-- Single-process NPatch fallback: exported for the patched Apple Music UID.
+             Every Binder request verifies the Android calling UID; no API keys are returned. -->
+        <service
+            android:name=".service.AppleMusicAiTranslationService"
+            android:exported="true" />
+
+        <service
+            android:name=".utils.diagnostics.DiagnosticUploadJobService"
+            android:permission="android.permission.BIND_JOB_SERVICE"
+            android:exported="false" />
 
         <service
             android:name=".service.LiveLyricService"

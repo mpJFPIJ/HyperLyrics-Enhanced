@@ -4,9 +4,22 @@ import com.juren233.hyperlyricsenhanced.lyric.model.Song
 import com.juren233.hyperlyricsenhanced.lyric.style.AiTranslationConfigs
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AITranslationKeyTest {
+    @Test fun clearingCurrentSongRemovesBothOldAndNewOfflineReadingRevisions() {
+        val song = Song(name = "IRIS OUT", artist = "Kenshi Yonezu")
+        val lines = listOf("駄目", "脳みそ")
+        val configs = AiTranslationConfigs(targetLanguage = "한국어")
+        val deletionKeys = AITranslationKey.deletionKeys(configs, song, lines)
+        assertTrue(AITranslationKey.pronunciation(song, lines) in deletionKeys)
+        assertTrue(AITranslationKey.pronunciation(song, lines,
+            policyRevision = "sudachi-v1-20260723-korean-phonetics-v1") in deletionKeys)
+        assertTrue(AITranslationKey.calculate(configs, song, lines,
+            includePronunciation = true) in deletionKeys)
+    }
+
     @Test fun pronunciationRevisionDoesNotInvalidateAlreadyTranslatedModelCache() {
         val song = Song(name = "IRIS OUT", artist = "Kenshi Yonezu")
         val lines = listOf("駄目 駄目", "脳みそ")

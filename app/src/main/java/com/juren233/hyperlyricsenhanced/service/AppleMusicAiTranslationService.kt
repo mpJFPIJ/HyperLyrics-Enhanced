@@ -14,16 +14,12 @@ import com.juren233.hyperlyricsenhanced.common.RootConstants
 import com.juren233.hyperlyricsenhanced.common.UIConstants
 import com.juren233.hyperlyricsenhanced.common.diagnostics.LyricBuildIdentity
 import com.juren233.hyperlyricsenhanced.lyric.model.Song
-import com.juren233.hyperlyricsenhanced.lyric.model.LyricPronunciationSpan
 import com.juren233.hyperlyricsenhanced.lyric.style.AiTranslationConfigs
 import com.juren233.hyperlyricsenhanced.root.aitrans.AiApiKeyStore
 import com.juren233.hyperlyricsenhanced.lyric.style.AiTranslationProvider
 import com.juren233.hyperlyricsenhanced.root.aitrans.AITranslator
 import com.juren233.hyperlyricsenhanced.root.aitrans.AiTranslationProgress
-import com.juren233.hyperlyricsenhanced.root.aitrans.LocalJapanesePronunciation
-import com.juren233.hyperlyricsenhanced.root.aitrans.AppleWordReadingAlignment
-import com.juren233.hyperlyricsenhanced.root.aitrans.LineReadingStatus
-import com.juren233.hyperlyricsenhanced.root.aitrans.WordAlignmentResult
+import com.juren233.hyperlyricsenhanced.root.aitrans.AppleMusicSourcePhonetics
 import io.github.proify.extensions.deflate
 import io.github.proify.extensions.inflate
 import kotlinx.coroutines.CancellationException
@@ -265,44 +261,8 @@ class AppleMusicAiTranslationService : Service() {
                         // any provider reading separately for explicit source
                         // selection, while AI-first displays only fresh Hangul.
                         val aiOnly = translated.copy(lyrics = translated.lyrics?.mapIndexed { index, line ->
-                            val inheritedReading = song.lyrics?.getOrNull(index)?.roma
                             val sourceText = song.lyrics?.getOrNull(index)?.text ?: line.text.orEmpty()
-                            val analyzed = LocalJapanesePronunciation.generateLine(sourceText)
-                            if (line.roma == inheritedReading && !inheritedReading.isNullOrBlank()) {
-                                line.copy(
-                                    roma = null,
-                                    pronunciationWords = null,
-                                    pronunciationSpans = null,
-                                    pronunciationStatus = "HIDDEN",
-                                )
-                            } else if (analyzed.status == LineReadingStatus.COMPLETE) {
-                                val reading = requireNotNull(analyzed.text)
-                                val alignment = AppleWordReadingAlignment.align(
-                                    original = sourceText,
-                                    appleWords = line.words.orEmpty().map { it.text.orEmpty() },
-                                    spans = analyzed.spans,
-                                    expectedHangul = reading,
-                                )
-                                line.copy(
-                                    roma = reading,
-                                    pronunciationWords = (alignment as? WordAlignmentResult.Verified)?.words,
-                                    pronunciationSpans = analyzed.spans.map { span ->
-                                        LyricPronunciationSpan(
-                                            start = span.sourceStart, end = span.sourceEnd,
-                                            source = span.sourceText, hangul = span.hangul,
-                                        )
-                                    },
-                                    pronunciationStatus = if (alignment is WordAlignmentResult.Verified)
-                                        "ALIGNED" else "LINE_WIDE",
-                                )
-                            } else {
-                                // Unverified AI sounds must never be marked as completed source reading.
-                                line.copy(
-                                    roma = null, pronunciationWords = null,
-                                    pronunciationSpans = null,
-                                    pronunciationStatus = analyzed.status.name,
-                                )
-                            }
+                            AppleMusicSourcePhonetics.attach(line, sourceText)
                         })
                         val pronouncedLines = aiOnly.lyrics.orEmpty()
                             .count { !it.roma.isNullOrBlank() }

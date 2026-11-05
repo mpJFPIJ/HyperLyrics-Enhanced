@@ -87,11 +87,7 @@ object AITranslator {
     suspend fun clearSongCache(song: Song, configs: AiTranslationConfigs): Boolean {
         val lines = song.lyrics.orEmpty().map { it.text?.trim().orEmpty() }
         if (song.id.isNullOrBlank() || lines.isEmpty()) return false
-        val keys = setOf(
-            AITranslationKey.calculate(configs, song, lines, includePronunciation = false),
-            AITranslationKey.calculate(configs, song, lines, includePronunciation = true),
-            AITranslationKey.pronunciation(song, lines),
-        )
+        val keys = AITranslationKey.deletionKeys(configs, song, lines)
         val groupId = AiCachedSongCatalog.groupId(song.name, song.artist, lines)
         scheduler.cancelSongGroup(groupId)
         scheduler.cancelKeys(keys)

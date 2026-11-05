@@ -5,6 +5,16 @@ import com.juren233.hyperlyricsenhanced.lyric.model.Song
 import com.juren233.hyperlyricsenhanced.lyric.style.AiTranslationConfigs
 
 internal object AITranslationKey {
+    private const val LEGACY_OFFLINE_READING_REVISION = "sudachi-v1-20260723-korean-phonetics-v1"
+
+    /** A current-song delete must not leave a previous offline reading in the DB. */
+    fun deletionKeys(configs: AiTranslationConfigs, song: Song, lines: List<String>): Set<String> = setOf(
+        calculate(configs, song, lines, includePronunciation = false),
+        calculate(configs, song, lines, includePronunciation = true),
+        pronunciation(song, lines),
+        pronunciation(song, lines, policyRevision = LEGACY_OFFLINE_READING_REVISION),
+    )
+
     fun calculate(configs: AiTranslationConfigs, song: Song, lines: List<String>, includePronunciation: Boolean = false): String {
         return buildString {
             append("target=").appendLine(configs.targetLanguage.orEmpty())

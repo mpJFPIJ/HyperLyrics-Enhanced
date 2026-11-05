@@ -2,9 +2,18 @@ package io.github.proify.lyricon.amprovider.xposed
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AppleAiProgressPresentationPolicyTest {
+    @Test fun partialPhoneticsDoesNotClaimAllLinesSucceeded() {
+        assertEquals(
+            "한글 발음 일부 준비됨 · 지원하지 않는 줄 있음",
+            AppleAiProgressPresentationPolicy.describe("phonetics_partial", 0, 0, 0),
+        )
+        assertTrue(AppleAiProgressPresentationPolicy.terminal("phonetics_partial"))
+    }
+
     @Test fun presentsRealBatchPositionWithoutInventingPercentages() {
         assertEquals(
             "AI 응답 대기 중 · 2/5",

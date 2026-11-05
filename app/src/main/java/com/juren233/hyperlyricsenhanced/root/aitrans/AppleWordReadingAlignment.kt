@@ -66,14 +66,12 @@ internal object AppleWordReadingAlignment {
         if (original.indices.any { original[it].isLetterOrDigit() && !covered[it] }) {
             return WordAlignmentResult.LineWide(AlignmentFailure.INVALID_SPANS)
         }
-        val joined = sounds.joinToString("") { it.toString() }.filter(Char::isHangulSyllable)
+        val joined = sounds.joinToString("") { it.toString() }.filter { it in '가'..'힣' }
         if (joined.isEmpty() || expectedHangul != null &&
-            joined != expectedHangul.filter(Char::isHangulSyllable)
+            joined != expectedHangul.filter { it in '가'..'힣' }
         ) return WordAlignmentResult.LineWide(AlignmentFailure.SOUND_MISMATCH)
         return WordAlignmentResult.Verified(appleWords.mapIndexed { index, source ->
             LyricWordPronunciation(source, sounds[index].toString())
         })
     }
-
-    private fun Char.isHangulSyllable(): Boolean = this in '가'..'힣'
 }

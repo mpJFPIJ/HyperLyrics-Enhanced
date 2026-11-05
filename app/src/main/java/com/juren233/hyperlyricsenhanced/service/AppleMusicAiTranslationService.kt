@@ -345,8 +345,15 @@ class AppleMusicAiTranslationService : Service() {
                         }
                         target?.onOnlineTranslationResult(result)
                         if (target != null) {
+                            val expectedReadingLines = aiOnly.lyrics.orEmpty().count { line ->
+                                line.text.orEmpty().any(Char::isLetter)
+                            }
                             sendProgress(serial, requestKey, AiTranslationProgress(
-                                if (translatedLines > 0) "completed" else "phonetics_completed",
+                                when {
+                                    translatedLines > 0 -> "completed"
+                                    pronouncedLines < expectedReadingLines -> "phonetics_partial"
+                                    else -> "phonetics_completed"
+                                },
                             ))
                             LogManager.i(TAG, "stage=result_sent bytes=${result.size}")
                         }

@@ -661,16 +661,23 @@ internal class AppleLyricsDiagnostics(
                 "position" to position,
             ))
             // Class/layout names are app internals, never user text or API payload.
-            val children = group?.let { holderGroup ->
-                (0 until minOf(holderGroup.childCount, 6)).joinToString(",") { index ->
-                    holderGroup.getChildAt(index)?.javaClass?.simpleName ?: "null"
+            // Depth-limited structural path only: never read TextView.text.
+            fun viewShape(view: View, depth: Int): String {
+                val id = runCatching { view.resources.getResourceEntryName(view.id) }
+                    .getOrDefault("none").take(32)
+                val summary = "${view.javaClass.simpleName}($id:${view.width}x${view.height})"
+                if (depth >= 2 || view !is ViewGroup) return summary
+                val children = (0 until minOf(view.childCount, 5)).joinToString(",") { index ->
+                    view.getChildAt(index)?.let { viewShape(it, depth + 1) } ?: "null"
                 }
-            }.orEmpty()
+                return "$summary[$children]"
+            }
+            val shape = viewShape(root, 0).take(512)
             Log.i("ApplePronunciationAnchor", "$details " +
                 "rootClass=${root.javaClass.simpleName} " +
                 "parentClass=${root.parent?.javaClass?.simpleName ?: "none"} " +
                 "layoutClass=${root.layoutParams?.javaClass?.simpleName ?: "none"} " +
-                "childClasses=$children")
+                "viewShape=$shape")
         }
     }
 

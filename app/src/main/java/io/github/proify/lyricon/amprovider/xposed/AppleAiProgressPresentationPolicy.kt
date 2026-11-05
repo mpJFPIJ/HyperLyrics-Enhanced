@@ -15,11 +15,14 @@ internal object AppleAiProgressPresentationPolicy {
             "fallback" -> "다른 AI로 재시도 중"
             "completed" -> "AI 번역 완료"
             "phonetics_completed" -> "한글 발음 준비 완료 · 번역은 아직 없음"
+            "phonetics_partial" -> "한글 발음 일부 준비됨 · 지원하지 않는 줄 있음"
             "failed" -> "AI 번역 실패"
             "skipped" -> "AI 번역 건너뜀"
             else -> null
         }
     }
 
-    fun terminal(stage: String): Boolean = stage in setOf("completed", "phonetics_completed", "failed", "skipped")
+    fun terminal(stage: String): Boolean = stage in setOf(
+        "completed", "phonetics_completed", "phonetics_partial", "failed", "skipped",
+    )
 }

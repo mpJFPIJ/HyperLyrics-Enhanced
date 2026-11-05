@@ -12,6 +12,18 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AppleNativeOnlineTranslationStoreTest {
+    @Test fun `line wide status remains addressable without exposing stale foreign song`() {
+        val store = AppleNativeOnlineTranslationStore()
+        store.receive(Song(id = "100", lyrics = listOf(RichLyricLine(
+            begin = 1_000, end = 2_000, text = "駄目", roma = "다메",
+            pronunciationStatus = "LINE_WIDE",
+        ))), preserveExistingPronunciation = true)
+        assertEquals("LINE_WIDE", store.aiHangulPronunciationStatus("100", 1_000, 2_000, "駄目"))
+        assertNull(store.aiHangulPronunciationStatus("200", 1_000, 2_000, "駄目"))
+        store.clear("100")
+        assertNull(store.aiHangulPronunciationStatus("100", 1_000, 2_000, "駄目"))
+    }
+
     @Test
     fun `retains verified word readings only in matching standalone AI overlay`() {
         val store = AppleNativeOnlineTranslationStore()

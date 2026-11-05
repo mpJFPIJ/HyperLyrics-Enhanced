@@ -12,14 +12,18 @@ import com.juren233.hyperlyricsenhanced.IAppleMusicAiTranslator
 import com.juren233.hyperlyricsenhanced.IAppleMusicTranslationReceiver
 import com.juren233.hyperlyricsenhanced.common.RootConstants
 import com.juren233.hyperlyricsenhanced.common.UIConstants
+import com.juren233.hyperlyricsenhanced.common.diagnostics.LyricBuildIdentity
 import com.juren233.hyperlyricsenhanced.lyric.model.Song
+import com.juren233.hyperlyricsenhanced.lyric.model.LyricPronunciationSpan
 import com.juren233.hyperlyricsenhanced.lyric.style.AiTranslationConfigs
 import com.juren233.hyperlyricsenhanced.root.aitrans.AiApiKeyStore
 import com.juren233.hyperlyricsenhanced.lyric.style.AiTranslationProvider
 import com.juren233.hyperlyricsenhanced.root.aitrans.AITranslator
 import com.juren233.hyperlyricsenhanced.root.aitrans.AiTranslationProgress
 import com.juren233.hyperlyricsenhanced.root.aitrans.LocalJapanesePronunciation
-import com.juren233.hyperlyricsenhanced.root.aitrans.SudachiReadingEngine
+import com.juren233.hyperlyricsenhanced.root.aitrans.AppleWordReadingAlignment
+import com.juren233.hyperlyricsenhanced.root.aitrans.LineReadingStatus
+import com.juren233.hyperlyricsenhanced.root.aitrans.WordAlignmentResult
 import io.github.proify.extensions.deflate
 import io.github.proify.extensions.inflate
 import kotlinx.coroutines.CancellationException
@@ -79,7 +83,12 @@ class AppleMusicAiTranslationService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        LogManager.i(TAG, "stage=service_created")
+        val identity = LyricBuildIdentity(
+            label = "app",
+            commit = com.juren233.hyperlyricsenhanced.BuildConfig.HLE_BUILD_COMMIT,
+            ciRun = com.juren233.hyperlyricsenhanced.BuildConfig.HLE_BUILD_RUN,
+        )
+        LogManager.i(TAG, "stage=service_created ${identity.logValue()}")
         runCatching { AITranslator.init(applicationContext) }
             .onFailure { LogManager.w(TAG, "stage=service_init_failed type=${it.javaClass.simpleName}") }
     }
@@ -257,17 +266,42 @@ class AppleMusicAiTranslationService : Service() {
                         // selection, while AI-first displays only fresh Hangul.
                         val aiOnly = translated.copy(lyrics = translated.lyrics?.mapIndexed { index, line ->
                             val inheritedReading = song.lyrics?.getOrNull(index)?.roma
-                            if (line.roma == inheritedReading) {
-                                line.copy(roma = null, pronunciationWords = null)
+                            val sourceText = song.lyrics?.getOrNull(index)?.text ?: line.text.orEmpty()
+                            val analyzed = LocalJapanesePronunciation.generateLine(sourceText)
+                            if (line.roma == inheritedReading && !inheritedReading.isNullOrBlank()) {
+                                line.copy(
+                                    roma = null,
+                                    pronunciationWords = null,
+                                    pronunciationSpans = null,
+                                    pronunciationStatus = "HIDDEN",
+                                )
+                            } else if (analyzed.status == LineReadingStatus.COMPLETE) {
+                                val reading = requireNotNull(analyzed.text)
+                                val alignment = AppleWordReadingAlignment.align(
+                                    original = sourceText,
+                                    appleWords = line.words.orEmpty().map { it.text.orEmpty() },
+                                    spans = analyzed.spans,
+                                    expectedHangul = reading,
+                                )
+                                line.copy(
+                                    roma = reading,
+                                    pronunciationWords = (alignment as? WordAlignmentResult.Verified)?.words,
+                                    pronunciationSpans = analyzed.spans.map { span ->
+                                        LyricPronunciationSpan(
+                                            start = span.sourceStart, end = span.sourceEnd,
+                                            source = span.sourceText, hangul = span.hangul,
+                                        )
+                                    },
+                                    pronunciationStatus = if (alignment is WordAlignmentResult.Verified)
+                                        "ALIGNED" else "LINE_WIDE",
+                                )
                             } else {
-                                val aligned = line.roma?.let { sound ->
-                                    LocalJapanesePronunciation.alignedWords(
-                                        words = line.words.orEmpty().map { it.text.orEmpty() },
-                                        linePronunciation = sound,
-                                        japaneseReading = SudachiReadingEngine::reading,
-                                    )
-                                }
-                                line.copy(pronunciationWords = aligned)
+                                // Unverified AI sounds must never be marked as completed source reading.
+                                line.copy(
+                                    roma = null, pronunciationWords = null,
+                                    pronunciationSpans = null,
+                                    pronunciationStatus = analyzed.status.name,
+                                )
                             }
                         })
                         val pronouncedLines = aiOnly.lyrics.orEmpty()
@@ -288,6 +322,16 @@ class AppleMusicAiTranslationService : Service() {
                             TAG,
                             "stage=translation_completed lines=$translatedLines pronouncedLines=$pronouncedLines"
                         )
+                        LogManager.i(TAG, LyricBuildIdentity.safeStage("reading_finished", mapOf(
+                            "originalLines" to aiOnly.lyrics.orEmpty().size,
+                            "translationLines" to translatedLines,
+                            "readingLines" to pronouncedLines,
+                            "alignedLines" to aiOnly.lyrics.orEmpty().count { it.pronunciationStatus == "ALIGNED" },
+                            "lineWideLines" to aiOnly.lyrics.orEmpty().count { it.pronunciationStatus == "LINE_WIDE" },
+                            "missingLines" to aiOnly.lyrics.orEmpty().count {
+                                it.pronunciationStatus == "MISSING_UNSUPPORTED"
+                            },
+                        )))
 
                         val result = json.encodeToString(aiOnly)
                             .toByteArray(Charsets.UTF_8).deflate()

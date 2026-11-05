@@ -7,6 +7,15 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DiagnosticPrivacyPolicyTest {
+    @Test fun preservesValidatedBuildIdentityWithoutLeakingEmbeddedSecrets() {
+        val safe = DiagnosticPrivacyPolicy.event(
+            "11-05 19:30:00.123", "xposed",
+            "stage=module_loaded buildCommit=374d2b648f685822 buildRun=41837740170 lyrics=PRIVATE",
+        )!!
+        assertTrue(safe.contains("buildCommit=374d2b648f685822 buildRun=41837740170"))
+        assertFalse(safe.contains("PRIVATE"))
+    }
+
     @Test fun acceptsOnlyCanonicalRepositoryNames() {
         assertEquals("owner/private-logs", DiagnosticPrivacyPolicy.repository("owner/private-logs"))
         assertNull(DiagnosticPrivacyPolicy.repository("https://github.com/owner/repo"))

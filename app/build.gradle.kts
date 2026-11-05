@@ -35,6 +35,10 @@ val hasReleaseSigning = listOf(
 // CI materializes the beta/canary suffix at build time; local development keeps
 // the versionName declared in this file.
 val ciVersionName = providers.gradleProperty("ciVersionName").orNull
+val ciBuildCommit = providers.gradleProperty("ciBuildCommit").orNull
+    ?.takeIf { it.matches(Regex("[0-9a-f]{12,40}")) } ?: "local"
+val ciBuildRun = providers.gradleProperty("ciBuildRun").orNull
+    ?.takeIf { it.matches(Regex("[0-9]{1,20}")) } ?: "local"
 
 android {
     namespace = "com.juren233.hyperlyricsenhanced"
@@ -45,6 +49,8 @@ android {
         targetSdk = 37
         versionCode = 222029
         versionName = ciVersionName ?: "8.2.2"
+        buildConfigField("String", "HLE_BUILD_COMMIT", "\"$ciBuildCommit\"")
+        buildConfigField("String", "HLE_BUILD_RUN", "\"$ciBuildRun\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

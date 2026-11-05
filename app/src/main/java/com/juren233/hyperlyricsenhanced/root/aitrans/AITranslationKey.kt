@@ -29,8 +29,12 @@ internal object AITranslationKey {
     }
 
     /** Independent of remote model/keys: offline readings only depend on source lyrics. */
-    fun pronunciation(song: Song, lines: List<String>): String = buildString {
-        appendLine("sudachi-v1-20260723-korean-phonetics-v1")
+    fun pronunciation(
+        song: Song,
+        lines: List<String>,
+        policyRevision: String = "sudachi-v1-20260723-full-line-offsets-v2",
+    ): String = buildString {
+        appendLine(policyRevision)
         append("title=").appendLine(song.name.orEmpty())
         append("artist=").appendLine(song.artist.orEmpty())
         lines.forEachIndexed { index, line -> append(index).append(':').appendLine(line) }

@@ -53,6 +53,7 @@ import androidx.recyclerview.widget.RecyclerView
 import com.juren233.hyperlyricsenhanced.BuildConfig
 import com.juren233.hyperlyricsenhanced.common.UIConstants
 import com.juren233.hyperlyricsenhanced.common.RootConstants
+import com.juren233.hyperlyricsenhanced.common.diagnostics.LyricBuildIdentity
 import com.juren233.hyperlyricsenhanced.common.lyric.AppleOriginalMetadataPolicy
 import com.juren233.hyperlyricsenhanced.common.lyric.AppleLyricsBlurPolicy
 import com.juren233.hyperlyricsenhanced.common.lyric.ApplePronunciationVisibilityPolicy
@@ -129,6 +130,7 @@ internal class AppleLyricsDiagnostics(
 
     private val appleLyricsAdapterBindingDiagnosticMethods =
         ConcurrentHashMap.newKeySet<Executable>()
+    private val lyricAnchorProbeKeys = ConcurrentHashMap.newKeySet<String>()
     private val appleLyricsBindingDiagnosticContexts =
         ThreadLocalStack<AppleLyricsBindingDiagnosticContext>()
     private val appleLyricsBindingPerformanceContexts =
@@ -548,6 +550,7 @@ internal class AppleLyricsDiagnostics(
                         }
                         measureBindingDiagnosticPhase(context, "immediate") {
                             val root = appleLyricsHolderRoot(context.holder)
+                            probeLyricHolderAnchor(context, root)
                             val texts = root?.let(::debugTextSnapshot) ?: "none"
                             val layers = debugAppleLyricsHolderLayers(context.holder)
                             logApplePronunciationBindingDiagnostic(
@@ -636,6 +639,39 @@ internal class AppleLyricsDiagnostics(
                     field.get(holder) as? View
                 }.getOrNull()
             }
+    }
+
+    /** Read-only release diagnostics: learn Apple 6.5.3 holder structure before any UI injection. */
+    private fun probeLyricHolderAnchor(context: AppleLyricsBindingDiagnosticContext, root: View?) {
+        val position = context.position ?: return
+        if (position !in 0..8 || lyricAnchorProbeKeys.size >= 24 ||
+            !lyricAnchorProbeKeys.add("${context.songId}:$position")
+        ) return
+        if (root == null) {
+            Log.i("ApplePronunciationAnchor", "stage=anchor_probe reason=holder_unavailable")
+            return
+        }
+        root.postOnAnimation {
+            val group = root as? ViewGroup
+            val details = LyricBuildIdentity.safeStage("anchor_probe", mapOf(
+                "holderWidth" to root.width,
+                "holderHeight" to root.height,
+                "holderChildren" to (group?.childCount ?: 0),
+                "holderGroup" to if (group != null) 1 else 0,
+                "position" to position,
+            ))
+            // Class/layout names are app internals, never user text or API payload.
+            val children = group?.let { holderGroup ->
+                (0 until minOf(holderGroup.childCount, 6)).joinToString(",") { index ->
+                    holderGroup.getChildAt(index)?.javaClass?.simpleName ?: "null"
+                }
+            }.orEmpty()
+            Log.i("ApplePronunciationAnchor", "$details " +
+                "rootClass=${root.javaClass.simpleName} " +
+                "parentClass=${root.parent?.javaClass?.simpleName ?: "none"} " +
+                "layoutClass=${root.layoutParams?.javaClass?.simpleName ?: "none"} " +
+                "childClasses=$children")
+        }
     }
 
     private fun debugAppleLyricsHolderLayers(holder: Any?): String {

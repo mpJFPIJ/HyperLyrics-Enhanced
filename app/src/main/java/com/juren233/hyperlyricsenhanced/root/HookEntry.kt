@@ -56,6 +56,7 @@ import com.juren233.hyperlyricsenhanced.root.utils.IslandSystemFontWeight
 import com.juren233.hyperlyricsenhanced.root.utils.RuntimePerfDiagnostics
 import com.juren233.hyperlyricsenhanced.root.utils.RuntimeResourceCleanup
 import com.juren233.hyperlyricsenhanced.common.PreferenceDiagnostics
+import com.juren233.hyperlyricsenhanced.common.diagnostics.LyricBuildIdentity
 import com.juren233.hyperlyricsenhanced.common.RootConstants
 import com.juren233.hyperlyricsenhanced.common.IslandFontWeightMode
 import com.juren233.hyperlyricsenhanced.common.UIConstants
@@ -276,7 +277,14 @@ class HookEntry : XposedModule() {
         }.onFailure {
             HookLogger.e("HookEntry", "繁简转换字典路径初始化失败", it)
         }
-        HookLogger.i("HookEntry", "模块加载完成，当前应用版本${com.juren233.hyperlyricsenhanced.BuildConfig.VERSION_NAME}-${com.juren233.hyperlyricsenhanced.BuildConfig.VERSION_CODE}")
+        val identity = LyricBuildIdentity(
+            label = "module",
+            commit = com.juren233.hyperlyricsenhanced.BuildConfig.HLE_BUILD_COMMIT,
+            ciRun = com.juren233.hyperlyricsenhanced.BuildConfig.HLE_BUILD_RUN,
+        )
+        HookLogger.i("HookEntry", "stage=module_loaded ${identity.logValue()} " +
+            "version=${com.juren233.hyperlyricsenhanced.BuildConfig.VERSION_NAME} " +
+            "versionCode=${com.juren233.hyperlyricsenhanced.BuildConfig.VERSION_CODE}")
         LyricRuntimeDiagnostics.record("module_loaded") {
             "version=${com.juren233.hyperlyricsenhanced.BuildConfig.VERSION_NAME} " +
                 "versionCode=${com.juren233.hyperlyricsenhanced.BuildConfig.VERSION_CODE}"

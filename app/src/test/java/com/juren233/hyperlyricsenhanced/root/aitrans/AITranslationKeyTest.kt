@@ -7,6 +7,18 @@ import org.junit.Assert.assertNotEquals
 import org.junit.Test
 
 class AITranslationKeyTest {
+    @Test fun pronunciationRevisionDoesNotInvalidateAlreadyTranslatedModelCache() {
+        val song = Song(name = "IRIS OUT", artist = "Kenshi Yonezu")
+        val lines = listOf("駄目 駄目", "脳みそ")
+        val configs = AiTranslationConfigs(model = "north-small-translate-1.0", targetLanguage = "한국어")
+        val translationKey = AITranslationKey.calculate(configs, song, lines)
+        assertNotEquals(
+            AITranslationKey.pronunciation(song, lines, policyRevision = "old"),
+            AITranslationKey.pronunciation(song, lines, policyRevision = "new"),
+        )
+        assertEquals(translationKey, AITranslationKey.calculate(configs, song, lines))
+    }
+
     @Test fun changingProviderOrPromptDoesNotReuseStaleModelTranslation() {
         val song = Song(name = "IRIS OUT", artist = "Kenshi Yonezu")
         val lines = listOf("駄目 駄目", "脳みそ")

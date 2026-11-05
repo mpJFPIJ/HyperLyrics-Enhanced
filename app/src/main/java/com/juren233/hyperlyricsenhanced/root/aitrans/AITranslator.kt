@@ -208,9 +208,7 @@ object AITranslator {
 
     private fun locallyReadableSong(song: Song): List<TranslationItem> {
         if (!AIPronunciationPolicy.shouldEnrich(song)) return emptyList()
-        return LocalJapanesePronunciation.generate(
-            song.lyrics.orEmpty().map { it.text.orEmpty() }, SudachiReadingEngine::reading,
-        )
+        return LocalJapanesePronunciation.generate(song.lyrics.orEmpty().map { it.text.orEmpty() })
     }
 
     private suspend fun loadLocalPronunciation(
@@ -224,7 +222,7 @@ object AITranslator {
         val cached = (cache.getFromMemory(key) ?: cache.getFromDb(key)).orEmpty()
         val knownIndices = cached.map(TranslationItem::index).toSet()
         if (knownIndices.size == lines.count { it.any(Char::isLetter) }) return cached
-        val fresh = LocalJapanesePronunciation.generate(lines, SudachiReadingEngine::reading)
+        val fresh = LocalJapanesePronunciation.generate(lines)
             .filterNot { it.index in knownIndices }
         if (fresh.isEmpty()) return cached
         val combined = AiLyricComposition.merge(cached, fresh)

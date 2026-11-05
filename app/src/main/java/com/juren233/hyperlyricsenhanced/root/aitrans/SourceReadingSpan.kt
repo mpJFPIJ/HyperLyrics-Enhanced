@@ -1,0 +1,91 @@
+package com.juren233.hyperlyricsenhanced.root.aitrans
+
+/** All offsets are UTF-16 positions in the untouched source lyric line. */
+internal data class SourceReadingSpan(
+    val sourceStart: Int,
+    val sourceEnd: Int,
+    val sourceText: String,
+    val kana: String,
+    val hangul: String,
+)
+
+internal enum class LineReadingStatus { COMPLETE, MISSING_UNSUPPORTED, EMPTY }
+
+internal data class LineReadingResult(
+    val text: String?,
+    val spans: List<SourceReadingSpan>,
+    val status: LineReadingStatus,
+)
+
+/** Immutable snapshot of one token from a *single* full-line Sudachi analysis. */
+internal data class RawReadingToken(
+    val sourceStart: Int,
+    val sourceEnd: Int,
+    val readingForm: String,
+    val isParticle: Boolean = false,
+)
+
+/** Pure function, so malformed token offsets and unsupported readings can be regression-tested. */
+internal object SourceReadingAssembler {
+    private val english = mapOf(
+        "i" to "아이", "you" to "유", "me" to "미", "my" to "마이",
+        "we" to "위", "your" to "유어", "love" to "러브", "baby" to "베이비",
+        "darling" to "달링", "no" to "노", "yes" to "예스", "oh" to "오",
+        "hey" to "헤이", "yeah" to "예", "hello" to "헬로", "goodbye" to "굿바이",
+        "forever" to "포에버", "night" to "나이트", "day" to "데이",
+        "heart" to "하트", "world" to "월드", "dream" to "드림",
+    )
+
+    fun assemble(source: String, tokens: List<RawReadingToken>): LineReadingResult {
+        if (source.isBlank()) return LineReadingResult(null, emptyList(), LineReadingStatus.EMPTY)
+        val result = StringBuilder()
+        val spans = mutableListOf<SourceReadingSpan>()
+        var previousEnd = 0
+        for (token in tokens) {
+            if (token.sourceStart < previousEnd || token.sourceStart < 0 ||
+                token.sourceEnd <= token.sourceStart || token.sourceEnd > source.length
+            ) return unsupported(spans)
+            val gap = source.substring(previousEnd, token.sourceStart)
+            if (gap.any(Char::isLetterOrDigit)) return unsupported(spans)
+            val surface = source.substring(token.sourceStart, token.sourceEnd)
+            val hasJapanese = surface.any(::isJapanese)
+            val sound = when {
+                hasJapanese -> {
+                    val kana = when {
+                        token.isParticle && surface == "は" -> "ワ"
+                        token.isParticle && surface == "へ" -> "エ"
+                        token.isParticle && surface == "を" -> "オ"
+                        token.readingForm.isNotBlank() && token.readingForm != "*" -> token.readingForm
+                        surface.all { it in '\u3040'..'\u30ff' } -> surface
+                        else -> return unsupported(spans)
+                    }
+                    val hangul = JapaneseToHangul.fromKana(kana) ?: return unsupported(spans)
+                    spans += SourceReadingSpan(token.sourceStart, token.sourceEnd, surface, kana, hangul)
+                    hangul
+                }
+                surface.all { it in 'A'..'Z' || it in 'a'..'z' } -> {
+                    val hangul = english[surface.lowercase()] ?: return unsupported(spans)
+                    spans += SourceReadingSpan(token.sourceStart, token.sourceEnd, surface, surface, hangul)
+                    hangul
+                }
+                surface.any(Char::isLetterOrDigit) -> return unsupported(spans)
+                else -> null
+            }
+            if (sound != null) {
+                if (result.isNotEmpty() && gap.any(Char::isWhitespace)) result.append(' ')
+                result.append(sound)
+            }
+            previousEnd = token.sourceEnd
+        }
+        if (source.substring(previousEnd).any(Char::isLetterOrDigit)) return unsupported(spans)
+        val value = result.toString().trim().takeIf(String::isNotEmpty)
+        return if (value == null) LineReadingResult(null, emptyList(), LineReadingStatus.EMPTY)
+        else LineReadingResult(value, spans, LineReadingStatus.COMPLETE)
+    }
+
+    private fun unsupported(spans: List<SourceReadingSpan>) =
+        LineReadingResult(null, spans, LineReadingStatus.MISSING_UNSUPPORTED)
+
+    private fun isJapanese(char: Char): Boolean = char in '\u3040'..'\u30ff' ||
+        char in '\u3400'..'\u9fff' || char == '\u3005'
+}

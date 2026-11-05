@@ -10,6 +10,9 @@ internal object DiagnosticPrivacyPolicy {
     private val numericFields = setOf(
         "code", "attempt", "lines", "translated", "expected", "pronounced", "pronouncedLines",
         "read_timeout_ms", "duration_ms", "max_tokens", "cooldown_ms", "remaining_ms",
+        "originalLines", "translationLines", "readingLines", "alignedLines", "lineWideLines",
+        "missingLines", "rowBound", "rowOverflow", "holderWidth", "holderHeight",
+        "holderChildren", "holderGroup", "position",
     )
     private val safeType = Regex("[A-Za-z][A-Za-z0-9]{0,45}(?:Exception|Error)")
     private val safeReasons = setOf(
@@ -35,6 +38,8 @@ internal object DiagnosticPrivacyPolicy {
             val value = match.groupValues[2]
             when {
                 key in numericFields && value.all(Char::isDigit) -> "$key=$value"
+                key == "buildCommit" && (value == "local" || value.matches(Regex("[0-9a-f]{12,40}"))) -> "$key=$value"
+                key == "buildRun" && (value == "local" || value.matches(Regex("[0-9]{1,20}"))) -> "$key=$value"
                 key == "type" && safeType.matches(value) -> "$key=$value"
                 key == "reason" && (value in safeReasons || Regex("http_[1-5][0-9]{2}").matches(value)) -> "$key=$value"
                 else -> null

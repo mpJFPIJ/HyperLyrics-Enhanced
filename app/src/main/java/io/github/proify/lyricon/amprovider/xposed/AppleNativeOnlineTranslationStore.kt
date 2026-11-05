@@ -23,6 +23,7 @@ internal class AppleNativeOnlineTranslationStore {
         val translation: String?,
         val pronunciation: String?,
         val wordPronunciations: List<LyricWordPronunciation>?,
+        val pronunciationStatus: String?,
     )
 
     private data class Entry(
@@ -141,6 +142,7 @@ internal class AppleNativeOnlineTranslationStore {
                 translation = sanitizeContent(line.translation),
                 pronunciation = RomanizationPolicy.sanitizeSupplement(line.text, line.roma),
                 wordPronunciations = line.pronunciationWords,
+                pronunciationStatus = line.pronunciationStatus,
             )
             if (content.translation == null && content.pronunciation == null) {
                 return@mapNotNull null
@@ -223,6 +225,15 @@ internal class AppleNativeOnlineTranslationStore {
     ): List<LyricWordPronunciation>? = content(songId, begin, end, text, aiOverlay)
         ?.takeIf { RomanizationPolicy.isHangulPronunciation(it.pronunciation) }
         ?.wordPronunciations
+
+    fun aiHangulPronunciationStatus(
+        songId: String?,
+        begin: Long,
+        end: Long,
+        text: String?,
+    ): String? = content(songId, begin, end, text, aiOverlay)
+        ?.takeIf { RomanizationPolicy.isHangulPronunciation(it.pronunciation) }
+        ?.pronunciationStatus
 
     fun hasTranslation(songId: String?): Boolean =
         !songId.isNullOrBlank() &&

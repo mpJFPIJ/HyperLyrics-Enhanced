@@ -25,6 +25,27 @@ internal object SudachiReadingEngine {
         this.context = context.applicationContext
     }
 
+    /** One dictionary pass over the original complete line, never one pass per karaoke cell. */
+    fun analyzeLine(text: String): LineReadingResult {
+        if (text.isBlank()) return LineReadingResult(null, emptyList(), LineReadingStatus.EMPTY)
+        val dic = getDictionary()
+            ?: return LineReadingResult(null, emptyList(), LineReadingStatus.MISSING_UNSUPPORTED)
+        return runCatching {
+            val tokens = dic.create().tokenize(Tokenizer.SplitMode.C, text).map { word ->
+                RawReadingToken(
+                    sourceStart = word.begin(),
+                    sourceEnd = word.end(),
+                    readingForm = word.readingForm(),
+                    isParticle = word.partOfSpeech().firstOrNull() == "助詞",
+                )
+            }
+            SourceReadingAssembler.assemble(text, tokens)
+        }.getOrElse {
+            Log.w(TAG, "Full-line reading failed: ${it.javaClass.simpleName}")
+            LineReadingResult(null, emptyList(), LineReadingStatus.MISSING_UNSUPPORTED)
+        }
+    }
+
     fun reading(text: String): String? {
         val dic = getDictionary() ?: return null
         return runCatching {

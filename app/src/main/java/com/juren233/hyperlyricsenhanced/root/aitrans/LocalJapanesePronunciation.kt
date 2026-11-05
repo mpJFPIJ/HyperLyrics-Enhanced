@@ -5,6 +5,23 @@ import com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation
 
 /** Indexed, optional Hangul readings, never a substitute for translated meaning. */
 internal object LocalJapanesePronunciation {
+    /** Canonical reading for new work: source offsets always refer to the whole line. */
+    fun generateLine(
+        text: String,
+        analyzer: (String) -> LineReadingResult = SudachiReadingEngine::analyzeLine,
+    ): LineReadingResult {
+        if (text.isBlank()) return LineReadingResult(null, emptyList(), LineReadingStatus.EMPTY)
+        if (text.any(::isJapanese)) return analyzer(text)
+        val latin = Regex("[A-Za-z]+").findAll(text).map { match ->
+            RawReadingToken(match.range.first, match.range.last + 1, match.value)
+        }.toList()
+        return SourceReadingAssembler.assemble(text, latin)
+    }
+
+    fun generate(lines: List<String>): List<TranslationItem> = lines.mapIndexedNotNull { index, line ->
+        generateLine(line).text?.let { TranslationItem(index = index, roma = it) }
+    }
+
     private val scriptRuns = Regex("[\\u3040-\\u30ff\\u3400-\\u9fff\\u3005]+|[A-Za-z]+")
     private val englishWords = mapOf(
         "i" to "아이", "you" to "유", "me" to "미", "my" to "마이",

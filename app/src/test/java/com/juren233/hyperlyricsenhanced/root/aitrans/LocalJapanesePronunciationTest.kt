@@ -6,6 +6,26 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class LocalJapanesePronunciationTest {
+    @Test fun canonicalReadingAnalyzesJapaneseOriginalOnceNotEachWord() {
+        val source = "駄目駄目脳みその中から"
+        val observed = mutableListOf<String>()
+        val parsed = LocalJapanesePronunciation.generateLine(source) { whole ->
+            observed += whole
+            SourceReadingAssembler.assemble(whole, listOf(
+                RawReadingToken(0, 2, "ダメ"),
+                RawReadingToken(2, 4, "ダメ"),
+                RawReadingToken(4, 5, "ノウ"),
+                RawReadingToken(5, 7, "ミソ"),
+                RawReadingToken(7, 8, "ノ", isParticle = true),
+                RawReadingToken(8, 9, "ナカ"),
+                RawReadingToken(9, 11, "カラ"),
+            ))
+        }
+        assertEquals(listOf(source), observed)
+        assertEquals(LineReadingStatus.COMPLETE, parsed.status)
+        assertEquals("다메다메노미소노나카카라", parsed.text)
+    }
+
     @Test fun alignedWordsPreservesPunctuationSlotsAndFailsClosedOnUnknownJapaneseWords() {
         val analyzer: (String) -> String? = { when (it) {
             "駄目" -> "ダメ"

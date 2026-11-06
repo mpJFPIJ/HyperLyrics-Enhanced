@@ -6,6 +6,12 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AppleAiProgressPresentationPolicyTest {
+    @Test fun `zero readings without translation must not claim partial readings`() {
+        assertEquals("phonetics_unavailable", AppleAiProgressPresentationPolicy.completionStage(0, 0, 22))
+        assertEquals("한글 발음을 만들지 못했어요", AppleAiProgressPresentationPolicy.describe("phonetics_unavailable", 0, 22, 0))
+        assertTrue(AppleAiProgressPresentationPolicy.terminal("phonetics_unavailable"))
+    }
+
     @Test fun partialKoreanPhoneticsCannotClaimCompletionWhenTranslationSucceeds() {
         assertEquals(
             "completed_partial",

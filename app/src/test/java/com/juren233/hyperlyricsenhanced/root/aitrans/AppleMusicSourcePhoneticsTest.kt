@@ -69,6 +69,18 @@ class AppleMusicSourcePhoneticsTest {
         assertEquals("머릿속에서", result.translation)
     }
 
+    @Test fun aiSpacesInsideAVerifiedJapaneseWordAreDiscarded() {
+        val source = "脳みその中から"
+        val line = RichLyricLine(text = source, roma = "노미소노 나 카카라")
+        val local = SourceReadingAssembler.assemble(source, listOf(
+            RawReadingToken(0, 3, "ノーミソ"),
+            RawReadingToken(3, 4, "ノ"),
+            RawReadingToken(4, 5, "ナカ"),
+            RawReadingToken(5, 7, "カラ"),
+        ))
+        assertEquals("노미소노나카카라", AppleMusicSourcePhonetics.attach(line, source, local).roma)
+    }
+
     @Test fun extraUnverifiedHangulJamoCannotPassTheSoundIdentityCheck() {
         val source = "駄目"
         val line = RichLyricLine(text = source, roma = "다메ㅋㅋ")

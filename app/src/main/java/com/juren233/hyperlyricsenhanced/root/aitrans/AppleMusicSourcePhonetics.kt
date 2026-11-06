@@ -30,7 +30,8 @@ internal object AppleMusicSourcePhonetics {
         // Never replace locally verified syllables, but also never discard
         // natural AI spacing when both sources spell the exact same sounds.
         val reading = supplied?.takeIf { ai ->
-            RomanizationPolicy.sameHangulSounds(ai, verified)
+            RomanizationPolicy.sameHangulSounds(ai, verified) &&
+                spacingRespectsSourceTokenBoundaries(ai, analyzed.spans)
         } ?: verified
         val alignment = AppleWordReadingAlignment.align(
             original = sourceText,
@@ -52,5 +53,27 @@ internal object AppleMusicSourcePhonetics {
             pronunciationStatus = if (alignment is WordAlignmentResult.Verified)
                 "ALIGNED" else "LINE_WIDE",
         )
+    }
+
+    /** Do not render e.g. なか (나카) as "나 카" even if AI sounds are identical. */
+    private fun spacingRespectsSourceTokenBoundaries(
+        proposed: String,
+        spans: List<SourceReadingSpan>,
+    ): Boolean {
+        if (spans.isEmpty()) return !proposed.any(Char::isWhitespace)
+        var length = 0
+        val boundaries = spans.dropLast(1).map { span ->
+            length += span.hangul.count { !it.isWhitespace() }
+            length
+        }.toSet()
+        var sounded = 0
+        for (index in proposed.indices) {
+            if (!proposed[index].isWhitespace()) {
+                sounded++
+            } else if (index > 0 && !proposed[index - 1].isWhitespace() &&
+                index < proposed.lastIndex && sounded !in boundaries
+            ) return false
+        }
+        return true
     }
 }

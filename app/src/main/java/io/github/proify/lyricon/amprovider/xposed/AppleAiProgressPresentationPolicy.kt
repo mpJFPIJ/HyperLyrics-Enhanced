@@ -8,6 +8,7 @@ internal object AppleAiProgressPresentationPolicy {
         expectedReadingLines: Int,
     ): String = when {
         pronouncedLines < expectedReadingLines && translatedLines > 0 -> "completed_partial"
+        pronouncedLines == 0 && expectedReadingLines > 0 -> "phonetics_unavailable"
         pronouncedLines < expectedReadingLines -> "phonetics_partial"
         translatedLines > 0 -> "completed"
         else -> "phonetics_completed"
@@ -31,6 +32,7 @@ internal object AppleAiProgressPresentationPolicy {
             "result_received" -> "가사 결과 수신됨 · 마무리 확인 중"
             "phonetics_completed" -> "한글 발음 준비 완료 · 번역은 아직 없음"
             "phonetics_partial" -> "한글 발음 일부 준비됨 · 지원하지 않는 줄 있음"
+            "phonetics_unavailable" -> "한글 발음을 만들지 못했어요"
             "failed" -> "AI 번역 실패"
             "skipped" -> "AI 번역 건너뜀"
             else -> null
@@ -39,6 +41,6 @@ internal object AppleAiProgressPresentationPolicy {
 
     fun terminal(stage: String): Boolean = stage in setOf(
         "completed", "completed_partial", "result_received", "phonetics_completed",
-        "phonetics_partial", "failed", "skipped",
+        "phonetics_partial", "phonetics_unavailable", "failed", "skipped",
     )
 }

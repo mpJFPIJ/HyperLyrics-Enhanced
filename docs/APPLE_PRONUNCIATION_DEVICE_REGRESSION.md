@@ -21,7 +21,8 @@ confirm that the native flexbox accepts the full-width pronunciation child.
 2. A Japanese phrase such as `脳みその中から` must **not** show a phonetic sequence
    split artificially into `나 / 카카라` by unrelated karaoke word cells. For
    unverified word mapping, the complete reading must wrap as one TextView across
-   the full source line width. It may wrap at actual phrase boundaries.
+   the full source line width. It may wrap at actual phrase boundaries. AI-inserted
+   spaces **inside** a locally verified Japanese word must be discarded.
 3. No clipped, half-visible or foreign-line Hangul syllables at large system
    font size, long lines, narrow phone width and fast seeking.
 4. Where exact source-span/Apple-word alignment exists, original native word
@@ -37,6 +38,8 @@ confirm that the native flexbox accepts the full-width pronunciation child.
 8. Offline/expired-key path: cached translation remains visible; unknown
    readings are represented as `MISSING_UNSUPPORTED` and do not become fabricated
    sounds or a misleading "all pronunciation completed" success.
+9. When a 22-line song has only 17 supported readings, the progress label must
+   report `17/22줄` rather than an unqualified complete pronunciation result.
 
 ## Privacy-safe diagnostics
 

@@ -223,6 +223,42 @@ class ApplePronunciationPolicyTest {
     }
 
     @Test
+    fun `refuses native word cells when a Korean reading cannot be aligned exactly`() {
+        val sourceWords = listOf("駄目", "駄目", "脳", "みそ", "の", "中", "から")
+        val reading = "다메 다메 노미소노 나카카라"
+        assertNull(ApplePronunciationPolicy.verifiedNativeSegments(reading, sourceWords, null))
+        assertEquals(
+            ApplePronunciationPresentationMode.LINE_WIDE,
+            ApplePronunciationPolicy.presentationMode(
+                pronunciation = reading,
+                hasOfficialTimedWords = false,
+                nativeWords = sourceWords,
+                alignedWords = null,
+            ),
+        )
+    }
+
+    @Test
+    fun `uses Apple word timing only if source and Hangul both match`() {
+        val mapping = listOf(
+            com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation("駄目", "다메"),
+            com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation("脳", "노"),
+            com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation("みそ", "미소"),
+        )
+        assertEquals(
+            listOf("다메", "노", "미소"),
+            ApplePronunciationPolicy.verifiedNativeSegments(
+                "다메 노미소", listOf("駄目", "脳", "みそ"), mapping,
+            ),
+        )
+        assertNull(
+            ApplePronunciationPolicy.verifiedNativeSegments(
+                "다메 노미소", listOf("駄目", "脳みそ"), mapping,
+            ),
+        )
+    }
+
+    @Test
     fun `rejects stale word alignments from another line`() {
         val aligned = listOf(
             com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation("君", "키미"),

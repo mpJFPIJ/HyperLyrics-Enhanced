@@ -40,6 +40,11 @@ internal class AppleLyricsPronunciationState {
         IdentityHashMap<Any, ApplePronunciationRenderPlan>()
     )
     private val wordRenderContexts = ThreadLocalStack<ApplePronunciationWordRenderContext>()
+    private val lineWideByHolder = WeakIdentityMap<Any, AppleLineWidePronunciationPayload>()
+    private val lineWideBySource = LinkedHashMap<String, AppleLineWidePronunciationPayload>()
+    private val ambiguousLineWideSources = HashSet<String>()
+    private var lineWideSongId: String? = null
+    private var lineWideRevision: Long = -1L
 
     fun rememberLanguages(songId: String, languages: List<String>) {
         languagesBySongId[songId] = languages
@@ -85,6 +90,56 @@ internal class AppleLyricsPronunciationState {
 
     fun popWordRenderContext() {
         wordRenderContexts.pop()
+    }
+
+    fun beginHolderBinding(holder: Any?) {
+        holder?.let(lineWideByHolder::remove)
+    }
+
+    /** No strong references to Apple ViewHolders escape this method. */
+    fun rememberLineWide(
+        payload: AppleLineWidePronunciationPayload,
+        holder: Any?,
+    ) {
+        holder?.let { lineWideByHolder[it] = payload }
+        synchronized(lineWideBySource) {
+            if (lineWideSongId != payload.songId || lineWideRevision != payload.revision ||
+                lineWideBySource.size >= MAX_RENDER_PLANS
+            ) {
+                lineWideBySource.clear()
+                ambiguousLineWideSources.clear()
+                lineWideSongId = payload.songId
+                lineWideRevision = payload.revision
+            }
+            val source = AppleLineWidePronunciationRowPolicy.sourceKey(payload.sourceText)
+            if (source.isBlank() || source in ambiguousLineWideSources) return@synchronized
+            val previous = lineWideBySource[source]
+            if (previous != null && previous.pronunciation != payload.pronunciation) {
+                lineWideBySource.remove(source)
+                ambiguousLineWideSources.add(source)
+            } else {
+                lineWideBySource[source] = payload
+            }
+        }
+    }
+
+    fun lineWideForHolder(
+        holder: Any?,
+        songId: String?,
+        observedSourceText: String?,
+        revision: Long,
+    ): AppleLineWidePronunciationPayload? {
+        val pending = holder?.let { lineWideByHolder[it] }
+        if (pending != null && pending.songId == songId && pending.revision == revision) {
+            return pending
+        }
+        if (songId == null || observedSourceText.isNullOrBlank()) return null
+        synchronized(lineWideBySource) {
+            if (lineWideSongId != songId || lineWideRevision != revision) return null
+            return lineWideBySource[
+                AppleLineWidePronunciationRowPolicy.sourceKey(observedSourceText)
+            ]
+        }
     }
 
     internal companion object {

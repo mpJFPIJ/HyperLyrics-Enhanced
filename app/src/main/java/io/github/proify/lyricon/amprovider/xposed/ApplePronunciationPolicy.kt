@@ -6,6 +6,43 @@ import com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation
 internal object ApplePronunciationPolicy {
     fun nonNullDisplayText(text: String?): String = text.orEmpty()
 
+    /** A guessed Hangul-to-karaoke-cell split is never a valid timed reading. */
+    fun verifiedNativeSegments(
+        pronunciation: String,
+        mainWordTexts: List<String>,
+        alignedWords: List<LyricWordPronunciation>?,
+    ): List<String>? {
+        if (alignedWords == null || mainWordTexts.isEmpty() ||
+            alignedWords.size != mainWordTexts.size ||
+            !RomanizationPolicy.isHangulPronunciation(pronunciation)
+        ) return null
+        if (!alignedWords.zip(mainWordTexts).all { (reading, source) ->
+                reading.source.trim() == source.trim() &&
+                    (reading.hangul.isBlank() ||
+                        RomanizationPolicy.isHangulPronunciation(reading.hangul))
+            }
+        ) return null
+        return alignedWords.map { it.hangul }.takeIf {
+            it.joinToString("").hangulOnly() == pronunciation.hangulOnly() &&
+                it.any(String::isNotBlank)
+        }
+    }
+
+    fun presentationMode(
+        pronunciation: String?,
+        hasOfficialTimedWords: Boolean,
+        nativeWords: List<String>,
+        alignedWords: List<LyricWordPronunciation>?,
+    ): ApplePronunciationPresentationMode = when {
+        pronunciation.isNullOrBlank() -> ApplePronunciationPresentationMode.HIDDEN
+        hasOfficialTimedWords -> ApplePronunciationPresentationMode.OFFICIAL
+        !RomanizationPolicy.isHangulPronunciation(pronunciation) ->
+            ApplePronunciationPresentationMode.LEGACY_LATIN
+        verifiedNativeSegments(pronunciation, nativeWords, alignedWords) != null ->
+            ApplePronunciationPresentationMode.ALIGNED_WORDS
+        else -> ApplePronunciationPresentationMode.LINE_WIDE
+    }
+
     /**
      * Whether a completed Apple lyric model must trigger a presentation refresh.
      *
@@ -72,13 +109,7 @@ internal object ApplePronunciationPolicy {
         if (tokens.isEmpty()) return emptyList()
 
         if (RomanizationPolicy.isHangulPronunciation(pronunciation)) {
-            if (alignedWords != null && alignedWords.size == mainWordTexts.size &&
-                alignedWords.zip(mainWordTexts).all { (reading, source) ->
-                    reading.source.trim() == source.trim() &&
-                        (reading.hangul.isEmpty() || RomanizationPolicy.isHangulPronunciation(reading.hangul))
-                } && alignedWords.joinToString("") { it.hangul }.hangulOnly() ==
-                    pronunciation.hangulOnly()
-            ) return alignedWords.map { it.hangul }
+            verifiedNativeSegments(pronunciation, mainWordTexts, alignedWords)?.let { return it }
             // Last-resort display fallback. Prefer intact space-delimited syllable
             // groups; an unspaced reading can only be shared as Hangul syllables.
             // This is visual distribution, not a claim of precise word timing.
@@ -166,5 +197,13 @@ internal object ApplePronunciationPolicy {
 internal enum class ApplePronunciationWordTrack {
     OFFICIAL,
     MAIN_LINE_TIMING,
+    HIDDEN,
+}
+
+internal enum class ApplePronunciationPresentationMode {
+    OFFICIAL,
+    ALIGNED_WORDS,
+    LINE_WIDE,
+    LEGACY_LATIN,
     HIDDEN,
 }

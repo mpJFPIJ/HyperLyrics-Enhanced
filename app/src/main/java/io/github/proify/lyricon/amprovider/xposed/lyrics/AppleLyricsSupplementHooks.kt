@@ -288,8 +288,17 @@ internal class AppleLyricsSupplementHooks(
             },
             recyclerLifecycleDiagnostic = { recyclerView, stage -> logAppleLyricsRecyclerLifecycle(recyclerView, stage) },
             appleRecyclerViewPredicate = { isAppleRecyclerViewInstance(it) },
+            holderBindingStart = { context, root ->
+                pronunciationState.beginHolderBinding(context.holder)
+                lineWidePronunciationRow.clear(root)
+            },
+            holderBound = { context, root ->
+                bindLineWidePronunciation(context, root)
+            },
         )
     }
+    internal val lineWidePronunciationRow = AppleLineWidePronunciationRow()
+    internal val lineWideBindingDiagnosticCount = AtomicInteger()
 
     fun currentSongId(): String? = currentAppleLyricsSongId
 

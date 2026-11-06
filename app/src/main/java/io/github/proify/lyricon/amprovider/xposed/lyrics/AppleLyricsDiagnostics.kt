@@ -120,6 +120,8 @@ internal class AppleLyricsDiagnostics(
     private val uiStateDiagnostic: (Any, String) -> Unit,
     private val recyclerLifecycleDiagnostic: (Any, String) -> Unit,
     private val appleRecyclerViewPredicate: (Any) -> Boolean,
+    private val holderBindingStart: (AppleLyricsBindingDiagnosticContext, View?) -> Unit,
+    private val holderBound: (AppleLyricsBindingDiagnosticContext, View?) -> Unit,
 ) {
     private val classLoader: ClassLoader
         get() = runtime.classLoader
@@ -530,6 +532,9 @@ internal class AppleLyricsDiagnostics(
                         val parentPerformanceContext =
                             appleLyricsBindingPerformanceContexts.current
                         appleLyricsBindingDiagnosticContexts.push(context)
+                        runCatching {
+                            holderBindingStart(context, appleLyricsHolderRoot(context.holder))
+                        }.onFailure { ProviderLogger.error("Apple pronunciation holder clear failed", it) }
                         appleLyricsBindingPerformanceContexts.push(
                             AppleLyricsBindingPerformanceContext(
                                 binding = context,
@@ -550,6 +555,8 @@ internal class AppleLyricsDiagnostics(
                         }
                         measureBindingDiagnosticPhase(context, "immediate") {
                             val root = appleLyricsHolderRoot(context.holder)
+                            runCatching { holderBound(context, root) }
+                                .onFailure { ProviderLogger.error("Apple pronunciation row bind failed", it) }
                             probeLyricHolderAnchor(context, root)
                             val texts = root?.let(::debugTextSnapshot) ?: "none"
                             val layers = debugAppleLyricsHolderLayers(context.holder)

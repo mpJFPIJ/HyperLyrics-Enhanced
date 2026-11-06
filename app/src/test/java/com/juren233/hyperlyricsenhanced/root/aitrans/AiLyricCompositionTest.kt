@@ -43,4 +43,10 @@ class AiLyricCompositionTest {
             AiLyricComposition.merge(translated, local).single().roma,
         )
     }
+
+    @Test fun ignoresUnverifiedAiLettersEvenWhenTheMainSyllablesLookTheSame() {
+        val translated = listOf(TranslationItem(index = 0, roma = "다메ㅋㅋ"))
+        val local = listOf(TranslationItem(index = 0, roma = "다메"))
+        assertEquals("다메", AiLyricComposition.merge(translated, local).single().roma)
+    }
 }

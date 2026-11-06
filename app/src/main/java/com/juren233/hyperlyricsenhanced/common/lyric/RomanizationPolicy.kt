@@ -74,6 +74,12 @@ object RomanizationPolicy {
         return hasHangul
     }
 
+    /** Compare all sounds, including Hangul jamo; only presentation spaces may differ. */
+    fun sameHangulSounds(first: String?, second: String?): Boolean =
+        isHangulPronunciation(first) && isHangulPronunciation(second) &&
+            first.orEmpty().filterNot(Char::isWhitespace) ==
+                second.orEmpty().filterNot(Char::isWhitespace)
+
     fun isLatinLanguageTag(language: String?): Boolean =
         language
             ?.trim()

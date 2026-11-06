@@ -142,6 +142,18 @@ internal class AppleLyricsPronunciationState {
         }
     }
 
+    /** Official/verified native words must never inherit an older line-wide fallback. */
+    fun forgetLineWide(songId: String?, sourceText: String?) {
+        if (songId.isNullOrBlank() || sourceText.isNullOrBlank()) return
+        synchronized(lineWideBySource) {
+            if (songId == lineWideSongId) {
+                val source = AppleLineWidePronunciationRowPolicy.sourceKey(sourceText)
+                lineWideBySource.remove(source)
+                ambiguousLineWideSources.remove(source)
+            }
+        }
+    }
+
     internal companion object {
         /** Kept equal to the pre-migration inline cap in registerApplePronunciationRenderPlan. */
         const val MAX_RENDER_PLANS = 256

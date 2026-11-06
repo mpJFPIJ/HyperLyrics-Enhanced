@@ -23,7 +23,7 @@ internal object ApplePronunciationPolicy {
             }
         ) return null
         return alignedWords.map { it.hangul }.takeIf {
-            it.joinToString("").hangulOnly() == pronunciation.hangulOnly() &&
+            RomanizationPolicy.sameHangulSounds(it.joinToString(""), pronunciation) &&
                 it.any(String::isNotBlank)
         }
     }

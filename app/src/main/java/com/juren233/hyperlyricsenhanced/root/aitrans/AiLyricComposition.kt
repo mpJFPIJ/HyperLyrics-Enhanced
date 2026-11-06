@@ -21,9 +21,7 @@ internal object AiLyricComposition {
                 // every Japanese morpheme into one unbroken Hangul word.
                 val proposed = previous.roma?.trim()
                 val sameVerifiedSounds = proposed != null &&
-                    RomanizationPolicy.isHangulPronunciation(proposed) &&
-                    proposed.filter { it in '가'..'힣' } ==
-                        sound.filter { it in '가'..'힣' }
+                    RomanizationPolicy.sameHangulSounds(proposed, sound)
                 previous.copy(roma = if (sameVerifiedSounds) proposed else sound)
             } else previous
         }

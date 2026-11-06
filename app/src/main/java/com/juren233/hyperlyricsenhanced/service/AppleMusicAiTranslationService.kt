@@ -19,6 +19,7 @@ import com.juren233.hyperlyricsenhanced.root.aitrans.AiApiKeyStore
 import com.juren233.hyperlyricsenhanced.lyric.style.AiTranslationProvider
 import com.juren233.hyperlyricsenhanced.root.aitrans.AITranslator
 import com.juren233.hyperlyricsenhanced.root.aitrans.AiTranslationProgress
+import io.github.proify.lyricon.amprovider.xposed.AppleAiProgressPresentationPolicy
 import com.juren233.hyperlyricsenhanced.root.aitrans.AppleMusicSourcePhonetics
 import io.github.proify.extensions.deflate
 import io.github.proify.extensions.inflate
@@ -309,11 +310,11 @@ class AppleMusicAiTranslationService : Service() {
                                 line.text.orEmpty().any(Char::isLetter)
                             }
                             sendProgress(serial, requestKey, AiTranslationProgress(
-                                when {
-                                    translatedLines > 0 -> "completed"
-                                    pronouncedLines < expectedReadingLines -> "phonetics_partial"
-                                    else -> "phonetics_completed"
-                                },
+                                stage = AppleAiProgressPresentationPolicy.completionStage(
+                                    translatedLines, pronouncedLines, expectedReadingLines,
+                                ),
+                                batch = pronouncedLines,
+                                totalBatches = expectedReadingLines,
                             ))
                             LogManager.i(TAG, "stage=result_sent bytes=${result.size}")
                         }

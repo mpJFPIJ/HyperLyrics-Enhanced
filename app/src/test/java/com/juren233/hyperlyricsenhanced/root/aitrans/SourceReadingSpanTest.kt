@@ -51,6 +51,26 @@ class SourceReadingSpanTest {
         assertEquals("you", result.spans.last().sourceText)
     }
 
+    @Test fun explicitWhitespaceAndPunctuationTokensKeepPhraseBoundaries() {
+        val withSpace = SourceReadingAssembler.assemble(
+            "駄目 I", listOf(
+                RawReadingToken(0, 2, "ダメ"),
+                RawReadingToken(2, 3, " "),
+                RawReadingToken(3, 4, "I"),
+            ),
+        )
+        assertEquals("다메 아이", withSpace.text)
+
+        val withPunctuation = SourceReadingAssembler.assemble(
+            "駄目、I", listOf(
+                RawReadingToken(0, 2, "ダメ"),
+                RawReadingToken(2, 3, "、"),
+                RawReadingToken(3, 4, "I"),
+            ),
+        )
+        assertEquals("다메 아이", withPunctuation.text)
+    }
+
     @Test fun unknownKanjiAndUnknownEnglishNeverGeneratePlausibleFiller() {
         val missingKanji = SourceReadingAssembler.assemble("未知語", listOf(RawReadingToken(0, 3, "*")))
         assertEquals(LineReadingStatus.MISSING_UNSUPPORTED, missingKanji.status)

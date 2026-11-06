@@ -144,7 +144,9 @@ internal class AppleNativeOnlineTranslationStore {
                 wordPronunciations = line.pronunciationWords,
                 pronunciationStatus = line.pronunciationStatus,
             )
-            if (content.translation == null && content.pronunciation == null) {
+            if (content.translation == null && content.pronunciation == null &&
+                content.pronunciationStatus == null
+            ) {
                 return@mapNotNull null
             }
             val timing = TimingKey(line.begin, line.end)
@@ -232,7 +234,6 @@ internal class AppleNativeOnlineTranslationStore {
         end: Long,
         text: String?,
     ): String? = content(songId, begin, end, text, aiOverlay)
-        ?.takeIf { RomanizationPolicy.isHangulPronunciation(it.pronunciation) }
         ?.pronunciationStatus
 
     fun hasTranslation(songId: String?): Boolean =

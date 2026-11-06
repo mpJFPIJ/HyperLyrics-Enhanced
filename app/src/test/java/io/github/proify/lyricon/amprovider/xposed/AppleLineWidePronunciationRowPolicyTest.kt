@@ -23,12 +23,13 @@ class AppleLineWidePronunciationRowPolicyTest {
     fun `never shows a stale or hidden reading on a recycled lyric holder`() {
         val payload = AppleLineWidePronunciationPayload(
             songId = "a", lineKey = "123", sourceText = "みその中から",
-            pronunciation = "미소노 나카카라", revision = 5L,
+            pronunciation = "미소노 나카카라", revision = 5L, sourcePriority = 1,
         )
-        assertTrue(AppleLineWidePronunciationRowPolicy.shouldDisplay(payload, "a", 5L, true))
-        assertFalse(AppleLineWidePronunciationRowPolicy.shouldDisplay(payload, "b", 5L, true))
-        assertFalse(AppleLineWidePronunciationRowPolicy.shouldDisplay(payload, "a", 6L, true))
-        assertFalse(AppleLineWidePronunciationRowPolicy.shouldDisplay(payload, "a", 5L, false))
+        assertTrue(AppleLineWidePronunciationRowPolicy.shouldDisplay(payload, "a", 5L, true, 1))
+        assertFalse(AppleLineWidePronunciationRowPolicy.shouldDisplay(payload, "b", 5L, true, 1))
+        assertFalse(AppleLineWidePronunciationRowPolicy.shouldDisplay(payload, "a", 6L, true, 1))
+        assertFalse(AppleLineWidePronunciationRowPolicy.shouldDisplay(payload, "a", 5L, false, 1))
+        assertFalse(AppleLineWidePronunciationRowPolicy.shouldDisplay(payload, "a", 5L, true, 2))
     }
 
     @Test
@@ -76,5 +77,18 @@ class AppleLineWidePronunciationRowPolicyTest {
         state.rememberLineWide(first, null)
         state.rememberLineWide(first.copy(lineKey = "b", pronunciation = "세이키루"), null)
         assertNull(state.lineWideForHolder(null, "song", "生きる", 3L))
+    }
+
+    @Test
+    fun `official or newly aligned words remove a previous full line candidate`() {
+        val state = AppleLyricsPronunciationState()
+        val source = "脳みその中から"
+        val payload = AppleLineWidePronunciationPayload(
+            "song", "a", source, "노미소노 나카카라", 4L,
+        )
+        state.rememberLineWide(payload, null)
+        assertEquals(payload, state.lineWideForHolder(null, "song", source, 4L))
+        state.forgetLineWide("song", source)
+        assertNull(state.lineWideForHolder(null, "song", source, 4L))
     }
 }

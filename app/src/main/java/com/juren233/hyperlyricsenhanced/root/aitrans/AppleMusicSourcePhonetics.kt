@@ -30,8 +30,7 @@ internal object AppleMusicSourcePhonetics {
         // Never replace locally verified syllables, but also never discard
         // natural AI spacing when both sources spell the exact same sounds.
         val reading = supplied?.takeIf { ai ->
-            RomanizationPolicy.isHangulPronunciation(ai) &&
-                ai.filter { it in '가'..'힣' } == verified.filter { it in '가'..'힣' }
+            RomanizationPolicy.sameHangulSounds(ai, verified)
         } ?: verified
         val alignment = AppleWordReadingAlignment.align(
             original = sourceText,

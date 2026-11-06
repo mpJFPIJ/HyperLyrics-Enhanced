@@ -27,6 +27,8 @@ internal data class RawReadingToken(
 
 /** Pure function, so malformed token offsets and unsupported readings can be regression-tested. */
 internal object SourceReadingAssembler {
+    private val phraseSeparators = "、。，．.!?！？・/()[]「」『』"
+    private fun isSeparator(char: Char): Boolean = char.isWhitespace() || char in phraseSeparators
     private val english = mapOf(
         "i" to "아이", "you" to "유", "me" to "미", "my" to "마이",
         "we" to "위", "your" to "유어", "love" to "러브", "baby" to "베이비",
@@ -41,12 +43,14 @@ internal object SourceReadingAssembler {
         val result = StringBuilder()
         val spans = mutableListOf<SourceReadingSpan>()
         var previousEnd = 0
+        var pendingSpace = false
         for (token in tokens) {
             if (token.sourceStart < previousEnd || token.sourceStart < 0 ||
                 token.sourceEnd <= token.sourceStart || token.sourceEnd > source.length
             ) return unsupported(spans)
             val gap = source.substring(previousEnd, token.sourceStart)
             if (gap.any(Char::isLetterOrDigit)) return unsupported(spans)
+            if (gap.any(::isSeparator)) pendingSpace = true
             val surface = source.substring(token.sourceStart, token.sourceEnd)
             val hasJapanese = surface.any(::isJapanese)
             val sound = when {
@@ -72,8 +76,13 @@ internal object SourceReadingAssembler {
                 else -> null
             }
             if (sound != null) {
-                if (result.isNotEmpty() && gap.any(Char::isWhitespace)) result.append(' ')
+                if (result.isNotEmpty() && pendingSpace) result.append(' ')
                 result.append(sound)
+                pendingSpace = false
+            } else if (surface.any(::isSeparator)) {
+                // Sudachi may emit punctuation/space as its own token. Its
+                // source gap is then empty for the next sounding token.
+                pendingSpace = true
             }
             previousEnd = token.sourceEnd
         }

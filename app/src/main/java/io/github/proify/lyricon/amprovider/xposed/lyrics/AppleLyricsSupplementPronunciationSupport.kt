@@ -198,6 +198,7 @@ private fun AppleLyricsSupplementHooks.rememberLineWideApplePronunciation(
         sourceText = source,
         pronunciation = pronunciation,
         revision = nativeOnlineTranslationStore.revision(),
+        sourcePriority = pronunciationSourcePriority(),
     )
     pronunciationState.rememberLineWide(payload, diagnostics.currentBindingContext()?.holder)
     if (lineWideRegisteredDiagnosticCount.incrementAndGet() <= 24) {
@@ -235,6 +236,7 @@ internal fun AppleLyricsSupplementHooks.bindLineWidePronunciation(
         currentRevision = revision,
         visible = requestedAppleLyricsRowVisibility().pronunciation &&
             showHangulSupplementPronunciation() && !shouldHideMandarinPronunciation(),
+        currentSourcePriority = pronunciationSourcePriority(),
     )
     val count = if (shown) lineWideShownDiagnosticCount.incrementAndGet()
         else lineWideMissingDiagnosticCount.incrementAndGet()
@@ -436,7 +438,10 @@ private fun AppleLyricsSupplementHooks.hookApplePronunciationWordsGetter(
             hasOnlinePronunciation = mainTimingPronunciation != null,
         )
         val resolvedWords = when (wordTrack) {
-            ApplePronunciationWordTrack.OFFICIAL -> original
+            ApplePronunciationWordTrack.OFFICIAL -> {
+                pronunciationState.forgetLineWide(currentAppleLyricsSongId, originalText)
+                original
+            }
             ApplePronunciationWordTrack.MAIN_LINE_TIMING -> {
                 val pronunciation = requireNotNull(mainTimingPronunciation)
                 val begin = runCatching {
@@ -495,6 +500,7 @@ private fun AppleLyricsSupplementHooks.hookApplePronunciationWordsGetter(
                     // reading. Render it as a whole line in the measured flexbox.
                     emptyApplePronunciationWords(original, mainWords) ?: original
                 } else {
+                    pronunciationState.forgetLineWide(currentAppleLyricsSongId, originalText)
                     mainWords?.takeIf { nativeVectorSize(it) > 0 }?.also { vector ->
                         registerApplePronunciationRenderPlan(
                             vector = vector,
@@ -509,10 +515,13 @@ private fun AppleLyricsSupplementHooks.hookApplePronunciationWordsGetter(
                     } ?: emptyApplePronunciationWords(original, mainWords) ?: original
                 }
             }
-            ApplePronunciationWordTrack.HIDDEN -> emptyApplePronunciationWords(
-                originalVector = original,
-                mainWords = null,
-            ) ?: original
+            ApplePronunciationWordTrack.HIDDEN -> {
+                pronunciationState.forgetLineWide(currentAppleLyricsSongId, originalText)
+                emptyApplePronunciationWords(
+                    originalVector = original,
+                    mainWords = null,
+                ) ?: original
+            }
         }
         logApplePronunciationWordBinding(
             line = line,

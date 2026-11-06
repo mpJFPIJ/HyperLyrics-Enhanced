@@ -68,4 +68,11 @@ class AppleMusicSourcePhoneticsTest {
         assertEquals("LINE_WIDE", result.pronunciationStatus)
         assertEquals("머릿속에서", result.translation)
     }
+
+    @Test fun extraUnverifiedHangulJamoCannotPassTheSoundIdentityCheck() {
+        val source = "駄目"
+        val line = RichLyricLine(text = source, roma = "다메ㅋㅋ")
+        val local = SourceReadingAssembler.assemble(source, listOf(RawReadingToken(0, 2, "ダメ")))
+        assertEquals("다메", AppleMusicSourcePhonetics.attach(line, source, local).roma)
+    }
 }

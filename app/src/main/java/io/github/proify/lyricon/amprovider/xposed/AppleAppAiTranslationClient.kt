@@ -188,7 +188,10 @@ internal class AppleAppAiTranslationClient(
                 )
                 if (current) {
                     onTranslationReceived(compressedSong)
-                    AppleAiProgressOverlay.update("completed")
+                    // The app process sends a final per-line completeness stage
+                    // immediately after this callback; translation receipt alone
+                    // cannot claim every Japanese reading has been generated.
+                    AppleAiProgressOverlay.update("result_received")
                 }
             }
 

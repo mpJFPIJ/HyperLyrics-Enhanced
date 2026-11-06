@@ -12,6 +12,17 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AppleNativeOnlineTranslationStoreTest {
+    @Test fun `unsupported pronunciation status survives without manufactured sound`() {
+        val store = AppleNativeOnlineTranslationStore()
+        store.receive(Song(id = "100", lyrics = listOf(RichLyricLine(
+            begin = 3_000, end = 4_000, text = "未知語", roma = null,
+            pronunciationStatus = "MISSING_UNSUPPORTED",
+        ))), preserveExistingPronunciation = true)
+        assertEquals("MISSING_UNSUPPORTED", store.aiHangulPronunciationStatus("100", 3_000, 4_000, "未知語"))
+        assertNull(store.aiHangulPronunciation("100", 3_000, 4_000, "未知語"))
+        assertNull(store.aiHangulPronunciationStatus("100", 3_000, 4_000, "別の歌詞"))
+    }
+
     @Test fun `line wide status remains addressable without exposing stale foreign song`() {
         val store = AppleNativeOnlineTranslationStore()
         store.receive(Song(id = "100", lyrics = listOf(RichLyricLine(

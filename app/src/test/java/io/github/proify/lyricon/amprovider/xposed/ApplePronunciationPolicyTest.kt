@@ -256,6 +256,11 @@ class ApplePronunciationPolicyTest {
                 "다메 노미소", listOf("駄目", "脳みそ"), mapping,
             ),
         )
+        assertNull(
+            ApplePronunciationPolicy.verifiedNativeSegments(
+                "다메 노미소ㅋㅋ", listOf("駄目", "脳", "みそ"), mapping,
+            ),
+        )
     }
 
     @Test

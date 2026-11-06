@@ -2,6 +2,7 @@ package io.github.proify.lyricon.amprovider.xposed
 
 import android.os.Build
 import android.graphics.Color
+import android.text.Layout
 import android.graphics.text.LineBreaker
 import android.view.Gravity
 import android.view.View
@@ -16,6 +17,7 @@ internal data class AppleLineWidePronunciationPayload(
     val sourceText: String,
     val pronunciation: String,
     val revision: Long,
+    val sourcePriority: Int = 0,
 )
 
 internal object AppleLineWidePronunciationRowPolicy {
@@ -30,8 +32,10 @@ internal object AppleLineWidePronunciationRowPolicy {
         currentSongId: String?,
         currentRevision: Long,
         visible: Boolean,
+        currentSourcePriority: Int,
     ): Boolean = visible && payload != null && payload.songId == currentSongId &&
-        payload.revision == currentRevision && readableText(payload.pronunciation) != null
+        payload.revision == currentRevision && payload.sourcePriority == currentSourcePriority &&
+        readableText(payload.pronunciation) != null
 
     /** Negative width uses MATCH_PARENT until the flexbox has been laid out. */
     fun fullWidth(measuredWidth: Int): Int = measuredWidth.takeIf { it > 0 } ?: -1
@@ -60,11 +64,12 @@ internal class AppleLineWidePronunciationRow {
         currentSongId: String?,
         currentRevision: Long,
         visible: Boolean,
+        currentSourcePriority: Int,
     ): Boolean {
         val anchor = anchor(root) ?: return false
         clear(root)
         if (!AppleLineWidePronunciationRowPolicy.shouldDisplay(
-                payload, currentSongId, currentRevision, visible,
+                payload, currentSongId, currentRevision, visible, currentSourcePriority,
             )
         ) return false
 
@@ -87,7 +92,7 @@ internal class AppleLineWidePronunciationRow {
             ellipsize = null
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 breakStrategy = LineBreaker.BREAK_STRATEGY_HIGH_QUALITY
-                hyphenationFrequency = LineBreaker.HYPHENATION_FREQUENCY_NONE
+                hyphenationFrequency = Layout.HYPHENATION_FREQUENCY_NONE
             }
             if (Build.VERSION.SDK_INT >= 33) {
                 setLineBreakWordStyle(android.graphics.text.LineBreakConfig.LINE_BREAK_WORD_STYLE_PHRASE)

@@ -1,6 +1,7 @@
 package io.github.proify.lyricon.amprovider.xposed
 
 import android.os.Build
+import android.annotation.SuppressLint
 import android.graphics.Color
 import android.text.Layout
 import android.graphics.text.LineBreaker
@@ -47,6 +48,9 @@ internal object AppleLineWidePronunciationRowPolicy {
  * Only observed Apple Music 6.5.3 view anchors are accepted; unfamiliar hosts fail closed.
  */
 internal class AppleLineWidePronunciationRow {
+    // This view is injected into Apple Music's classloader and must depend only
+    // on platform Android widgets; requiring AppCompat could break NPatch Local.
+    @SuppressLint("AppCompatCustomView")
     private class ReadingView(context: android.content.Context) : TextView(context)
 
     fun clear(root: View?) {

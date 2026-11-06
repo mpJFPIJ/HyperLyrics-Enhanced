@@ -20,7 +20,10 @@ class AppleNativeOnlineTranslationStoreTest {
         ))), preserveExistingPronunciation = true)
         assertEquals("MISSING_UNSUPPORTED", store.aiHangulPronunciationStatus("100", 3_000, 4_000, "未知語"))
         assertNull(store.aiHangulPronunciation("100", 3_000, 4_000, "未知語"))
-        assertNull(store.aiHangulPronunciationStatus("100", 3_000, 4_000, "別の歌詞"))
+        // A unique timing key deliberately supports alternate native text;
+        // a different time must still never inherit the unsupported marker.
+        assertEquals("MISSING_UNSUPPORTED", store.aiHangulPronunciationStatus("100", 3_000, 4_000, "別の歌詞"))
+        assertNull(store.aiHangulPronunciationStatus("100", 4_000, 5_000, "未知語"))
     }
 
     @Test fun `line wide status remains addressable without exposing stale foreign song`() {

@@ -16,8 +16,15 @@ internal object AiLyricComposition {
             } else if (RomanizationPolicy.isHangulPronunciation(sound)) {
                 // A language model can output a plausible Korean syllable that is
                 // not present in the source lyric. The offline dictionary reads
-                // the *actual source text*, so prefer it even on cached AI hits.
-                previous.copy(roma = sound)
+                // the *actual source text*. When the syllables agree exactly,
+                // preserve the model's phrase boundaries instead of merging
+                // every Japanese morpheme into one unbroken Hangul word.
+                val proposed = previous.roma?.trim()
+                val sameVerifiedSounds = proposed != null &&
+                    RomanizationPolicy.isHangulPronunciation(proposed) &&
+                    proposed.filter { it in '가'..'힣' } ==
+                        sound.filter { it in '가'..'힣' }
+                previous.copy(roma = if (sameVerifiedSounds) proposed else sound)
             } else previous
         }
         return result.values.sortedBy(TranslationItem::index)

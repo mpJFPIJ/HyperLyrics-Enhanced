@@ -298,7 +298,9 @@ internal class AppleLyricsSupplementHooks(
         )
     }
     internal val lineWidePronunciationRow = AppleLineWidePronunciationRow()
-    internal val lineWideBindingDiagnosticCount = AtomicInteger()
+    internal val lineWideMissingDiagnosticCount = AtomicInteger()
+    internal val lineWideShownDiagnosticCount = AtomicInteger()
+    internal val lineWideRegisteredDiagnosticCount = AtomicInteger()
 
     fun currentSongId(): String? = currentAppleLyricsSongId
 

@@ -1,5 +1,6 @@
 package com.juren233.hyperlyricsenhanced.root.aitrans
 
+import com.juren233.hyperlyricsenhanced.common.lyric.RomanizationPolicy
 import com.juren233.hyperlyricsenhanced.lyric.model.LyricPronunciationSpan
 import com.juren233.hyperlyricsenhanced.lyric.model.RichLyricLine
 
@@ -23,7 +24,15 @@ internal object AppleMusicSourcePhonetics {
             )
         }
 
-        val reading = requireNotNull(analyzed.text)
+        val verified = requireNotNull(analyzed.text)
+        val supplied = line.roma?.trim()?.takeIf(String::isNotBlank)
+        // AppleMusicSourcePhonetics is the final app->Apple transport boundary.
+        // Never replace locally verified syllables, but also never discard
+        // natural AI spacing when both sources spell the exact same sounds.
+        val reading = supplied?.takeIf { ai ->
+            RomanizationPolicy.isHangulPronunciation(ai) &&
+                ai.filter { it in '가'..'힣' } == verified.filter { it in '가'..'힣' }
+        } ?: verified
         val alignment = AppleWordReadingAlignment.align(
             original = sourceText,
             appleWords = line.words.orEmpty().map { it.text.orEmpty() },

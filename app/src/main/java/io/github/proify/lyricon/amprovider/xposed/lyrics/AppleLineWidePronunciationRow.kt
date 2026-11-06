@@ -2,7 +2,7 @@ package io.github.proify.lyricon.amprovider.xposed
 
 import android.os.Build
 import android.graphics.Color
-import android.text.Layout
+import android.graphics.text.LineBreaker
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -86,8 +86,8 @@ internal class AppleLineWidePronunciationRow {
             maxLines = Int.MAX_VALUE
             ellipsize = null
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                breakStrategy = Layout.BREAK_STRATEGY_HIGH_QUALITY
-                hyphenationFrequency = Layout.HYPHENATION_FREQUENCY_NONE
+                breakStrategy = LineBreaker.BREAK_STRATEGY_HIGH_QUALITY
+                hyphenationFrequency = LineBreaker.HYPHENATION_FREQUENCY_NONE
             }
             if (Build.VERSION.SDK_INT >= 33) {
                 setLineBreakWordStyle(android.graphics.text.LineBreakConfig.LINE_BREAK_WORD_STYLE_PHRASE)

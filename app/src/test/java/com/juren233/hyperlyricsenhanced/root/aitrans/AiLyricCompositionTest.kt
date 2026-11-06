@@ -32,4 +32,15 @@ class AiLyricCompositionTest {
         val translated = listOf(TranslationItem(index = 0, trans = "사랑해", roma = "러브"))
         assertEquals(translated, AiLyricComposition.merge(translated, emptyList()))
     }
+
+    @Test fun preservesNaturalAiSpacingWhenItsSoundsMatchTheLocalDictionary() {
+        val translated = listOf(
+            TranslationItem(index = 0, trans = "머릿속에서", roma = "노미소노 나카카라"),
+        )
+        val local = listOf(TranslationItem(index = 0, roma = "노미소노나카카라"))
+        assertEquals(
+            "노미소노 나카카라",
+            AiLyricComposition.merge(translated, local).single().roma,
+        )
+    }
 }

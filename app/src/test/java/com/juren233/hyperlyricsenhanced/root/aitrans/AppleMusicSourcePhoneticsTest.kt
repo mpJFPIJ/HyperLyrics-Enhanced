@@ -49,4 +49,23 @@ class AppleMusicSourcePhoneticsTest {
         assertEquals("MISSING_UNSUPPORTED", result.pronunciationStatus)
         assertEquals("모르는 말", result.translation)
     }
+
+    @Test fun aVerifiedAiSpacingIsPreservedEvenIfTheOfflineLineHasNoSpaces() {
+        val source = "脳みその中から"
+        val line = RichLyricLine(
+            text = source,
+            roma = "노미소노 나카카라",
+            translation = "머릿속에서",
+        )
+        val local = SourceReadingAssembler.assemble(source, listOf(
+            RawReadingToken(0, 3, "ノーミソ"),
+            RawReadingToken(3, 4, "ノ"),
+            RawReadingToken(4, 5, "ナカ"),
+            RawReadingToken(5, 7, "カラ"),
+        ))
+        val result = AppleMusicSourcePhonetics.attach(line, source, local)
+        assertEquals("노미소노 나카카라", result.roma)
+        assertEquals("LINE_WIDE", result.pronunciationStatus)
+        assertEquals("머릿속에서", result.translation)
+    }
 }

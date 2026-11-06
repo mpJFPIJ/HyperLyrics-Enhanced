@@ -1,29 +1,63 @@
-# Apple Music 6.5.3 — Hangul pronunciation device regression
+# Apple Music 6.5.3 — Korean pronunciation device regression
 
-## Current gate (2026-11-05)
+This checklist is for the personal-updatable **draft PR** build. CI validates Kotlin
+and APK signing; only tests in the actual NPatch Local / Apple Music process can
+confirm that the native flexbox accepts the full-width pronunciation child.
 
-The draft diagnostic build is **not** the final UI fix. Its only Apple Music View change is a read-only probe. The new complete-line UI row must not be enabled until a valid host holder anchor and child layout are observed. Do not repatch or uninstall Apple Music just to test this branch.
+## Do not change the working installation while testing
 
-## What to collect (do not send keys or raw lyric export)
+- Device: Galaxy Buddy3 / Android 16 / Apple Music 6.5.3 / NPatch Local.
+- Update only the existing HyperLyrics Enhanced app to the personal-signed APK.
+- Do not uninstall Apple Music, reset application data, repatch, change permissions,
+  or remove existing cached lyrics/API keys.
+- Confirm the exact module `buildCommit` and `buildRun` loaded in the NPatch log;
+  app version `8.2.2` on its own does **not** identify a CI build.
 
-1. Install the personally signed APK from the draft PR's successful `personal-updatable-signed` artifact, retaining existing app data and NPatch Local settings. Avoid temporary debug-key artifacts, which do not update the existing APK.
-2. Open Apple Music and play `IRIS OUT`, then open its lyrics screen and scroll through a long Japanese line. Turn Hangul pronunciation and Korean translation on, then off/on separately.
-3. Export the NPatch app diagnostics ZIP, plus Enhanced's redacted diagnostics if available.
-4. Verify the app service reports `stage=service_created buildCommit=<SHA> buildRun=<RUN_ID>` and the loaded module reports `stage=module_loaded buildCommit=<SAME_SHA> buildRun=<SAME_RUN_ID>`. Matching package version alone is not proof.
-5. Look for `ApplePronunciationAnchor` `stage=anchor_probe` entries: `holderWidth`, `holderHeight`, `holderChildren`, `holderGroup`, `position`, root and child view classes. Class names and dimensions are not lyric content.
+## Source/translation/pronunciation invariants
 
-## Final device approval matrix (once safe full-line row is implemented)
+1. Play **IRIS OUT — Kenshi Yonezu**. Observe lines around `00:55`, `01:05`
+   and later in the song. Source line, Korean meaning and Hangul sound must
+   independently appear and remain correct during scroll or seek.
+2. A Japanese phrase such as `脳みその中から` must **not** show a phonetic sequence
+   split artificially into `나 / 카카라` by unrelated karaoke word cells. For
+   unverified word mapping, the complete reading must wrap as one TextView across
+   the full source line width. It may wrap at actual phrase boundaries.
+3. No clipped, half-visible or foreign-line Hangul syllables at large system
+   font size, long lines, narrow phone width and fast seeking.
+4. Where exact source-span/Apple-word alignment exists, original native word
+   timestamps and the word-level karaoke animation must be unchanged.
+5. Translation remains the same as the prior good version; translation visibility
+   and pronunciation visibility can be toggled independently and repeatedly.
+6. Stress holder reuse: rapidly scroll across 30+ lines, seek back and forth,
+   change song, return, pause/resume and reopen the lyrics page. No previous
+   line's reading may appear beneath a new source line.
+7. Test Japanese kanji + kana, Japanese-only kana, mixed English/Japanese,
+   repeated words, songs with official native romanization, songs with no
+   phonetic result, and background-vocal/duet lines.
+8. Offline/expired-key path: cached translation remains visible; unknown
+   readings are represented as `MISSING_UNSUPPORTED` and do not become fabricated
+   sounds or a misleading "all pronunciation completed" success.
 
-| Case | Required result |
-| --- | --- |
-| Repeated `駄目` and mid-sentence `脳みそ` | No unrelated `키코` insertion; no syllable duplication, offset shift or clipping |
-| A native word divides a Sudachi morpheme | Full line-wide row; **never** guessed per-word timing |
-| 320, 360, 430 px and large fonts | Full Hangul wraps within its lyric holder without overlap |
-| Seek, pause, repeat and fast scroll | Original Apple karaoke timings unchanged; no holder leakage |
-| Song A → Song B while AI request is pending | No stale lyrics, translations or Hangul from A appear on B |
-| Translation on/off and reading on/off | Completely independent toggles, including after source change/restart |
-| Offline or expired translation API trial | Valid offline pronunciation remains usable; cached translation persists |
-| `readingLines` less than `originalLines` | Missing unsupported rows explicitly counted; no false “everything completed” |
-| NPatch app/module process reload | Loaded build identity matches installed signed app |
+## Privacy-safe diagnostics
 
-If the holder cannot safely accommodate a dynamic full-width TextView, do not switch on an approximate proportional fallback. Retain the draft release gate and capture another structure probe.
+Inspect the exported NPatch ZIP for:
+
+- `stage=module_loaded buildCommit=… buildRun=…`: matches the installed artifact.
+- `stage=anchor_probe`: holder `karaoke_lyrics_line_container` and child
+  `karaoke_line_flexbox` with nonzero measured width.
+- `stage=linewide_registered`: registration counts and whether the line getter
+  ran under the holder bind stack (`holderKnown=1/0`).
+- `stage=linewide_holder_bound`: `shown=1` for valid full-line fallback;
+  `sourceMatch=0` must **never** produce a visible row.
+- App service `stage=reading_finished`: `originalLines`, `translationLines`,
+  `readingLines`, `alignedLines`, `lineWideLines`, `missingLines`.
+
+Never export API keys, authorization headers, full source lyrics, translated
+texts, or personally identifying song metadata in diagnostic messages.
+
+## Release gate
+
+Keep the PR **draft** and leave `main` unchanged until all Kotlin tests,
+lint, release ABI/signature checks and the phone regression above pass. A
+successful CI run by itself does **not** prove that Apple Music renders or
+recycles the injected view correctly.

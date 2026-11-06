@@ -43,4 +43,38 @@ class AppleLineWidePronunciationRowPolicyTest {
             AppleLineWidePronunciationRowPolicy.readableText("노미소노  나카카라\n 키코에루"),
         )
     }
+
+    @Test
+    fun `song switch and holder reuse do not leak old Korean text`() {
+        val state = AppleLyricsPronunciationState()
+        val holder = Any()
+        val original = AppleLineWidePronunciationPayload(
+            "song-a", "line-1", "みその中から", "미소노 나카카라", 1L,
+        )
+        state.rememberLineWide(original, holder)
+        assertEquals(
+            original,
+            state.lineWideForHolder(holder, "song-a", "みその中から", 1L),
+        )
+
+        state.beginHolderBinding(holder)
+        assertNull(state.lineWideForHolder(holder, "song-b", "みその中から", 1L))
+        assertNull(state.lineWideForHolder(holder, "song-a", "別の歌", 1L))
+
+        val newer = original.copy(songId = "song-b", lineKey = "line-2", revision = 2L)
+        state.rememberLineWide(newer, holder)
+        assertEquals(newer, state.lineWideForHolder(holder, "song-b", "みその中から", 2L))
+        assertNull(state.lineWideForHolder(holder, "song-a", "みその中から", 1L))
+    }
+
+    @Test
+    fun `same looking native lyric with conflicting readings is never guessed`() {
+        val state = AppleLyricsPronunciationState()
+        val first = AppleLineWidePronunciationPayload(
+            "song", "a", "生きる", "이키루", 3L,
+        )
+        state.rememberLineWide(first, null)
+        state.rememberLineWide(first.copy(lineKey = "b", pronunciation = "세이키루"), null)
+        assertNull(state.lineWideForHolder(null, "song", "生きる", 3L))
+    }
 }

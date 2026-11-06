@@ -200,6 +200,13 @@ private fun AppleLyricsSupplementHooks.rememberLineWideApplePronunciation(
         revision = nativeOnlineTranslationStore.revision(),
     )
     pronunciationState.rememberLineWide(payload, diagnostics.currentBindingContext()?.holder)
+    if (lineWideRegisteredDiagnosticCount.incrementAndGet() <= 24) {
+        ApplePronunciationAnchorReporter.record(
+            "stage=linewide_registered sourceChars=${source.length} " +
+                "readingChars=${pronunciation.length} " +
+                "holderKnown=${if (diagnostics.currentBindingContext()?.holder != null) 1 else 0}",
+        )
+    }
 }
 
 /** Bind only after Apple finished creating/reusing the source lyric's real ViewHolder. */
@@ -229,7 +236,9 @@ internal fun AppleLyricsSupplementHooks.bindLineWidePronunciation(
         visible = requestedAppleLyricsRowVisibility().pronunciation &&
             showHangulSupplementPronunciation() && !shouldHideMandarinPronunciation(),
     )
-    if (lineWideBindingDiagnosticCount.incrementAndGet() <= 24) {
+    val count = if (shown) lineWideShownDiagnosticCount.incrementAndGet()
+        else lineWideMissingDiagnosticCount.incrementAndGet()
+    if (count <= 24) {
         ApplePronunciationAnchorReporter.record(
             "stage=linewide_holder_bound shown=${if (shown) 1 else 0} " +
                 "candidate=${if (payload != null) 1 else 0} " +

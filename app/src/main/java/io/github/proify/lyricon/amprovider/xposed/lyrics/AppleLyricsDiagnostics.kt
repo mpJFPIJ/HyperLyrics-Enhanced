@@ -648,7 +648,9 @@ internal class AppleLyricsDiagnostics(
             !lyricAnchorProbeKeys.add("${context.songId}:$position")
         ) return
         if (root == null) {
-            Log.i("ApplePronunciationAnchor", "stage=anchor_probe reason=holder_unavailable")
+            ApplePronunciationAnchorReporter.record(
+                "stage=anchor_probe reason=holder_unavailable",
+            )
             return
         }
         root.postOnAnimation {
@@ -673,7 +675,7 @@ internal class AppleLyricsDiagnostics(
                 return "$summary[$children]"
             }
             val shape = viewShape(root, 0).take(512)
-            Log.i("ApplePronunciationAnchor", "$details " +
+            ApplePronunciationAnchorReporter.record("$details " +
                 "rootClass=${root.javaClass.simpleName} " +
                 "parentClass=${root.parent?.javaClass?.simpleName ?: "none"} " +
                 "layoutClass=${root.layoutParams?.javaClass?.simpleName ?: "none"} " +

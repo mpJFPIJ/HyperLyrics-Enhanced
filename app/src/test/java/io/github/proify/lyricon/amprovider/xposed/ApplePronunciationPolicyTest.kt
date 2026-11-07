@@ -10,7 +10,39 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ApplePronunciationPolicyTest {
-    @Test fun `source grouped phonetics reuse native timed word track for highlight`() {
+    @Test
+    fun `never sends a grouped Japanese morpheme with an empty native word cell to karaoke renderer`() {
+        val grouped = listOf(
+            com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation("ダー", "다린"),
+            com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation("リン", ""),
+            com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation("ベイビー", "베이비"),
+        )
+        assertNull(ApplePronunciationPolicy.verifiedNativeSegments(
+            "다린베이비", listOf("ダー", "リン", "ベイビー"), grouped,
+        ))
+        assertEquals(
+            ApplePronunciationPresentationMode.LINE_WIDE,
+            ApplePronunciationPolicy.presentationMode(
+                "다린베이비", false, listOf("ダー", "リン", "ベイビー"), grouped,
+            ),
+        )
+    }
+
+    @Test
+    fun `native punctuation with an empty phonetic cell also falls back instead of revealing source glyphs`() {
+        val aligned = listOf(
+            com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation("ラブ", "라부"),
+            com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation("！", ""),
+            com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation("と", "토"),
+        )
+        assertNull(ApplePronunciationPolicy.verifiedNativeSegments(
+            "라부토", listOf("ラブ", "！", "と"), aligned,
+        ))
+        assertEquals(emptyList<String>(), ApplePronunciationPolicy.displaySegments(
+            "라부토", listOf("ラブ", "！", "と"), aligned,
+        ))
+    }
+    @Test fun `grouped source reading keeps complete Hangul but never enters native word timing`() {
         val nativeWords = listOf("駄", "目", "脳", "みそ")
         val mapped = AppleWordReadingAlignment.align(
             "駄目脳みそ", nativeWords,
@@ -21,14 +53,13 @@ class ApplePronunciationPolicyTest {
             ),
             "다메노미소",
         ) as WordAlignmentResult.Grouped
-        assertEquals(ApplePronunciationPresentationMode.ALIGNED_WORDS,
+        assertEquals(ApplePronunciationPresentationMode.LINE_WIDE,
             ApplePronunciationPolicy.presentationMode(
                 "다메노미소", false, nativeWords, mapped.words,
             ))
-        assertEquals(listOf("다메", "", "노", "미소"),
-            ApplePronunciationPolicy.verifiedNativeSegments(
-                "다메노미소", nativeWords, mapped.words,
-            ))
+        assertNull(ApplePronunciationPolicy.verifiedNativeSegments(
+            "다메노미소", nativeWords, mapped.words,
+        ))
     }
     @Test
     fun `refreshes official pronunciation when it arrives after the first presentation`() {

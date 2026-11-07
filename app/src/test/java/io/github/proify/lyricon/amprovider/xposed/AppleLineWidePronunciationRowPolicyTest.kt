@@ -8,6 +8,52 @@ import org.junit.Test
 
 class AppleLineWidePronunciationRowPolicyTest {
     @Test
+    fun `reading is inserted directly after source cells rather than after later translation`() {
+        assertEquals(
+            3,
+            AppleLineWidePronunciationRowPolicy.insertionIndex(
+                "ダーリンベイビー",
+                listOf("ダー", "リン", "ベイビー", "달링, 베이비"),
+            ),
+        )
+        assertEquals(
+            4,
+            AppleLineWidePronunciationRowPolicy.insertionIndex(
+                "駄目駄目脳みそ",
+                listOf("駄目", "駄目", "脳", "みそ", "안 돼"),
+            ),
+        )
+    }
+
+    @Test
+    fun `punctuation cells stay with Japanese line before Hangul reading`() {
+        assertEquals(
+            2,
+            AppleLineWidePronunciationRowPolicy.insertionIndex(
+                "「やめろ！」", listOf("やめろ", "！", "그만둬"),
+            ),
+        )
+        assertEquals(
+            2,
+            AppleLineWidePronunciationRowPolicy.insertionIndex(
+                "ラブ！と", listOf("ラブ", "！と", "사랑"),
+            ),
+        )
+    }
+
+    @Test
+    fun `unmatched or ambiguous source cannot receive another line reading`() {
+        assertNull(AppleLineWidePronunciationRowPolicy.insertionIndex(
+            "ダーリンベイビー", listOf("駄目", "달링"),
+        ))
+        assertNull(AppleLineWidePronunciationRowPolicy.insertionIndex(
+            "ダーリン", listOf("ダーリン달링"),
+        ))
+        assertNull(AppleLineWidePronunciationRowPolicy.insertionIndex(
+            "ダーリン", emptyList(),
+        ))
+    }
+    @Test
     fun `matches original karaoke source without depending on visual word breaks`() {
         assertEquals(
             AppleLineWidePronunciationRowPolicy.sourceKey("駄目 駄目 脳みその中から"),
@@ -16,6 +62,10 @@ class AppleLineWidePronunciationRowPolicyTest {
         assertFalse(
             AppleLineWidePronunciationRowPolicy.sourceKey("駄目脳") ==
                 AppleLineWidePronunciationRowPolicy.sourceKey("駄目駄目脳"),
+        )
+        assertEquals(
+            AppleLineWidePronunciationRowPolicy.sourceKey("「やめろ！」"),
+            AppleLineWidePronunciationRowPolicy.sourceKey("やめろ"),
         )
     }
 

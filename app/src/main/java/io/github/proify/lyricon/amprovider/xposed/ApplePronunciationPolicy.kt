@@ -18,8 +18,11 @@ internal object ApplePronunciationPolicy {
         ) return null
         if (!alignedWords.zip(mainWordTexts).all { (reading, source) ->
                 reading.source.trim() == source.trim() &&
-                    (reading.hangul.isBlank() ||
-                        RomanizationPolicy.isHangulPronunciation(reading.hangul))
+                    // Apple's native reading cells can expose their original
+                    // Japanese glyph when the override is empty. Never use a
+                    // grouped morpheme or punctuation gap as a timed word.
+                    reading.hangul.isNotBlank() &&
+                    RomanizationPolicy.isHangulPronunciation(reading.hangul)
             }
         ) return null
         return alignedWords.map { it.hangul }.takeIf {

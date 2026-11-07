@@ -508,20 +508,24 @@ private fun AppleLyricsSupplementHooks.hookApplePronunciationWordsGetter(
                     nativeWords = nativeTexts,
                     alignedWords = alignedWords,
                 )
-                // Present readings in Apple's original timed word row. Its
-                // pronunciation cells sit under their Japanese words and share
-                // Apple's active-word highlight. The former line-wide sibling
-                // was appended after the translation, with no active highlighting.
-                pronunciationState.forgetLineWide(currentAppleLyricsSongId, originalText)
                 if (presentation == ApplePronunciationPresentationMode.LINE_WIDE) {
+                    if (onlineFallback) {
+                        rememberLineWideApplePronunciation(
+                            originalText = originalText,
+                            pronunciation = pronunciation,
+                            begin = begin,
+                            end = end,
+                        )
+                    }
                     reportApplePronunciationRuntimeDiagnostic(
-                        stage = "unaligned_reading_kept_without_fake_word_timing",
+                        stage = "safe_line_reading_registered",
                         details = "words=${nativeTexts.size},readingChars=${pronunciation.length}," +
                             "status=${if (begin != null && end != null) "ai_or_provider" else "unknown"}",
-                        dedupeKey = "unaligned_reading:$methodName",
+                        dedupeKey = "safe_line_reading:$methodName",
                     )
                     emptyApplePronunciationWords(original, mainWords) ?: original
                 } else {
+                    pronunciationState.forgetLineWide(currentAppleLyricsSongId, originalText)
                     mainWords?.takeIf { nativeVectorSize(it) > 0 }?.also { vector ->
                         registerApplePronunciationRenderPlan(
                             vector = vector,

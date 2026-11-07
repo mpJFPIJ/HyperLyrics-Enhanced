@@ -23,7 +23,7 @@ class AppleMusicSourcePhoneticsTest {
         assertEquals("안 돼", result.translation)
     }
 
-    @Test fun splitNativeWordKeepsCompleteReadingOnOneAnchoredTimedCell() {
+    @Test fun splitNativeWordKeepsCompleteReadingOnlyInIndependentLine() {
         val line = RichLyricLine(
             text = "駄目", words = listOf(LyricWord(text = "駄"), LyricWord(text = "目")),
             translation = "안 돼",
@@ -32,9 +32,9 @@ class AppleMusicSourcePhoneticsTest {
 
         val result = AppleMusicSourcePhonetics.attach(line, "駄目", reading)
 
-        assertEquals("SOURCE_GROUPED", result.pronunciationStatus)
+        assertEquals("LINE_WIDE", result.pronunciationStatus)
         assertEquals("다메", result.roma)
-        assertEquals(listOf("다메", ""), result.pronunciationWords?.map { it.hangul })
+        assertNull(result.pronunciationWords)
         assertEquals("안 돼", result.translation)
         assertTrue(result.pronunciationSpans.orEmpty().isNotEmpty())
     }

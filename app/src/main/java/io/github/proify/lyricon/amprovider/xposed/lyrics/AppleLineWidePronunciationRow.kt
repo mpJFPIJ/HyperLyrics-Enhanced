@@ -2,6 +2,7 @@ package io.github.proify.lyricon.amprovider.xposed
 
 import android.os.Build
 import android.annotation.SuppressLint
+import android.graphics.Canvas
 import android.graphics.Color
 import android.text.Layout
 import android.graphics.text.LineBreaker
@@ -23,10 +24,32 @@ internal data class AppleLineWidePronunciationPayload(
 
 internal object AppleLineWidePronunciationRowPolicy {
     /** Native karaoke words sometimes include a line break between source characters. */
-    fun sourceKey(text: String): String = text.filterNot(Char::isWhitespace)
+    fun sourceKey(text: String): String = text.filter(Char::isLetterOrDigit)
 
     fun readableText(value: String?): String? = value?.trim()
         ?.replace(Regex("\\s+"), " ")?.takeIf(String::isNotEmpty)
+
+    /** Match the actual Japanese source prefix, never the subsequent translation cells. */
+    fun insertionIndex(sourceText: String, directChildSourceTexts: List<String>): Int? {
+        val source = sourceKey(sourceText)
+        if (source.isEmpty()) return null
+        val observed = StringBuilder(source.length)
+        directChildSourceTexts.forEachIndexed { index, text ->
+            val letters = sourceKey(text)
+            if (letters.isEmpty()) return@forEachIndexed
+            observed.append(letters)
+            if (!source.startsWith(observed.toString())) return null
+            if (observed.toString() == source) {
+                var next = index + 1
+                // A Japanese punctuation-only cell belongs above the reading.
+                while (next < directChildSourceTexts.size &&
+                    sourceKey(directChildSourceTexts[next]).isEmpty()
+                ) next++
+                return next
+            }
+        }
+        return null
+    }
 
     fun shouldDisplay(
         payload: AppleLineWidePronunciationPayload?,
@@ -51,7 +74,35 @@ internal class AppleLineWidePronunciationRow {
     // This view is injected into Apple Music's classloader and must depend only
     // on platform Android widgets; requiring AppCompat could break NPatch Local.
     @SuppressLint("AppCompatCustomView")
-    private class ReadingView(context: android.content.Context) : TextView(context)
+    private class ReadingView(context: android.content.Context) : TextView(context) {
+        var sourceWords: List<TextView> = emptyList()
+
+        /** Apple's own word views animate their text color and parent alpha. */
+        private fun syncNativeHighlight() {
+            val parentAnchor = parent as? View ?: return
+            val brightest = sourceWords.mapNotNull { source ->
+                if (!source.isAttachedToWindow) return@mapNotNull null
+                var opacity = 1f
+                var view: View? = source
+                while (view != null && view !== parentAnchor) {
+                    opacity *= view.alpha
+                    view = view.parent as? View
+                }
+                if (view !== parentAnchor) return@mapNotNull null
+                val color = source.currentTextColor
+                val luminance = 0.2126f * Color.red(color) +
+                    0.7152f * Color.green(color) + 0.0722f * Color.blue(color)
+                Triple(color, opacity, luminance * Color.alpha(color) / 255f * opacity)
+            }.maxByOrNull { it.third } ?: return
+            if (currentTextColor != brightest.first) setTextColor(brightest.first)
+            if (kotlin.math.abs(alpha - brightest.second) > 0.01f) alpha = brightest.second
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            syncNativeHighlight()
+            super.onDraw(canvas)
+        }
+    }
 
     fun clear(root: View?) {
         val anchor = anchor(root) ?: return
@@ -77,10 +128,20 @@ internal class AppleLineWidePronunciationRow {
             )
         ) return false
 
-        val sourceStyle = findNativeWordText(anchor)
+        val childText = (0 until anchor.childCount).map { index ->
+            nativeWordTexts(anchor.getChildAt(index)).joinToString("") { it.text.toString() }
+        }
+        val insertionIndex = AppleLineWidePronunciationRowPolicy.insertionIndex(
+            payload?.sourceText.orEmpty(), childText,
+        ) ?: return false
+        val sourceWords = (0 until insertionIndex).flatMap { index ->
+            nativeWordTexts(anchor.getChildAt(index))
+        }
+        val sourceStyle = sourceWords.firstOrNull() ?: return false
         val text = AppleLineWidePronunciationRowPolicy.readableText(payload?.pronunciation)
             ?: return false
         val reading = ReadingView(anchor.context).apply {
+            this.sourceWords = sourceWords
             setText(text)
             setTextSize(
                 TypedValue.COMPLEX_UNIT_PX,
@@ -106,6 +167,7 @@ internal class AppleLineWidePronunciationRow {
         // lyrics_pronunciation_vertical_container cells (~206–373px in the device log).
         anchor.addView(
             reading,
+            insertionIndex,
             ViewGroup.LayoutParams(
                 AppleLineWidePronunciationRowPolicy.fullWidth(anchor.width),
                 ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -118,17 +180,14 @@ internal class AppleLineWidePronunciationRow {
     fun visibleOriginalSource(root: View?): String? {
         val group = anchor(root) ?: return null
         val text = StringBuilder()
-        fun collect(view: View, depth: Int) {
-            if (depth > 8 || view is ReadingView) return
-            if (view is TextView && idName(view) == "song_lyrics_word") {
-                text.append(view.text)
-            } else if (view is ViewGroup) {
-                for (index in 0 until view.childCount) {
-                    view.getChildAt(index)?.let { collect(it, depth + 1) }
-                }
-            }
+        for (index in 0 until group.childCount) {
+            val words = nativeWordTexts(group.getChildAt(index))
+            val part = words.joinToString("") { it.text.toString() }
+            // In Korean translation mode the following Hangul cells belong to
+            // the translation, not the Japanese lyric whose reading we bind.
+            if (part.any { it in '가'..'힣' }) break
+            text.append(part)
         }
-        collect(group, 0)
         return text.toString().takeIf(String::isNotBlank)
     }
 
@@ -143,18 +202,18 @@ internal class AppleLineWidePronunciationRow {
         return null
     }
 
-    private fun findNativeWordText(group: ViewGroup): TextView? {
-        fun find(view: View, depth: Int): TextView? {
-            if (depth > 8) return null
-            if (view is TextView && idName(view) == "song_lyrics_word") return view
-            if (view is ViewGroup) {
-                for (index in 0 until view.childCount) {
-                    find(view.getChildAt(index), depth + 1)?.let { return it }
-                }
+    private fun nativeWordTexts(root: View?): List<TextView> {
+        val words = mutableListOf<TextView>()
+        fun visit(view: View?, depth: Int) {
+            if (view == null || view is ReadingView || depth > 8) return
+            if (view is TextView && idName(view) == "song_lyrics_word") {
+                words += view
+            } else if (view is ViewGroup) {
+                for (index in 0 until view.childCount) visit(view.getChildAt(index), depth + 1)
             }
-            return null
         }
-        return find(group, 0)
+        visit(root, 0)
+        return words
     }
 
     private fun idName(view: View): String? = runCatching {

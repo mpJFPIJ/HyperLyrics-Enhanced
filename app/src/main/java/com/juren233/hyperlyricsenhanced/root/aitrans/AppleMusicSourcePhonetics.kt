@@ -54,7 +54,10 @@ internal object AppleMusicSourcePhonetics {
             roma = reading,
             pronunciationWords = when (alignment) {
                 is WordAlignmentResult.Verified -> alignment.words
-                is WordAlignmentResult.Grouped -> alignment.words
+                    .takeIf { words -> words.all { it.hangul.isNotBlank() } }
+                // A grouped pronunciation has a blank native word cell. Apple
+                // can show that cell's Japanese text in the reading row.
+                is WordAlignmentResult.Grouped -> null
                 else -> null
             },
             pronunciationSpans = analyzed.spans.map { span ->
@@ -66,8 +69,9 @@ internal object AppleMusicSourcePhonetics {
                 )
             },
             pronunciationStatus = when (alignment) {
-                is WordAlignmentResult.Verified -> "ALIGNED"
-                is WordAlignmentResult.Grouped -> "SOURCE_GROUPED"
+                is WordAlignmentResult.Verified ->
+                    if (alignment.words.all { it.hangul.isNotBlank() }) "ALIGNED" else "LINE_WIDE"
+                is WordAlignmentResult.Grouped -> "LINE_WIDE"
                 else -> "LINE_WIDE"
             },
         )

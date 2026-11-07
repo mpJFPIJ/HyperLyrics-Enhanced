@@ -72,6 +72,17 @@ class AppleWordReadingAlignmentTest {
             (result as WordAlignmentResult.Verified).words.map { it.hangul })
     }
 
+    @Test fun punctuationThatAppleKeepsAsANativeWordDoesNotDisappearFromAlignment() {
+        val result = AppleWordReadingAlignment.align(
+            "ラブ！と", listOf("ラブ", "！", "と"),
+            listOf(span(0, 2, "ラブ", "라부"), span(3, 4, "と", "토")),
+            expectedHangul = "라부토",
+        )
+        assertTrue(result is WordAlignmentResult.Verified)
+        assertEquals(listOf("라부", "", "토"),
+            (result as WordAlignmentResult.Verified).words.map { it.hangul })
+    }
+
     @Test fun rejectingIncorrectSoundEvenWhenSourceGroupingMatches() {
         assertEquals(WordAlignmentResult.LineWide(AlignmentFailure.SOUND_MISMATCH),
             AppleWordReadingAlignment.align(

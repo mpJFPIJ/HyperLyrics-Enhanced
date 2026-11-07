@@ -45,9 +45,12 @@ internal object AppleWordReadingAlignment {
             if (value.isEmpty() || value.contains('<') || value.contains('>')) {
                 return WordAlignmentResult.LineWide(AlignmentFailure.SOURCE_MISMATCH)
             }
-            // Apple's native karaoke vector may drop punctuation into its own
-            // decoration layer. Those marks have no independent pronunciation.
-            while (cursor < original.length && isUnspokenDelimiter(original[cursor])) cursor++
+            // Preserve punctuation when Apple includes it as a karaoke word;
+            // skip it only if Apple omitted the mark from the native vector.
+            while (cursor < original.length && original[cursor].isWhitespace()) cursor++
+            if (!original.startsWith(value, cursor)) {
+                while (cursor < original.length && isUnspokenDelimiter(original[cursor])) cursor++
+            }
             if (!original.startsWith(value, cursor)) {
                 return WordAlignmentResult.LineWide(AlignmentFailure.SOURCE_MISMATCH)
             }

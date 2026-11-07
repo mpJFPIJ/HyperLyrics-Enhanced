@@ -19,6 +19,19 @@ class SourceReadingSpanTest {
         assertEquals("다린", result.text)
         assertEquals(listOf("ダー", "リン"), result.spans.map { it.sourceText })
     }
+
+    @Test fun isolatedKatakanaMiddleDotIsPunctuationNotAnUnsupportedJapaneseWord() {
+        val result = SourceReadingAssembler.assemble(
+            "ラブ・ラブ",
+            listOf(
+                RawReadingToken(0, 2, "ラブ"),
+                RawReadingToken(2, 3, "*"),
+                RawReadingToken(3, 5, "ラブ"),
+            ),
+        )
+        assertEquals(LineReadingStatus.COMPLETE, result.status)
+        assertEquals("라부 라부", result.text)
+    }
     @Test fun anUnsupportedLargeTokenRetriesSmallerDictionarySplitBeforeDroppingLine() {
         var calls = 0
         val result = SourceReadingAssembler.retryModes("半端なく", 3) { mode ->

@@ -86,6 +86,13 @@ internal object SourceReadingAssembler {
                 previousEnd = token.sourceEnd
                 continue
             }
+            // '・' is in the Unicode Katakana block, but is punctuation rather
+            // than an unreadable Japanese word. Sudachi can emit it separately.
+            if (surface.all(::isSeparator)) {
+                pendingSpace = true
+                previousEnd = token.sourceEnd
+                continue
+            }
             val hasJapanese = surface.any(::isJapanese)
             val sound = when {
                 hasJapanese -> {

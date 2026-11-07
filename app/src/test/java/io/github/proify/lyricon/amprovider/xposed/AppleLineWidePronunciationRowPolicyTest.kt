@@ -160,20 +160,22 @@ class AppleLineWidePronunciationRowPolicyTest {
     }
 
     @Test
-    fun `multiple matching source prefixes are ambiguous when holder is unavailable`() {
+    fun `complete Japanese source wins over shorter cached prefix`() {
         val state = AppleLyricsPronunciationState()
         state.rememberLineWide(
             AppleLineWidePronunciationPayload("song", "short", "ダー", "다아", 7L), null,
         )
-        state.rememberLineWide(
-            AppleLineWidePronunciationPayload(
-                "song", "long", "ダーリンベイビー", "다아린 베이비", 7L,
-            ), null,
+        val complete = AppleLineWidePronunciationPayload(
+            "song", "long", "ダーリンベイビー", "다아린 베이비", 7L,
         )
-        assertNull(state.lineWideForHolder(
-            null, "song", null, 7L,
-            listOf("ダー", "リン", "ベイビー", "Darling baby"),
-        ))
+        state.rememberLineWide(complete, null)
+        assertEquals(
+            complete,
+            state.lineWideForHolder(
+                null, "song", null, 7L,
+                listOf("ダー", "リン", "ベイビー", "Darling baby"),
+            ),
+        )
     }
 
     @Test

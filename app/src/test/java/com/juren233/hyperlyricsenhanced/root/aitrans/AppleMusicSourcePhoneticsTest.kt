@@ -63,6 +63,21 @@ class AppleMusicSourcePhoneticsTest {
         assertEquals("모르는 말", result.translation)
     }
 
+    @Test fun oneKanaAndUnsupportedKanjiCanPreserveAnExistingAiPronunciation() {
+        val source = "が悪"
+        val line = RichLyricLine(text = source, roma = "가 와루", translation = "나쁜")
+        val incomplete = SourceReadingAssembler.assemble(
+            source, listOf(
+                RawReadingToken(0, 1, "ガ"),
+                RawReadingToken(1, 2, "*"),
+            ),
+        )
+        val result = AppleMusicSourcePhonetics.attach(line, source, incomplete)
+        assertEquals("가 와루", result.roma)
+        assertEquals("AI_FALLBACK_UNVERIFIED", result.pronunciationStatus)
+        assertEquals("나쁜", result.translation)
+    }
+
     @Test fun aVerifiedAiSpacingIsPreservedEvenIfTheOfflineLineHasNoSpaces() {
         val source = "脳みその中から"
         val line = RichLyricLine(

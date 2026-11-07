@@ -18,13 +18,15 @@ internal object AppleMusicSourcePhonetics {
         if (analyzed.status != LineReadingStatus.COMPLETE) {
             // A single unknown Sudachi token must not erase a useful reading
             // returned with the same AI-translated line. Only use this as an
-            // explicitly unverified fallback on mixed Japanese/kana text;
-            // entirely unknown kanji (e.g. 未知語 -> invented 키코) still fail closed.
+            // explicitly unverified fallback on mixed Japanese/kana text,
+            // including a single-kana-plus-kanji line. Entirely unknown
+            // kanji (e.g. 未知語 -> invented 키코) still fail closed.
             val kanaCount = sourceText.count { it in '\u3040'..'\u30ff' }
             val previousReading = RomanizationPolicy.sanitizeHangulSupplement(
                 sourceText, line.roma,
             )?.takeIf { candidate ->
-                kanaCount >= 3 && candidate.count { it in '가'..'힣' } >= kanaCount / 2
+                kanaCount >= 1 && candidate.count { it in '가'..'힣' } >=
+                    maxOf(1, kanaCount / 2)
             }
             return line.copy(
                 roma = previousReading,

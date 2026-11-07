@@ -42,6 +42,23 @@ class AppleLineWidePronunciationRowPolicyTest {
     }
 
     @Test
+    fun `an opaque translation child is a barrier and never skipped below the reading`() {
+        // Apple Music's translation child has no nested song_lyrics_word TextView.
+        assertEquals(
+            3,
+            AppleLineWidePronunciationRowPolicy.verifiedInsertionIndex(
+                "ダーリンベイビー", listOf("ダー", "リン", "ベイビー", "", "달링, 베이비"),
+            ),
+        )
+        assertEquals(
+            2,
+            AppleLineWidePronunciationRowPolicy.insertionIndex(
+                "「やめろ！」", listOf("やめろ", "！", "", "그만둬"),
+            ),
+        )
+    }
+
+    @Test
     fun `unmatched or ambiguous source cannot receive another line reading`() {
         assertNull(AppleLineWidePronunciationRowPolicy.insertionIndex(
             "ダーリンベイビー", listOf("駄目", "달링"),

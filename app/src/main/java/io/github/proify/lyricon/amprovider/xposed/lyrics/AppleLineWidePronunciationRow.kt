@@ -2,10 +2,14 @@ package io.github.proify.lyricon.amprovider.xposed
 
 import android.os.Build
 import android.annotation.SuppressLint
-import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Rect
 import android.text.Layout
+import android.text.SpannableString
+import android.text.Spanned
+import android.text.TextPaint
+import android.text.style.CharacterStyle
+import android.text.style.UpdateAppearance
 import android.graphics.text.LineBreaker
 import android.view.Gravity
 import android.view.View
@@ -21,6 +25,8 @@ internal data class AppleLineWidePronunciationPayload(
     val pronunciation: String,
     val revision: Long,
     val sourcePriority: Int = 0,
+    val timedWords: List<AppleTimedSourceWord> = emptyList(),
+    val phoneticSpans: List<ApplePronunciationSourceToken> = emptyList(),
 )
 
 internal object AppleLineWidePronunciationRowPolicy {
@@ -44,6 +50,7 @@ internal object AppleLineWidePronunciationRowPolicy {
                 var next = index + 1
                 // A Japanese punctuation-only cell belongs above the reading.
                 while (next < directChildSourceTexts.size &&
+                    directChildSourceTexts[next].isNotEmpty() &&
                     sourceKey(directChildSourceTexts[next]).isEmpty()
                 ) next++
                 return next
@@ -89,22 +96,51 @@ internal object AppleLineWidePronunciationRowPolicy {
  * Only observed Apple Music 6.5.3 view anchors are accepted; unfamiliar hosts fail closed.
  */
 internal class AppleLineWidePronunciationRow {
+    /** A single styled Hangul syllable, dim until its own Apple-timed interval. */
+    private class KaraokeSyllableStyle : CharacterStyle(), UpdateAppearance {
+        var progress = 0f
+        var nativeBrightness = 1f
+
+        override fun updateDrawState(paint: TextPaint) {
+            val dim = 0.56f
+            val blend = (nativeBrightness * (dim + (1f - dim) * progress)).coerceIn(0f, 1f)
+            paint.color = Color.rgb(
+                (Color.red(Color.WHITE) * blend).toInt(),
+                (Color.green(Color.WHITE) * blend).toInt(),
+                (Color.blue(Color.WHITE) * blend).toInt(),
+            )
+        }
+    }
+
     // This view is injected into Apple Music's classloader and must depend only
     // on platform Android widgets; requiring AppCompat could break NPatch Local.
     @SuppressLint("AppCompatCustomView")
     private class ReadingView(context: android.content.Context) : TextView(context) {
+        var playbackPositionMs: (() -> Long?)? = null
         var sourceWords: List<TextView> = emptyList()
+        private var timedStyles: List<Pair<AppleTimedReadingUnit, KaraokeSyllableStyle>> = emptyList()
         private val visibleBounds = Rect()
         private val highlightPulse = object : Runnable {
             override fun run() {
                 if (!isAttachedToWindow) return
                 val onScreen = isShown && getGlobalVisibleRect(visibleBounds)
-                if (onScreen) syncNativeHighlight()
-                // A sibling's RenderNode may animate without invalidating this
-                // TextView. Poll only while attached, at a slower idle cadence
-                // for lines that have scrolled offscreen.
+                if (onScreen) syncTimedHighlight()
+                // Apple's karaoke line may animate from its own RenderNode.
+                // Refresh the per-syllable paint from the actual playback clock.
                 postDelayed(this, if (onScreen) 33L else 250L)
             }
+        }
+
+        fun setTimedText(value: String, units: List<AppleTimedReadingUnit>) {
+            val styled = SpannableString(value)
+            timedStyles = units.filter { it.start >= 0 && it.end <= value.length && it.start < it.end }
+                .map { unit ->
+                    val style = KaraokeSyllableStyle()
+                    styled.setSpan(style, unit.start, unit.end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    unit to style
+                }
+            setText(styled, BufferType.SPANNABLE)
+            syncTimedHighlight()
         }
 
         override fun onAttachedToWindow() {
@@ -118,11 +154,13 @@ internal class AppleLineWidePronunciationRow {
             super.onDetachedFromWindow()
         }
 
-        /** Apple's own word views animate their text color and parent alpha. */
-        private fun syncNativeHighlight() {
-            val parentAnchor = parent as? View ?: return
-            val brightest = sourceWords.mapNotNull { source ->
-                if (!source.isAttachedToWindow) return@mapNotNull null
+        private fun syncTimedHighlight() {
+            // The source line's view opacity also fades as Apple Music scrolls.
+            // Share that line-level fade without copying any word's *single*
+            // highlight color onto the entire Korean sentence.
+            val parentAnchor = parent as? View
+            val nativeStates = sourceWords.mapNotNull { source ->
+                if (!source.isAttachedToWindow || parentAnchor == null) return@mapNotNull null
                 var opacity = 1f
                 var view: View? = source
                 while (view != null && view !== parentAnchor) {
@@ -131,17 +169,29 @@ internal class AppleLineWidePronunciationRow {
                 }
                 if (view !== parentAnchor) return@mapNotNull null
                 val color = source.currentTextColor
-                val luminance = 0.2126f * Color.red(color) +
-                    0.7152f * Color.green(color) + 0.0722f * Color.blue(color)
-                Triple(color, opacity, luminance * Color.alpha(color) / 255f * opacity)
-            }.maxByOrNull { it.third } ?: return
-            if (currentTextColor != brightest.first) setTextColor(brightest.first)
-            if (kotlin.math.abs(alpha - brightest.second) > 0.01f) alpha = brightest.second
-        }
-
-        override fun onDraw(canvas: Canvas) {
-            syncNativeHighlight()
-            super.onDraw(canvas)
+                val brightness = (0.2126f * Color.red(color) +
+                    0.7152f * Color.green(color) + 0.0722f * Color.blue(color)) / 255f
+                brightness to opacity
+            }
+            val nativeBrightness = nativeStates.maxOfOrNull { it.first } ?: 1f
+            val nativeOpacity = nativeStates.maxOfOrNull { it.second } ?: 1f
+            if (kotlin.math.abs(alpha - nativeOpacity) > 0.01f) alpha = nativeOpacity
+            val position = playbackPositionMs?.invoke()
+            var changed = false
+            timedStyles.forEach { (unit, style) ->
+                val next = position?.let {
+                    AppleTimedPronunciationHighlightPolicy.progress(it, unit)
+                } ?: 0f
+                if (kotlin.math.abs(style.progress - next) > 0.01f) {
+                    style.progress = next
+                    changed = true
+                }
+                if (kotlin.math.abs(style.nativeBrightness - nativeBrightness) > 0.01f) {
+                    style.nativeBrightness = nativeBrightness
+                    changed = true
+                }
+            }
+            if (changed) invalidate()
         }
     }
 
@@ -161,6 +211,7 @@ internal class AppleLineWidePronunciationRow {
         currentRevision: Long,
         visible: Boolean,
         currentSourcePriority: Int,
+        playbackPositionMs: () -> Long? = { null },
     ): Boolean {
         val anchor = anchor(root) ?: return false
         clear(root)
@@ -180,14 +231,14 @@ internal class AppleLineWidePronunciationRow {
         val text = AppleLineWidePronunciationRowPolicy.readableText(payload?.pronunciation)
             ?: return false
         val reading = ReadingView(anchor.context).apply {
+            this.playbackPositionMs = playbackPositionMs
             this.sourceWords = sourceWords
-            setText(text)
             setTextSize(
                 TypedValue.COMPLEX_UNIT_PX,
                 sourceStyle?.textSize?.times(0.49f)
                     ?: (16f * resources.displayMetrics.scaledDensity),
             )
-            setTextColor(sourceStyle?.currentTextColor ?: Color.WHITE)
+            setTextColor(Color.LTGRAY)
             typeface = sourceStyle?.typeface
             gravity = Gravity.START
             includeFontPadding = false
@@ -201,6 +252,15 @@ internal class AppleLineWidePronunciationRow {
             if (Build.VERSION.SDK_INT >= 33) {
                 setLineBreakWordStyle(android.graphics.text.LineBreakConfig.LINE_BREAK_WORD_STYLE_PHRASE)
             }
+            setTimedText(
+                text,
+                AppleTimedPronunciationHighlightPolicy.units(
+                    sourceText = payload!!.sourceText,
+                    pronunciation = text,
+                    timedWords = payload.timedWords,
+                    phoneticSpans = payload.phoneticSpans,
+                ),
+            )
         }
         // MATCH_PARENT takes the whole karaoke flexbox width, unlike native
         // lyrics_pronunciation_vertical_container cells (~206–373px in the device log).

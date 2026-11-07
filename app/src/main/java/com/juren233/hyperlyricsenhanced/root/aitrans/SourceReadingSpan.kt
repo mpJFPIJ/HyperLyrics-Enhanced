@@ -69,6 +69,23 @@ internal object SourceReadingAssembler {
             if (gap.any(Char::isLetterOrDigit)) return unsupported(spans)
             if (gap.any(::isSeparator)) pendingSpace = true
             val surface = source.substring(token.sourceStart, token.sourceEnd)
+            if (surface.all { it == 'ー' }) {
+                // Sudachi can tokenize the katakana length mark on its own.
+                // A length mark has no separate Hangul syllable; it extends
+                // the preceding contiguous Japanese source-reading span.
+                val preceding = spans.lastOrNull()
+                    ?.takeIf {
+                        it.sourceEnd == token.sourceStart && it.sourceText.any(::isJapanese)
+                    }
+                    ?: return unsupported(spans)
+                spans[spans.lastIndex] = preceding.copy(
+                    sourceEnd = token.sourceEnd,
+                    sourceText = source.substring(preceding.sourceStart, token.sourceEnd),
+                    kana = preceding.kana + surface,
+                )
+                previousEnd = token.sourceEnd
+                continue
+            }
             val hasJapanese = surface.any(::isJapanese)
             val sound = when {
                 hasJapanese -> {

@@ -6,6 +6,19 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SourceReadingSpanTest {
+    @Test fun isolatedKatakanaLongVowelMarkerExtendsPriorSpanWithoutDroppingDarling() {
+        val result = SourceReadingAssembler.assemble(
+            "ダーリン",
+            listOf(
+                RawReadingToken(0, 1, "ダ"),
+                RawReadingToken(1, 2, "*"),
+                RawReadingToken(2, 4, "リン"),
+            ),
+        )
+        assertEquals(LineReadingStatus.COMPLETE, result.status)
+        assertEquals("다린", result.text)
+        assertEquals(listOf("ダー", "リン"), result.spans.map { it.sourceText })
+    }
     @Test fun anUnsupportedLargeTokenRetriesSmallerDictionarySplitBeforeDroppingLine() {
         var calls = 0
         val result = SourceReadingAssembler.retryModes("半端なく", 3) { mode ->

@@ -18,6 +18,9 @@ The existing implementation has three independent failure modes:
 - If a complete phonetic span map is not available (e.g. a manually corrected reading), use a clearly approximate per-syllable sweep between *real* Apple word timestamps; do not pretend its inferred syllable windows are official.
 - Render with one native-Android `Spannable` `CharacterStyle` per Hangul syllable, individually updating dim→bright with the actual playback position every 33 ms. Seeking backward must dim later syllables again. No hook may synthesize Apple `LyricsWord` objects or rewrite timestamps.
 - Tie the row and its timed data to song/revision/source and clear on recycled ViewHolder, old song or hidden state. No extra UI controls or NPatch dependencies.
+- Identical chorus text is not a unique timestamp identity: keep the read-only timing windows of repeated occurrences and select the one nearest playback time for source-only fallback. Holder-specific binding retains its own native occurrence.
+- When any original source word lacks native timing, do not distribute the entire pronunciation over the remaining words. Animate only independently verifiable source spans and render all unsupported syllables dim.
+- Suppress the native duplicate pronunciation text when the independent Hangul row is registered, including the defensive path where an empty JNI vector could not be constructed.
 - Keep previous successful branch, PR and main untouched until CI and device verification. The user will receive a GitHub Actions link immediately after upload; APK success is a separate outcome.
 
 ## Acceptance tests

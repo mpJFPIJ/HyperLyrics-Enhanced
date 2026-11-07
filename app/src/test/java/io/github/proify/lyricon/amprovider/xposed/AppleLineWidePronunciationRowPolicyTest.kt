@@ -207,4 +207,24 @@ class AppleLineWidePronunciationRowPolicyTest {
         state.forgetLineWide("song", source)
         assertNull(state.lineWideForHolder(null, "song", source, 4L))
     }
+
+    @Test
+    fun `repeated chorus remembers both native timestamp windows`() {
+        val state = AppleLyricsPronunciationState()
+        val first = AppleLineWidePronunciationPayload(
+            "song", "a", "ダーリン", "다아린", 2L,
+            timedWords = listOf(AppleTimedSourceWord("ダーリン", 1_000, 2_000)),
+        )
+        val repeated = first.copy(
+            lineKey = "b", timedWords = listOf(AppleTimedSourceWord("ダーリン", 8_000, 9_000)),
+        )
+        state.rememberLineWide(first, null)
+        state.rememberLineWide(repeated, null)
+        assertTrue(state.hasLineWide("song", "ダーリン", 2L))
+        val recovered = state.lineWideForHolder(null, "song", "ダーリン", 2L)
+        assertEquals(repeated.timedWords, recovered?.timedWords)
+        assertTrue(recovered?.repeatTimings.orEmpty().contains(first.timedWords))
+        state.forgetLineWide("song", "ダーリン")
+        assertFalse(state.hasLineWide("song", "ダーリン", 2L))
+    }
 }

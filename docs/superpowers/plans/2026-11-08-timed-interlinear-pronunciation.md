@@ -5,4 +5,5 @@
 3. Record read-only Apple main word times and local AI phonetic spans in the song/revision scoped line-wide payload; route Korean supplemental readings consistently to the safe full-width row.
 4. Replace ReadingView's all-at-once color pump with playback-positioned per-syllable `CharacterStyle` and preserve native parent opacity; install directly between original and translation.
 5. Improve binding diagnostics and source-identity recovery without assigning readings to ambiguous lines.
+   Preserve separate timing windows when identical source/reading repeats in a chorus, and guard partially missing native word timings.
 6. Run available local checks, push to the existing draft PR, provide the GitHub Actions build link immediately, inspect CI and fix failures; keep main intact until phone QA.

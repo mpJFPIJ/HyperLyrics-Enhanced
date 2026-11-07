@@ -63,6 +63,13 @@ internal object AppleTimedPronunciationHighlightPolicy {
             )
         }
         if (located.isEmpty()) return emptyList()
+        val coveredSourcePositions = BooleanArray(sourceText.length)
+        located.forEach { word ->
+            for (index in word.sourceStart until word.sourceEnd) {
+                coveredSourcePositions[index] = true
+            }
+        }
+        val fullNativeCoverage = sourceChars.all { coveredSourcePositions[it] }
 
         val pronouncedOffsets = pronunciation.indices.filter {
             pronunciation[it].isLetterOrDigit()
@@ -108,6 +115,9 @@ internal object AppleTimedPronunciationHighlightPolicy {
                 }
             }
         } else {
+            // If Apple's timing is partial, estimating the whole reading
+            // from the remaining words would light missing syllables too early.
+            if (!fullNativeCoverage) return emptyList()
             // Manual/unsupported text has no verified phonetic token map.
             // Use Apple word times, distributing syllables across the source;
             // this approximation is still progressive rather than a whole-line flash.
@@ -133,5 +143,20 @@ internal object AppleTimedPronunciationHighlightPolicy {
         positionMs >= unit.endMs -> 1f
         else -> (positionMs - unit.beginMs).toFloat() /
             (unit.endMs - unit.beginMs).toFloat()
+    }
+
+    /** Two identical choruses have the same text but different native timecodes. */
+    fun closestVariant(
+        positionMs: Long,
+        variants: List<List<AppleTimedReadingUnit>>,
+    ): Int? = variants.indices.filter { variants[it].isNotEmpty() }.minByOrNull { index ->
+        val units = variants[index]
+        val first = units.minOf { it.beginMs }
+        val last = units.maxOf { it.endMs }
+        when {
+            positionMs < first -> first - positionMs
+            positionMs > last -> positionMs - last
+            else -> 0L
+        }
     }
 }

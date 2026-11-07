@@ -78,6 +78,17 @@ internal fun AppleLyricsSupplementHooks.hookAppleLyricTextGetter(clazz: Class<*>
                 ) {
                     return@installResultOverrideHook ""
                 }
+                // The independent full-width Hangul row owns this source line.
+                // Do not also expose raw native pronunciation text when Apple
+                // fails to allocate an empty native pronunciation vector.
+                val originalSource = nativeOriginalLineText(chain.thisObject)
+                if (pronunciationState.hasLineWide(
+                        currentAppleLyricsSongId,
+                        originalSource,
+                        nativeOnlineTranslationStore.revision(),
+                        pronunciationSourcePriority(),
+                    )
+                ) return@installResultOverrideHook ""
                 val officialText = RomanizationPolicy.sanitize(
                     originalText = nativeOriginalLineText(chain.thisObject),
                     pronunciation = originalText,

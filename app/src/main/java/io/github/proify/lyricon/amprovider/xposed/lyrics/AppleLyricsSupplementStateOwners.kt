@@ -118,7 +118,14 @@ internal class AppleLyricsPronunciationState {
                 lineWideBySource.remove(source)
                 ambiguousLineWideSources.add(source)
             } else {
-                lineWideBySource[source] = payload
+                // Repeated chorus text is not a unique lyric event. Keep
+                // *all* native timing windows rather than letting the final
+                // occurrence overwrite the first and desynchronize karaoke.
+                val earlierTimings = previous?.let {
+                    listOf(it.timedWords) + it.repeatTimings
+                }.orEmpty().filter { it.isNotEmpty() }
+                val otherTimings = earlierTimings.filter { it != payload.timedWords }.distinct()
+                lineWideBySource[source] = payload.copy(repeatTimings = otherTimings)
             }
         }
     }
@@ -155,6 +162,19 @@ internal class AppleLyricsPronunciationState {
                     candidate.sourceText, observedSourceCells,
                 ) != null
             }
+        }
+    }
+
+    /** Used only to suppress Apple-native duplicate reading cells during line-wide presentation. */
+    fun hasLineWide(
+        songId: String?, sourceText: String?, revision: Long, sourcePriority: Int = 0,
+    ): Boolean {
+        if (songId.isNullOrBlank() || sourceText.isNullOrBlank()) return false
+        synchronized(lineWideBySource) {
+            if (lineWideSongId != songId || lineWideRevision != revision) return false
+            return lineWideBySource[
+                AppleLineWidePronunciationRowPolicy.sourceKey(sourceText)
+            ]?.sourcePriority == sourcePriority
         }
     }
 

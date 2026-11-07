@@ -27,6 +27,7 @@ internal data class AppleLineWidePronunciationPayload(
     val sourcePriority: Int = 0,
     val timedWords: List<AppleTimedSourceWord> = emptyList(),
     val phoneticSpans: List<ApplePronunciationSourceToken> = emptyList(),
+    val repeatTimings: List<List<AppleTimedSourceWord>> = emptyList(),
 )
 
 internal object AppleLineWidePronunciationRowPolicy {
@@ -118,7 +119,9 @@ internal class AppleLineWidePronunciationRow {
     private class ReadingView(context: android.content.Context) : TextView(context) {
         var playbackPositionMs: (() -> Long?)? = null
         var sourceWords: List<TextView> = emptyList()
-        private var timedStyles: List<Pair<AppleTimedReadingUnit, KaraokeSyllableStyle>> = emptyList()
+        private var timedStyles: List<Pair<Int, KaraokeSyllableStyle>> = emptyList()
+        private var timedVariants: List<List<AppleTimedReadingUnit>> = emptyList()
+        private var timedVariantLookups: List<Map<Int, AppleTimedReadingUnit>> = emptyList()
         private val visibleBounds = Rect()
         private val highlightPulse = object : Runnable {
             override fun run() {
@@ -131,13 +134,17 @@ internal class AppleLineWidePronunciationRow {
             }
         }
 
-        fun setTimedText(value: String, units: List<AppleTimedReadingUnit>) {
+        fun setTimedText(value: String, variants: List<List<AppleTimedReadingUnit>>) {
             val styled = SpannableString(value)
-            timedStyles = units.filter { it.start >= 0 && it.end <= value.length && it.start < it.end }
+            timedVariants = variants.map { units ->
+                units.filter { it.start >= 0 && it.end <= value.length && it.start < it.end }
+            }
+            timedVariantLookups = timedVariants.map { it.associateBy(AppleTimedReadingUnit::start) }
+            timedStyles = timedVariants.flatten().distinctBy(AppleTimedReadingUnit::start)
                 .map { unit ->
                     val style = KaraokeSyllableStyle()
                     styled.setSpan(style, unit.start, unit.end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-                    unit to style
+                    unit.start to style
                 }
             setText(styled, BufferType.SPANNABLE)
             syncTimedHighlight()
@@ -177,10 +184,15 @@ internal class AppleLineWidePronunciationRow {
             val nativeOpacity = nativeStates.maxOfOrNull { it.second } ?: 1f
             if (kotlin.math.abs(alpha - nativeOpacity) > 0.01f) alpha = nativeOpacity
             val position = playbackPositionMs?.invoke()
+            val activeVariant = position?.let {
+                AppleTimedPronunciationHighlightPolicy.closestVariant(it, timedVariants)
+            }?.let(timedVariantLookups::get)
             var changed = false
-            timedStyles.forEach { (unit, style) ->
-                val next = position?.let {
-                    AppleTimedPronunciationHighlightPolicy.progress(it, unit)
+            timedStyles.forEach { (offset, style) ->
+                val next = position?.let { now ->
+                    activeVariant?.get(offset)?.let { unit ->
+                        AppleTimedPronunciationHighlightPolicy.progress(now, unit)
+                    }
                 } ?: 0f
                 if (kotlin.math.abs(style.progress - next) > 0.01f) {
                     style.progress = next
@@ -238,7 +250,8 @@ internal class AppleLineWidePronunciationRow {
                 sourceStyle?.textSize?.times(0.49f)
                     ?: (16f * resources.displayMetrics.scaledDensity),
             )
-            setTextColor(Color.LTGRAY)
+            // Any syllable with no verified native timing stays visibly dim.
+            setTextColor(Color.rgb(110, 110, 110))
             typeface = sourceStyle?.typeface
             gravity = Gravity.START
             includeFontPadding = false
@@ -254,12 +267,14 @@ internal class AppleLineWidePronunciationRow {
             }
             setTimedText(
                 text,
-                AppleTimedPronunciationHighlightPolicy.units(
-                    sourceText = payload!!.sourceText,
-                    pronunciation = text,
-                    timedWords = payload.timedWords,
-                    phoneticSpans = payload.phoneticSpans,
-                ),
+                (listOf(payload!!.timedWords) + payload.repeatTimings).map { native ->
+                    AppleTimedPronunciationHighlightPolicy.units(
+                        sourceText = payload.sourceText,
+                        pronunciation = text,
+                        timedWords = native,
+                        phoneticSpans = payload.phoneticSpans,
+                    )
+                },
             )
         }
         // MATCH_PARENT takes the whole karaoke flexbox width, unlike native
@@ -299,6 +314,9 @@ internal class AppleLineWidePronunciationRow {
         val words = mutableListOf<TextView>()
         fun visit(view: View?, depth: Int) {
             if (view == null || view is ReadingView || depth > 8) return
+            // Nested native pronunciation cells are not original Japanese
+            // source words, even when Apple gives both children this same id.
+            if (idName(view) == "lyrics_pronunciation_vertical_container") return
             if (view is TextView && idName(view) == "song_lyrics_word") {
                 words += view
             } else if (view is ViewGroup) {

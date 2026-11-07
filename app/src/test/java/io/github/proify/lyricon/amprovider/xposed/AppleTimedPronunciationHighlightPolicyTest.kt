@@ -77,6 +77,15 @@ class AppleTimedPronunciationHighlightPolicyTest {
     }
 
     @Test
+    fun `repeated chorus selects timing for the occurrence actually playing`() {
+        val earlier = listOf(AppleTimedReadingUnit(0, 1, 1000, 1500))
+        val later = listOf(AppleTimedReadingUnit(0, 1, 8000, 8500))
+        val variants = listOf(later, earlier)
+        assertEquals(1, AppleTimedPronunciationHighlightPolicy.closestVariant(1300, variants))
+        assertEquals(0, AppleTimedPronunciationHighlightPolicy.closestVariant(8200, variants))
+    }
+
+    @Test
     fun `unverified source token text does not impersonate an authoritative alignment`() {
         val units = AppleTimedPronunciationHighlightPolicy.units(
             sourceText = "みその中から", pronunciation = "미소노 나카카라",
@@ -85,5 +94,33 @@ class AppleTimedPronunciationHighlightPolicyTest {
         )
         assertEquals("미소노나카카라".length, units.size)
         assertFalse(units.any { it.start >= it.end })
+    }
+
+    @Test
+    fun `missing timing for one word never gives its syllable another words timestamps`() {
+        for (untimedIndex in 0..2) {
+            val source = "ABC"
+            val original = listOf(
+                AppleTimedSourceWord("A", 100, 200),
+                AppleTimedSourceWord("B", 300, 400),
+                AppleTimedSourceWord("C", 500, 600),
+            )
+            val words = original.mapIndexed { index, word ->
+                if (index == untimedIndex) word.copy(endMs = word.beginMs) else word
+            }
+            assertTrue(AppleTimedPronunciationHighlightPolicy.units(
+                source, "가나다", words,
+            ).isEmpty())
+            val verified = AppleTimedPronunciationHighlightPolicy.units(
+                source, "가나다", words,
+                phoneticSpans = listOf(
+                    ApplePronunciationSourceToken(0, 1, "가", "A"),
+                    ApplePronunciationSourceToken(1, 2, "나", "B"),
+                    ApplePronunciationSourceToken(2, 3, "다", "C"),
+                ),
+            )
+            assertEquals(2, verified.size)
+            assertFalse(verified.any { it.start == untimedIndex })
+        }
     }
 }

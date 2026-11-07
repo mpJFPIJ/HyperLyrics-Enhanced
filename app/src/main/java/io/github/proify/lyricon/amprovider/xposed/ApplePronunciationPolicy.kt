@@ -1,9 +1,50 @@
 package io.github.proify.lyricon.amprovider.xposed
 
 import com.juren233.hyperlyricsenhanced.common.lyric.RomanizationPolicy
+import com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation
 
 internal object ApplePronunciationPolicy {
     fun nonNullDisplayText(text: String?): String = text.orEmpty()
+
+    /** A guessed Hangul-to-karaoke-cell split is never a valid timed reading. */
+    fun verifiedNativeSegments(
+        pronunciation: String,
+        mainWordTexts: List<String>,
+        alignedWords: List<LyricWordPronunciation>?,
+    ): List<String>? {
+        if (alignedWords == null || mainWordTexts.isEmpty() ||
+            alignedWords.size != mainWordTexts.size ||
+            !RomanizationPolicy.isHangulPronunciation(pronunciation)
+        ) return null
+        if (!alignedWords.zip(mainWordTexts).all { (reading, source) ->
+                reading.source.trim() == source.trim() &&
+                    // Apple's native reading cells can expose their original
+                    // Japanese glyph when the override is empty. Never use a
+                    // grouped morpheme or punctuation gap as a timed word.
+                    reading.hangul.isNotBlank() &&
+                    RomanizationPolicy.isHangulPronunciation(reading.hangul)
+            }
+        ) return null
+        return alignedWords.map { it.hangul }.takeIf {
+            RomanizationPolicy.sameHangulSounds(it.joinToString(""), pronunciation) &&
+                it.any(String::isNotBlank)
+        }
+    }
+
+    fun presentationMode(
+        pronunciation: String?,
+        hasOfficialTimedWords: Boolean,
+        nativeWords: List<String>,
+        alignedWords: List<LyricWordPronunciation>?,
+    ): ApplePronunciationPresentationMode = when {
+        pronunciation.isNullOrBlank() -> ApplePronunciationPresentationMode.HIDDEN
+        hasOfficialTimedWords -> ApplePronunciationPresentationMode.OFFICIAL
+        !RomanizationPolicy.isHangulPronunciation(pronunciation) ->
+            ApplePronunciationPresentationMode.LEGACY_LATIN
+        verifiedNativeSegments(pronunciation, nativeWords, alignedWords) != null ->
+            ApplePronunciationPresentationMode.ALIGNED_WORDS
+        else -> ApplePronunciationPresentationMode.LINE_WIDE
+    }
 
     /**
      * Whether a completed Apple lyric model must trigger a presentation refresh.
@@ -52,24 +93,31 @@ internal object ApplePronunciationPolicy {
             main.all(pronunciation::contains)
     }
 
-    /**
-     * 将整行发音文本按 Apple 原生主句 word 的实际文本权重分配。
-     *
-     * Apple 可能把多个汉字合并为一个 word，例如“潇洒 / 的 / 放 / 屁”只有 4 个
-     * native word，但需要容纳 5 个粤拼音节。只按 word 数均分会使后续音节错位，
-     * 因此东亚文字按字符数计权，其他非空 word 按一个发音单位计权。
-     *
-     * 这里只生成显示片段，不创建新的 native LyricsWord。实际渲染继续复用主句 word，
-     * 因而每个片段都保留 Apple 原生父歌词行、lineId、wordId 与时间轴。
-     */
+    /** Never fabricate Hangul timing from token counts or word widths. */
     fun displaySegments(
         pronunciation: String,
         mainWordTexts: List<String>,
+        alignedWords: List<LyricWordPronunciation>? = null,
     ): List<String> {
         if (mainWordTexts.isEmpty()) return emptyList()
-        val tokens = pronunciation.trim().split(Regex("\\s+")).filter(String::isNotEmpty)
+        val groupedTokens = pronunciation.trim().split(Regex("\\s+"))
+            .filter(String::isNotEmpty)
+        val tokens = groupedTokens
         if (tokens.isEmpty()) return emptyList()
 
+        if (RomanizationPolicy.isHangulPronunciation(pronunciation)) {
+            return verifiedNativeSegments(pronunciation, mainWordTexts, alignedWords)
+                ?: emptyList()
+        }
+
+        return distributeByNativeWordWeight(tokens, mainWordTexts)
+    }
+
+    private fun distributeByNativeWordWeight(
+        tokens: List<String>,
+        mainWordTexts: List<String>,
+        separator: String = " ",
+    ): List<String> {
         val measuredWeights = mainWordTexts.map(::pronunciationUnitCount)
         val weights = if (measuredWeights.any { it > 0 }) {
             measuredWeights
@@ -82,9 +130,15 @@ internal object ApplePronunciationPolicy {
             val tokenStart = consumedWeight * tokens.size / totalWeight
             consumedWeight += weight
             val tokenEnd = consumedWeight * tokens.size / totalWeight
-            tokens.subList(tokenStart, tokenEnd).joinToString(" ")
+            tokens.subList(tokenStart, tokenEnd).joinToString(separator)
         }
     }
+
+    private fun String.hangulOnly(): String = filter { it in '가'..'힣' }
+
+    fun shouldUseLineTextOnly(pronunciation: String, mainWordCount: Int): Boolean =
+        mainWordCount > 0 && RomanizationPolicy.isHangulPronunciation(pronunciation) &&
+            pronunciation.trim().split(Regex("\\s+")).count(String::isNotBlank) != mainWordCount
 
     private fun pronunciationUnitCount(text: String): Int {
         val visibleText = text.replace(HTML_TAG, " ").trim()
@@ -130,5 +184,13 @@ internal object ApplePronunciationPolicy {
 internal enum class ApplePronunciationWordTrack {
     OFFICIAL,
     MAIN_LINE_TIMING,
+    HIDDEN,
+}
+
+internal enum class ApplePronunciationPresentationMode {
+    OFFICIAL,
+    ALIGNED_WORDS,
+    LINE_WIDE,
+    LEGACY_LATIN,
     HIDDEN,
 }

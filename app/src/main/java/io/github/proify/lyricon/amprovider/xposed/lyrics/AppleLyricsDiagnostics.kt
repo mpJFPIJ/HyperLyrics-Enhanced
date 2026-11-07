@@ -53,6 +53,7 @@ import androidx.recyclerview.widget.RecyclerView
 import com.juren233.hyperlyricsenhanced.BuildConfig
 import com.juren233.hyperlyricsenhanced.common.UIConstants
 import com.juren233.hyperlyricsenhanced.common.RootConstants
+import com.juren233.hyperlyricsenhanced.common.diagnostics.LyricBuildIdentity
 import com.juren233.hyperlyricsenhanced.common.lyric.AppleOriginalMetadataPolicy
 import com.juren233.hyperlyricsenhanced.common.lyric.AppleLyricsBlurPolicy
 import com.juren233.hyperlyricsenhanced.common.lyric.ApplePronunciationVisibilityPolicy
@@ -119,6 +120,8 @@ internal class AppleLyricsDiagnostics(
     private val uiStateDiagnostic: (Any, String) -> Unit,
     private val recyclerLifecycleDiagnostic: (Any, String) -> Unit,
     private val appleRecyclerViewPredicate: (Any) -> Boolean,
+    private val holderBindingStart: (AppleLyricsBindingDiagnosticContext, View?) -> Unit,
+    private val holderBound: (AppleLyricsBindingDiagnosticContext, View?) -> Unit,
 ) {
     private val classLoader: ClassLoader
         get() = runtime.classLoader
@@ -129,6 +132,7 @@ internal class AppleLyricsDiagnostics(
 
     private val appleLyricsAdapterBindingDiagnosticMethods =
         ConcurrentHashMap.newKeySet<Executable>()
+    private val lyricAnchorProbeKeys = ConcurrentHashMap.newKeySet<String>()
     private val appleLyricsBindingDiagnosticContexts =
         ThreadLocalStack<AppleLyricsBindingDiagnosticContext>()
     private val appleLyricsBindingPerformanceContexts =
@@ -528,6 +532,9 @@ internal class AppleLyricsDiagnostics(
                         val parentPerformanceContext =
                             appleLyricsBindingPerformanceContexts.current
                         appleLyricsBindingDiagnosticContexts.push(context)
+                        runCatching {
+                            holderBindingStart(context, appleLyricsHolderRoot(context.holder))
+                        }.onFailure { ProviderLogger.error("Apple pronunciation holder clear failed", it) }
                         appleLyricsBindingPerformanceContexts.push(
                             AppleLyricsBindingPerformanceContext(
                                 binding = context,
@@ -548,6 +555,9 @@ internal class AppleLyricsDiagnostics(
                         }
                         measureBindingDiagnosticPhase(context, "immediate") {
                             val root = appleLyricsHolderRoot(context.holder)
+                            runCatching { holderBound(context, root) }
+                                .onFailure { ProviderLogger.error("Apple pronunciation row bind failed", it) }
+                            probeLyricHolderAnchor(context, root)
                             val texts = root?.let(::debugTextSnapshot) ?: "none"
                             val layers = debugAppleLyricsHolderLayers(context.holder)
                             logApplePronunciationBindingDiagnostic(
@@ -636,6 +646,48 @@ internal class AppleLyricsDiagnostics(
                     field.get(holder) as? View
                 }.getOrNull()
             }
+    }
+
+    /** Read-only release diagnostics: learn Apple 6.5.3 holder structure before any UI injection. */
+    private fun probeLyricHolderAnchor(context: AppleLyricsBindingDiagnosticContext, root: View?) {
+        val position = context.position ?: return
+        if (position !in 0..8 || lyricAnchorProbeKeys.size >= 24 ||
+            !lyricAnchorProbeKeys.add("${context.songId}:$position")
+        ) return
+        if (root == null) {
+            ApplePronunciationAnchorReporter.record(
+                "stage=anchor_probe reason=holder_unavailable",
+            )
+            return
+        }
+        root.postOnAnimation {
+            val group = root as? ViewGroup
+            val details = LyricBuildIdentity.safeStage("anchor_probe", mapOf(
+                "holderWidth" to root.width,
+                "holderHeight" to root.height,
+                "holderChildren" to (group?.childCount ?: 0),
+                "holderGroup" to if (group != null) 1 else 0,
+                "position" to position,
+            ))
+            // Class/layout names are app internals, never user text or API payload.
+            // Depth-limited structural path only: never read TextView.text.
+            fun viewShape(view: View, depth: Int): String {
+                val id = runCatching { view.resources.getResourceEntryName(view.id) }
+                    .getOrDefault("none").take(32)
+                val summary = "${view.javaClass.simpleName}($id:${view.width}x${view.height})"
+                if (depth >= 2 || view !is ViewGroup) return summary
+                val children = (0 until minOf(view.childCount, 5)).joinToString(",") { index ->
+                    view.getChildAt(index)?.let { viewShape(it, depth + 1) } ?: "null"
+                }
+                return "$summary[$children]"
+            }
+            val shape = viewShape(root, 0).take(512)
+            ApplePronunciationAnchorReporter.record("$details " +
+                "rootClass=${root.javaClass.simpleName} " +
+                "parentClass=${root.parent?.javaClass?.simpleName ?: "none"} " +
+                "layoutClass=${root.layoutParams?.javaClass?.simpleName ?: "none"} " +
+                "viewShape=$shape")
+        }
     }
 
     private fun debugAppleLyricsHolderLayers(holder: Any?): String {

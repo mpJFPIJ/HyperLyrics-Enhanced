@@ -31,4 +31,48 @@ class AITranslationApplicatorTest {
             translated.lyrics?.map { it.translation }
         )
     }
+
+    @Test
+    fun `renders Japanese phonetics in Hangul while retaining source data`() {
+        val song = Song(lyrics = listOf(
+            RichLyricLine(text = "君の名は", roma = "Kimi no na wa"),
+            RichLyricLine(text = "ありがとう")
+        ))
+        val updated = AITranslationApplicator.apply(
+            song,
+            listOf(
+                TranslationItem(0, "너의 이름은", "키미노 나와"),
+                TranslationItem(1, "고마워", "아리가토"),
+            ),
+            forceOverride = true
+        )
+        assertEquals("Kimi no na wa", song.lyrics?.get(0)?.roma)
+        assertEquals("키미노 나와", updated.lyrics?.get(0)?.roma)
+        assertEquals("아리가토", updated.lyrics?.get(1)?.roma)
+        assertEquals("너의 이름은", updated.lyrics?.get(0)?.translation)
+    }
+
+    @Test
+    fun `rejects generated Latin romaji and leaves existing source unchanged`() {
+        val song = Song(lyrics = listOf(RichLyricLine(
+            text = "君の名は", roma = "Kimi no na wa",
+        )))
+        val result = AITranslationApplicator.apply(
+            song, listOf(TranslationItem(0, "너의 이름은", "wrong romaji")),
+        )
+        assertEquals("Kimi no na wa", result.lyrics?.single()?.roma)
+    }
+
+    @Test
+    fun `adds English Hangul reading and keeps existing translation when reading only`() {
+        val song = Song(lyrics = listOf(RichLyricLine(
+            text = "I love you", translation = "사랑해",
+        )))
+        val updated = AITranslationApplicator.apply(
+            song,
+            listOf(TranslationItem(index = 0, trans = "", roma = "아이 러브 유"))
+        )
+        assertEquals("사랑해", updated.lyrics?.single()?.translation)
+        assertEquals("아이 러브 유", updated.lyrics?.single()?.roma)
+    }
 }

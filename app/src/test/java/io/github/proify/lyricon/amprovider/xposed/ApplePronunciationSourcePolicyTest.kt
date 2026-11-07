@@ -1,0 +1,216 @@
+package io.github.proify.lyricon.amprovider.xposed
+
+import com.juren233.hyperlyricsenhanced.common.RootConstants
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class ApplePronunciationSourcePolicyTest {
+    @Test
+    fun `default preserves Hangul overlay over Apple Latin romanization`() {
+        val selection = ApplePronunciationSourcePolicy.select(
+            official = "Kimi no na wa",
+            supplement = "키미노 나와",
+            priority = RootConstants.DEFAULT_HOOK_APPLE_MUSIC_PRONUNCIATION_SOURCE_PRIORITY,
+        )
+        assertEquals("키미노 나와", selection.text)
+        assertTrue(selection.fromSupplement)
+    }
+
+    @Test
+    fun `default preserves original Apple preference for non Hangul supplemental text`() {
+        val selection = ApplePronunciationSourcePolicy.select(
+            official = "Kimi no na wa",
+            supplement = "kimi no na wa",
+            priority = RootConstants.APPLE_MUSIC_PRONUNCIATION_HANGUL_FIRST,
+        )
+        assertEquals("Kimi no na wa", selection.text)
+        assertFalse(selection.fromSupplement)
+    }
+
+    @Test
+    fun `Apple first still uses supplement if official text is missing`() {
+        assertEquals(
+            ApplePronunciationSourcePolicy.Selection("키미노 나와", true),
+            ApplePronunciationSourcePolicy.select(
+                official = " ",
+                supplement = "키미노 나와",
+                priority = RootConstants.APPLE_MUSIC_PRONUNCIATION_APPLE_FIRST,
+            ),
+        )
+    }
+
+    @Test
+    fun `supplement first chooses a non Hangul alternative when requested`() {
+        assertEquals(
+            ApplePronunciationSourcePolicy.Selection("kimi no na wa", true),
+            ApplePronunciationSourcePolicy.select(
+                official = "Kimi no na wa",
+                supplement = "kimi no na wa",
+                priority = RootConstants.APPLE_MUSIC_PRONUNCIATION_SUPPLEMENT_FIRST,
+            ),
+        )
+    }
+
+    @Test
+    fun `Apple first chooses official and unknown values revert to default`() {
+        assertEquals(
+            ApplePronunciationSourcePolicy.Selection("Kimi no na wa", false),
+            ApplePronunciationSourcePolicy.select(
+                official = "Kimi no na wa",
+                supplement = "키미노 나와",
+                priority = RootConstants.APPLE_MUSIC_PRONUNCIATION_APPLE_FIRST,
+            ),
+        )
+        assertEquals(
+            ApplePronunciationSourcePolicy.Selection("키미노 나와", true),
+            ApplePronunciationSourcePolicy.select(
+                official = "Kimi no na wa",
+                supplement = "키미노 나와",
+                priority = -20,
+            ),
+        )
+    }
+
+    @Test
+    fun `Hangul-only selection never mixes official romaji or Latin supplements`() {
+        assertEquals(
+            ApplePronunciationSourcePolicy.Selection(null, false),
+            ApplePronunciationSourcePolicy.select(
+                official = "kimi no na wa",
+                supplement = "kimi no na wa",
+                priority = RootConstants.APPLE_MUSIC_PRONUNCIATION_HANGUL_FIRST,
+                hangulOnly = true,
+            ),
+        )
+        assertEquals(
+            ApplePronunciationSourcePolicy.Selection("키미노 나와", true),
+            ApplePronunciationSourcePolicy.select(
+                official = "kimi no na wa",
+                supplement = "키미노 나와",
+                priority = RootConstants.APPLE_MUSIC_PRONUNCIATION_HANGUL_FIRST,
+                hangulOnly = true,
+            ),
+        )
+        assertEquals(
+            ApplePronunciationSourcePolicy.Selection("kimi no na wa", false),
+            ApplePronunciationSourcePolicy.select(
+                official = "kimi no na wa",
+                supplement = null,
+                priority = RootConstants.APPLE_MUSIC_PRONUNCIATION_APPLE_FIRST,
+                hangulOnly = true,
+            ),
+        )
+    }
+
+    @Test
+    fun `native Apple off and Hangul on only shows Hangul from supplement`() {
+        val selection = ApplePronunciationSourcePolicy.select(
+            official = "kimi no na wa",
+            supplement = "키미노 나와",
+            priority = RootConstants.APPLE_MUSIC_PRONUNCIATION_APPLE_FIRST,
+            allowAppleNative = false,
+            allowHangulSupplement = true,
+        )
+        assertEquals("키미노 나와", selection.text)
+        assertTrue(selection.fromSupplement)
+        assertNull(ApplePronunciationSourcePolicy.select(
+            official = "kimi no na wa",
+            supplement = null,
+            priority = RootConstants.APPLE_MUSIC_PRONUNCIATION_HANGUL_FIRST,
+            allowAppleNative = false,
+            allowHangulSupplement = true,
+        ).text)
+        assertNull(ApplePronunciationSourcePolicy.select(
+            official = "kimi no na wa",
+            supplement = "kimi no na wa",
+            priority = RootConstants.APPLE_MUSIC_PRONUNCIATION_SUPPLEMENT_FIRST,
+            allowAppleNative = false,
+            allowHangulSupplement = true,
+        ).text)
+    }
+
+    @Test
+    fun `Hangul source switch off keeps native Apple and suppresses Hangul`() {
+        assertEquals("kimi no na wa", ApplePronunciationSourcePolicy.select(
+            official = "kimi no na wa",
+            supplement = "키미노 나와",
+            priority = RootConstants.APPLE_MUSIC_PRONUNCIATION_HANGUL_FIRST,
+            allowAppleNative = true,
+            allowHangulSupplement = false,
+        ).text)
+        assertNull(ApplePronunciationSourcePolicy.select(
+            official = "kimi no na wa",
+            supplement = "키미노 나와",
+            priority = RootConstants.APPLE_MUSIC_PRONUNCIATION_HANGUL_FIRST,
+            allowAppleNative = false,
+            allowHangulSupplement = false,
+        ).text)
+    }
+
+    @Test
+    fun `missing sources never invent a pronunciation`() {
+        val selection = ApplePronunciationSourcePolicy.select(
+            official = null,
+            supplement = "",
+            priority = RootConstants.APPLE_MUSIC_PRONUNCIATION_SUPPLEMENT_FIRST,
+        )
+        assertNull(selection.text)
+        assertFalse(selection.fromSupplement)
+    }
+
+    @Test
+    fun `Hangul-first still falls back to Apple pronunciation when no supplement exists`() {
+        val selection = ApplePronunciationSourcePolicy.select(
+            official = "Kimi no na wa",
+            supplement = null,
+            priority = RootConstants.APPLE_MUSIC_PRONUNCIATION_HANGUL_FIRST,
+        )
+        assertEquals("Kimi no na wa", selection.text)
+        assertFalse(selection.fromSupplement)
+    }
+
+    @Test
+    fun `supplement-first gracefully falls back to official when overlay disappears`() {
+        val selection = ApplePronunciationSourcePolicy.select(
+            official = "Kimi no na wa",
+            supplement = " ",
+            priority = RootConstants.APPLE_MUSIC_PRONUNCIATION_SUPPLEMENT_FIRST,
+        )
+        assertEquals("Kimi no na wa", selection.text)
+        assertFalse(selection.fromSupplement)
+    }
+
+    @Test
+    fun `selected content and native karaoke word-track owner stay consistent`() {
+        val officialFirst = ApplePronunciationSourcePolicy.select(
+            official = "Kimi no na wa",
+            supplement = "키미노 나와",
+            priority = RootConstants.APPLE_MUSIC_PRONUNCIATION_APPLE_FIRST,
+        )
+        assertEquals(
+            ApplePronunciationWordTrack.OFFICIAL,
+            ApplePronunciationPolicy.wordTrack(
+                hasValidOfficialPronunciation = !officialFirst.fromSupplement &&
+                    officialFirst.text != null,
+                hasOnlinePronunciation = officialFirst.fromSupplement,
+            ),
+        )
+
+        val hangulFirst = ApplePronunciationSourcePolicy.select(
+            official = "Kimi no na wa",
+            supplement = "키미노 나와",
+            priority = RootConstants.APPLE_MUSIC_PRONUNCIATION_HANGUL_FIRST,
+        )
+        assertEquals(
+            ApplePronunciationWordTrack.MAIN_LINE_TIMING,
+            ApplePronunciationPolicy.wordTrack(
+                hasValidOfficialPronunciation = !hangulFirst.fromSupplement &&
+                    hangulFirst.text != null,
+                hasOnlinePronunciation = hangulFirst.fromSupplement,
+            ),
+        )
+    }
+}

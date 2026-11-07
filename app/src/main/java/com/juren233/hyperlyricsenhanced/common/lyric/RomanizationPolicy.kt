@@ -20,6 +20,69 @@ object RomanizationPolicy {
         return candidate
     }
 
+    /**
+     * Existing providers may still supply Latin romanization. AI-provided
+     * pronunciation uses Korean Hangul for BOTH English and Japanese lyrics.
+     */
+    fun sanitizeSupplement(originalText: String?, pronunciation: String?): String? =
+        sanitize(originalText, pronunciation)
+            ?: sanitizeHangulSupplement(originalText, pronunciation)
+
+    /** Validate a Korean-script phonetic rendering without changing legacy Latin tracks. */
+    fun sanitizeHangulSupplement(originalText: String?, pronunciation: String?): String? {
+        val candidate = pronunciation?.trim()?.takeIf(String::isNotEmpty) ?: return null
+        val shown = visibleText(candidate)
+        if (!isHangulPronunciation(shown)) return null
+
+        val original = visibleText(originalText.orEmpty())
+        if (comparableText(original).isEmpty() ||
+            comparableText(original) == comparableText(shown)
+        ) return null
+
+        var hasForeignLetter = false
+        var index = 0
+        while (index < original.length) {
+            val code = original.codePointAt(index)
+            if (Character.isLetter(code)) {
+                when (Character.UnicodeScript.of(code)) {
+                    Character.UnicodeScript.LATIN,
+                    Character.UnicodeScript.HAN,
+                    Character.UnicodeScript.HIRAGANA,
+                    Character.UnicodeScript.KATAKANA -> hasForeignLetter = true
+                    // U+30FC (ー) is a Japanese long-vowel sign, classified as
+                    // UnicodeScript.COMMON despite being a letter. It may
+                    // appear inside otherwise valid Katakana lyrics.
+                    else -> if (code != 0x30FC) return null // never annotate Korean lines
+                }
+            }
+            index += Character.charCount(code)
+        }
+        return candidate.takeIf { hasForeignLetter }
+    }
+
+    fun isHangulPronunciation(pronunciation: String?): Boolean {
+        val shown = visibleText(pronunciation.orEmpty())
+        var hasHangul = false
+        var index = 0
+        while (index < shown.length) {
+            val code = shown.codePointAt(index)
+            if (Character.isLetter(code)) {
+                if (Character.UnicodeScript.of(code) != Character.UnicodeScript.HANGUL) {
+                    return false
+                }
+                hasHangul = true
+            }
+            index += Character.charCount(code)
+        }
+        return hasHangul
+    }
+
+    /** Compare all sounds, including Hangul jamo; only presentation spaces may differ. */
+    fun sameHangulSounds(first: String?, second: String?): Boolean =
+        isHangulPronunciation(first) && isHangulPronunciation(second) &&
+            first.orEmpty().filterNot(Char::isWhitespace) ==
+                second.orEmpty().filterNot(Char::isWhitespace)
+
     fun isLatinLanguageTag(language: String?): Boolean =
         language
             ?.trim()

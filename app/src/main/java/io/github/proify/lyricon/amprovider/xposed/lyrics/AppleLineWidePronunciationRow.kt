@@ -314,9 +314,6 @@ internal class AppleLineWidePronunciationRow {
         val words = mutableListOf<TextView>()
         fun visit(view: View?, depth: Int) {
             if (view == null || view is ReadingView || depth > 8) return
-            // Nested native pronunciation cells are not original Japanese
-            // source words, even when Apple gives both children this same id.
-            if (idName(view) == "lyrics_pronunciation_vertical_container") return
             if (view is TextView && idName(view) == "song_lyrics_word") {
                 words += view
             } else if (view is ViewGroup) {

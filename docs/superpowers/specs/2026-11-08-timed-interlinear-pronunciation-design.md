@@ -20,6 +20,7 @@ The existing implementation has three independent failure modes:
 - Tie the row and its timed data to song/revision/source and clear on recycled ViewHolder, old song or hidden state. No extra UI controls or NPatch dependencies.
 - Identical chorus text is not a unique timestamp identity: keep the read-only timing windows of repeated occurrences and select the one nearest playback time for source-only fallback. Holder-specific binding retains its own native occurrence.
 - When any original source word lacks native timing, do not distribute the entire pronunciation over the remaining words. Animate only independently verifiable source spans and render all unsupported syllables dim.
+- When Apple has no individual word timing at all but exposes a valid native **line** begin/end, permit a clearly approximate syllable sweep across that actual line window; never fabricate native `LyricsWord` objects.
 - Suppress the native duplicate pronunciation text when the independent Hangul row is registered, including the defensive path where an empty JNI vector could not be constructed.
 - Keep previous successful branch, PR and main untouched until CI and device verification. The user will receive a GitHub Actions link immediately after upload; APK success is a separate outcome.
 

@@ -82,7 +82,7 @@ internal fun AppleLyricsSupplementHooks.hookAppleLyricTextGetter(clazz: Class<*>
                 // Do not also expose raw native pronunciation text when Apple
                 // fails to allocate an empty native pronunciation vector.
                 val originalSource = nativeOriginalLineText(chain.thisObject)
-                if (pronunciationState.hasLineWide(
+                if (showHangulSupplementPronunciation() && pronunciationState.hasLineWide(
                         currentAppleLyricsSongId,
                         originalSource,
                         nativeOnlineTranslationStore.revision(),
@@ -545,7 +545,16 @@ private fun AppleLyricsSupplementHooks.hookApplePronunciationWordsGetter(
                             pronunciation = pronunciation,
                             begin = begin,
                             end = end,
-                            timedWords = nativeMainWordTimings(mainWords),
+                            timedWords = nativeMainWordTimings(mainWords).ifEmpty {
+                                // Some native Apple lines have only a real line
+                                // begin/end, without per-word times. Interpolate
+                                // Hangul across that genuine line window rather
+                                // than leaving a visible reading entirely static.
+                                if (begin != null && end != null && end > begin &&
+                                    !originalText.isNullOrBlank()
+                                ) listOf(AppleTimedSourceWord(originalText, begin, end))
+                                else emptyList()
+                            },
                             phoneticSpans = sourceSpans.orEmpty().map { span ->
                                 ApplePronunciationSourceToken(
                                     sourceStart = span.start,
@@ -562,7 +571,15 @@ private fun AppleLyricsSupplementHooks.hookApplePronunciationWordsGetter(
                             "status=${if (begin != null && end != null) "ai_or_provider" else "unknown"}",
                         dedupeKey = "safe_line_reading:$methodName",
                     )
-                    emptyApplePronunciationWords(original, mainWords) ?: original
+                    val empty = emptyApplePronunciationWords(original, mainWords)
+                    if (empty == null) {
+                        reportApplePronunciationRuntimeDiagnostic(
+                            stage = "linewide_native_vector_unavailable",
+                            details = nativeLineDiagnosticDetails(line, pronunciation),
+                            dedupeKey = "linewide_native_vector_unavailable:$methodName",
+                        )
+                    }
+                    empty ?: original
                 } else {
                     pronunciationState.forgetLineWide(currentAppleLyricsSongId, originalText)
                     mainWords?.takeIf { nativeVectorSize(it) > 0 }?.also { vector ->

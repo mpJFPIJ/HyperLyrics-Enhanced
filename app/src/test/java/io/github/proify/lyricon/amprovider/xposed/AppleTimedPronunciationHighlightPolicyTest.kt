@@ -86,6 +86,16 @@ class AppleTimedPronunciationHighlightPolicyTest {
     }
 
     @Test
+    fun `a genuine line begin and end can drive approximate syllable sweep without word data`() {
+        val derivedLineWindow = AppleTimedSourceWord("だめ", 1000, 1800)
+        val units = AppleTimedPronunciationHighlightPolicy.units(
+            sourceText = "だめ", pronunciation = "다메", timedWords = listOf(derivedLineWindow),
+        )
+        assertEquals(listOf(1000L, 1400L), units.map { it.beginMs })
+        assertEquals(listOf(1400L, 1800L), units.map { it.endMs })
+    }
+
+    @Test
     fun `unverified source token text does not impersonate an authoritative alignment`() {
         val units = AppleTimedPronunciationHighlightPolicy.units(
             sourceText = "みその中から", pronunciation = "미소노 나카카라",

@@ -151,7 +151,7 @@ internal class AppleLyricsPronunciationState {
             // when two registered lines could both match the same holder.
             if (observedSourceCells.isEmpty()) return null
             return lineWideBySource.values.singleOrNull { candidate ->
-                AppleLineWidePronunciationRowPolicy.insertionIndex(
+                AppleLineWidePronunciationRowPolicy.verifiedInsertionIndex(
                     candidate.sourceText, observedSourceCells,
                 ) != null
             }

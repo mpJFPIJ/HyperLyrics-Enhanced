@@ -139,9 +139,24 @@ class AppleLineWidePronunciationRowPolicyTest {
         val cells = listOf("ダー", "リン", "ベイビー", "Darling baby")
         assertEquals(3, AppleLineWidePronunciationRowPolicy.insertionIndex(payload.sourceText, cells))
         assertEquals(
+            3,
+            AppleLineWidePronunciationRowPolicy.verifiedInsertionIndex(payload.sourceText, cells),
+        )
+        assertEquals(
             payload,
             state.lineWideForHolder(null, "song", null, 7L, cells),
         )
+    }
+
+    @Test
+    fun `one cached short reading cannot be inserted inside a longer Japanese lyric`() {
+        val state = AppleLyricsPronunciationState()
+        val short = AppleLineWidePronunciationPayload("song", "short", "君", "키미", 7L)
+        state.rememberLineWide(short, null)
+        val differentLine = listOf("君", "の", "心", "Your heart")
+        assertEquals(1, AppleLineWidePronunciationRowPolicy.insertionIndex("君", differentLine))
+        assertNull(AppleLineWidePronunciationRowPolicy.verifiedInsertionIndex("君", differentLine))
+        assertNull(state.lineWideForHolder(null, "song", null, 7L, differentLine))
     }
 
     @Test

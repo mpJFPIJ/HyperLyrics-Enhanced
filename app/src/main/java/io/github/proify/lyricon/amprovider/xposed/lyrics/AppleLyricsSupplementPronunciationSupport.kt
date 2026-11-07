@@ -232,7 +232,7 @@ internal fun AppleLyricsSupplementHooks.bindLineWidePronunciation(
     // following translation is Korean, English, Chinese or something else.
     // This also prevents recycled holders from displaying the wrong line.
     val sourceMatches = payload == null ||
-        AppleLineWidePronunciationRowPolicy.insertionIndex(
+        AppleLineWidePronunciationRowPolicy.verifiedInsertionIndex(
             payload.sourceText, observedCells,
         ) != null
     val shown = lineWidePronunciationRow.bind(

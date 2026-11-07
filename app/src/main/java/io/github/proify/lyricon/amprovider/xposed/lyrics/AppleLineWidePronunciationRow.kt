@@ -52,6 +52,23 @@ internal object AppleLineWidePronunciationRowPolicy {
         return null
     }
 
+    /** A matching prefix is not enough: the next cell might continue the Japanese lyric. */
+    fun verifiedInsertionIndex(sourceText: String, directChildSourceTexts: List<String>): Int? {
+        val index = insertionIndex(sourceText, directChildSourceTexts) ?: return null
+        // The remaining cells may be translations in any language. Japanese
+        // continuation makes the candidate ambiguous, so never attach a short
+        // cached reading inside another line. Fail closed for Japanese-language
+        // translations rather than displaying a mismatched pronunciation.
+        if (directChildSourceTexts.drop(index).any { text ->
+                text.any { char ->
+                    char.code in 0x3040..0x30FF || char.code in 0x3400..0x9FFF ||
+                        char.code in 0xF900..0xFAFF || char.code in 0xFF66..0xFF9F
+                }
+            }
+        ) return null
+        return index
+    }
+
     fun shouldDisplay(
         payload: AppleLineWidePronunciationPayload?,
         currentSongId: String?,
@@ -153,7 +170,7 @@ internal class AppleLineWidePronunciationRow {
         ) return false
 
         val childText = visibleNativeCellTexts(root).orEmpty()
-        val insertionIndex = AppleLineWidePronunciationRowPolicy.insertionIndex(
+        val insertionIndex = AppleLineWidePronunciationRowPolicy.verifiedInsertionIndex(
             payload?.sourceText.orEmpty(), childText,
         ) ?: return false
         val sourceWords = (0 until insertionIndex).flatMap { index ->

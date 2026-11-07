@@ -6,12 +6,14 @@ import com.juren233.hyperlyricsenhanced.lyric.style.AiTranslationConfigs
 
 internal object AITranslationKey {
     private const val LEGACY_OFFLINE_READING_REVISION = "sudachi-v1-20260723-korean-phonetics-v1"
+    private const val PREVIOUS_SOURCE_OFFSET_REVISION = "sudachi-v1-20260723-full-line-offsets-v2"
 
     /** A current-song delete must not leave a previous offline reading in the DB. */
     fun deletionKeys(configs: AiTranslationConfigs, song: Song, lines: List<String>): Set<String> = setOf(
         calculate(configs, song, lines, includePronunciation = false),
         calculate(configs, song, lines, includePronunciation = true),
         pronunciation(song, lines),
+        pronunciation(song, lines, policyRevision = PREVIOUS_SOURCE_OFFSET_REVISION),
         pronunciation(song, lines, policyRevision = LEGACY_OFFLINE_READING_REVISION),
     )
 
@@ -42,7 +44,7 @@ internal object AITranslationKey {
     fun pronunciation(
         song: Song,
         lines: List<String>,
-        policyRevision: String = "sudachi-v1-20260723-full-line-offsets-v2",
+        policyRevision: String = "sudachi-v1-20260723-full-line-offsets-v3-native-anchors-retry",
     ): String = buildString {
         appendLine(policyRevision)
         append("title=").appendLine(song.name.orEmpty())

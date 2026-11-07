@@ -15,9 +15,21 @@ class AITranslationKeyTest {
         val deletionKeys = AITranslationKey.deletionKeys(configs, song, lines)
         assertTrue(AITranslationKey.pronunciation(song, lines) in deletionKeys)
         assertTrue(AITranslationKey.pronunciation(song, lines,
+            policyRevision = "sudachi-v1-20260723-full-line-offsets-v2") in deletionKeys)
+        assertTrue(AITranslationKey.pronunciation(song, lines,
             policyRevision = "sudachi-v1-20260723-korean-phonetics-v1") in deletionKeys)
         assertTrue(AITranslationKey.calculate(configs, song, lines,
             includePronunciation = true) in deletionKeys)
+    }
+
+    @Test fun newSourceAwareTokenizerRetriesDoNotReuseOldOfflinePronunciationCache() {
+        val song = Song(name = "IRIS OUT", artist = "Kenshi Yonezu")
+        val lines = listOf("ダーリン半端なく", "駄目駄目")
+        assertNotEquals(
+            AITranslationKey.pronunciation(song, lines),
+            AITranslationKey.pronunciation(song, lines,
+                policyRevision = "sudachi-v1-20260723-full-line-offsets-v2"),
+        )
     }
 
     @Test fun pronunciationRevisionDoesNotInvalidateAlreadyTranslatedModelCache() {

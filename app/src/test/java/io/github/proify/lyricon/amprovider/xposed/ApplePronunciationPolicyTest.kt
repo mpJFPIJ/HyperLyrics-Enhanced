@@ -180,51 +180,42 @@ class ApplePronunciationPolicyTest {
     }
 
     @Test
-    fun `fallback never puts an entire long Hangul sentence under one karaoke word`() {
+    fun `unverified long Hangul cannot be assigned guessed native timing`() {
         val parts = ApplePronunciationPolicy.displaySegments(
             pronunciation = "다메 다메 다메 노미소노 나카 카라 야메로 바카 토 와메쿠",
             mainWordTexts = listOf("駄目", "駄目", "駄目", "脳", "みそ", "の", "中", "から"),
         )
-        assertEquals(8, parts.size)
-        assertTrue(parts.count(String::isNotBlank) > 1)
-        assertEquals(
-            "다메다메다메노미소노나카카라야메로바카토와메쿠",
-            parts.joinToString("").filter { it in '가'..'힣' },
-        )
+        assertTrue(parts.isEmpty())
     }
 
     @Test
-    fun `unspaced Hangul remains completely visible across multiple native cells`() {
+    fun `unspaced Hangul cannot be fabricated into multiple native cells`() {
         assertTrue(ApplePronunciationPolicy.shouldUseLineTextOnly("키미노나와", 4))
         assertFalse(ApplePronunciationPolicy.shouldUseLineTextOnly("키미 노 나 와", 4))
         val parts = ApplePronunciationPolicy.displaySegments(
             pronunciation = "키미노나와",
             mainWordTexts = listOf("君", "の", "名", "は"),
         )
-        assertEquals(4, parts.size)
-        assertEquals("키미노나와", parts.joinToString(""))
-        assertTrue(parts.count(String::isNotBlank) > 1)
+        assertTrue(parts.isEmpty())
     }
 
     @Test
-    fun `fallback preserves whole syllable groups without clipping the lyric row`() {
+    fun `unverified syllable groups are never treated as timed source words`() {
         val parts = ApplePronunciationPolicy.displaySegments(
             pronunciation = "이마 코노세데 키미 다케 다이세이카이",
             mainWordTexts = listOf("今", "この世で", "君", "だけ", "大正", "解"),
         )
-        assertEquals(6, parts.size)
-        assertEquals("이마코노세데키미다케다이세이카이", parts.joinToString("").filter { it in '가'..'힣' })
+        assertTrue(parts.isEmpty())
         assertTrue(parts.count(String::isNotBlank) > 1)
     }
 
     @Test
-    fun `fallback retains text when source cells and Hangul space groups differ`() {
+    fun `mismatched source cells and Hangul groups produce no timed cells`() {
         val parts = ApplePronunciationPolicy.displaySegments(
             pronunciation = "키미 노 나 와",
             mainWordTexts = listOf("君の", "名は"),
         )
-        assertEquals(2, parts.size)
-        assertEquals("키미노나와", parts.joinToString("").filter { it in '가'..'힣' })
+        assertTrue(parts.isEmpty())
     }
 
     @Test

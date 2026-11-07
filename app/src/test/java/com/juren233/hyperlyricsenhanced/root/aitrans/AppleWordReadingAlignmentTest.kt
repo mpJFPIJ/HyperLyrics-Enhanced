@@ -55,6 +55,23 @@ class AppleWordReadingAlignmentTest {
         assertEquals("다메다메노미소노나카카라", words.joinToString("") { it.hangul })
     }
 
+    @Test fun nonSpokenJapaneseQuotationMarksDoNotBreakNativeWordMatching() {
+        val result = AppleWordReadingAlignment.align(
+            "駄目「やめろ馬鹿」と",
+            listOf("駄目", "やめろ", "馬鹿", "と"),
+            listOf(
+                span(0, 2, "駄目", "다메"),
+                span(3, 6, "やめろ", "야메로"),
+                span(6, 8, "馬鹿", "바카"),
+                span(9, 10, "と", "토"),
+            ),
+            expectedHangul = "다메야메로바카토",
+        )
+        assertTrue(result is WordAlignmentResult.Verified)
+        assertEquals(listOf("다메", "야메로", "바카", "토"),
+            (result as WordAlignmentResult.Verified).words.map { it.hangul })
+    }
+
     @Test fun rejectingIncorrectSoundEvenWhenSourceGroupingMatches() {
         assertEquals(WordAlignmentResult.LineWide(AlignmentFailure.SOUND_MISMATCH),
             AppleWordReadingAlignment.align(

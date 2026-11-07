@@ -15,6 +15,20 @@ internal sealed interface WordAlignmentResult {
 
 /** Never invents a karaoke syllable boundary: it must already exist in the source. */
 internal object AppleWordReadingAlignment {
+    private fun isUnspokenDelimiter(char: Char): Boolean {
+        if (char.isWhitespace()) return true
+        return when (Character.getType(char)) {
+            Character.CONNECTOR_PUNCTUATION.toInt(),
+            Character.DASH_PUNCTUATION.toInt(),
+            Character.START_PUNCTUATION.toInt(),
+            Character.END_PUNCTUATION.toInt(),
+            Character.OTHER_PUNCTUATION.toInt(),
+            Character.INITIAL_QUOTE_PUNCTUATION.toInt(),
+            Character.FINAL_QUOTE_PUNCTUATION.toInt() -> true
+            else -> false
+        }
+    }
+
     fun align(
         original: String,
         appleWords: List<String>,
@@ -31,14 +45,16 @@ internal object AppleWordReadingAlignment {
             if (value.isEmpty() || value.contains('<') || value.contains('>')) {
                 return WordAlignmentResult.LineWide(AlignmentFailure.SOURCE_MISMATCH)
             }
-            while (cursor < original.length && original[cursor].isWhitespace()) cursor++
+            // Apple's native karaoke vector may drop punctuation into its own
+            // decoration layer. Those marks have no independent pronunciation.
+            while (cursor < original.length && isUnspokenDelimiter(original[cursor])) cursor++
             if (!original.startsWith(value, cursor)) {
                 return WordAlignmentResult.LineWide(AlignmentFailure.SOURCE_MISMATCH)
             }
             ranges += cursor until (cursor + value.length)
             cursor += value.length
         }
-        if (original.substring(cursor).any { !it.isWhitespace() }) {
+        if (original.substring(cursor).any { !isUnspokenDelimiter(it) }) {
             return WordAlignmentResult.LineWide(AlignmentFailure.SOURCE_MISMATCH)
         }
 

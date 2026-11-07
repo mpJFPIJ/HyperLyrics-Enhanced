@@ -24,6 +24,26 @@ class AppleNativeOnlineTranslationStoreTest {
         assertEquals(spans, store.aiHangulPronunciationSpans("100", 1_000, 2_000, "駄目"))
         assertNull(store.aiHangulPronunciationSpans("100", 2_000, 3_000, "駄目"))
     }
+
+    @Test fun `translation only AI refresh keeps previously verified reading spans`() {
+        val store = AppleNativeOnlineTranslationStore()
+        val spans = listOf(LyricPronunciationSpan(0, 2, "駄目", "다메"))
+        val first = Song(id = "100", lyrics = listOf(RichLyricLine(
+            begin = 1_000, end = 2_000, text = "駄目", roma = "다메",
+            pronunciationSpans = spans, pronunciationStatus = "ALIGNED",
+            translation = "안 돼",
+        )))
+        store.receive(first, preserveExistingPronunciation = true)
+        store.receive(Song(id = "100", lyrics = listOf(RichLyricLine(
+            begin = 1_000, end = 2_000, text = "駄目", roma = null,
+            translation = "그러면 안 돼",
+        ))), preserveExistingPronunciation = true)
+
+        assertEquals("다메", store.aiHangulPronunciation("100", 1_000, 2_000, "駄目"))
+        assertEquals(spans, store.aiHangulPronunciationSpans("100", 1_000, 2_000, "駄目"))
+        assertEquals("ALIGNED", store.aiHangulPronunciationStatus("100", 1_000, 2_000, "駄目"))
+        assertEquals("그러면 안 돼", store.aiTranslation("100", 1_000, 2_000, "駄目"))
+    }
     @Test fun `unsupported pronunciation status survives without manufactured sound`() {
         val store = AppleNativeOnlineTranslationStore()
         store.receive(Song(id = "100", lyrics = listOf(RichLyricLine(

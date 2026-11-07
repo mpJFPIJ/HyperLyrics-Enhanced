@@ -79,7 +79,11 @@ internal class AppleNativeOnlineTranslationStore {
         val candidate = buildOverlay(song)
         if (candidate != null) {
             if (aiOverlay?.songId != candidate.songId) aiOverlay = null
-            if (preserveExistingPronunciation) aiOverlay = candidate
+            if (preserveExistingPronunciation) {
+                // A later translation-only response must not erase the exact
+                // source offsets captured by the earlier AI pronunciation.
+                aiOverlay = aiOverlay?.let { preservePronunciation(candidate, it) } ?: candidate
+            }
         }
         val next = if (preserveExistingPronunciation && candidate != null &&
             overlay?.songId == candidate.songId
@@ -107,7 +111,8 @@ internal class AppleNativeOnlineTranslationStore {
      */
     private fun preservePronunciation(next: Overlay, previous: Overlay): Overlay {
         val merged = next.exactContent.mapValues { (key, content) ->
-            val previousContent = previous.exactContent[key]
+            val exactPreviousContent = previous.exactContent[key]
+            val previousContent = exactPreviousContent
                 ?: previous.translationsByTiming[key.timing]?.singleOrNull()?.content
             val existing = previousContent?.pronunciation
             // Prefer requested Hangul display when AI provides it, while
@@ -120,10 +125,12 @@ internal class AppleNativeOnlineTranslationStore {
                 !RomanizationPolicy.isHangulPronunciation(content.pronunciation)
             content.copy(
                 pronunciation = displayReading,
-                wordPronunciations = if (keptPrevious) previousContent?.wordPronunciations
+                wordPronunciations = if (keptPrevious) exactPreviousContent?.wordPronunciations
                     else content.wordPronunciations,
-                pronunciationSpans = if (keptPrevious) previousContent?.pronunciationSpans
+                pronunciationSpans = if (keptPrevious) exactPreviousContent?.pronunciationSpans
                     else content.pronunciationSpans,
+                pronunciationStatus = if (keptPrevious) exactPreviousContent?.pronunciationStatus
+                    else content.pronunciationStatus,
             )
         }
         val hasPronunciation = merged.values.any { it.pronunciation != null }

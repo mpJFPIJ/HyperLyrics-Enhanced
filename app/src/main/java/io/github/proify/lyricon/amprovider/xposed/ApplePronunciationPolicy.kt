@@ -90,13 +90,7 @@ internal object ApplePronunciationPolicy {
             main.all(pronunciation::contains)
     }
 
-    /**
-     * Only display Hangul per karaoke word when its original text and sound have
-     * been verified together. A fallback without such a map is approximate, but
-     * must still remain fully visible: placing an entire lyric sentence under
-     * the first native word silently clips every syllable after its width.
-     * Never create synthetic Apple LyricsWord objects or alter their timestamps.
-     */
+    /** Never fabricate Hangul timing from token counts or word widths. */
     fun displaySegments(
         pronunciation: String,
         mainWordTexts: List<String>,
@@ -109,18 +103,8 @@ internal object ApplePronunciationPolicy {
         if (tokens.isEmpty()) return emptyList()
 
         if (RomanizationPolicy.isHangulPronunciation(pronunciation)) {
-            verifiedNativeSegments(pronunciation, mainWordTexts, alignedWords)?.let { return it }
-            // Last-resort display fallback. Prefer intact space-delimited syllable
-            // groups; an unspaced reading can only be shared as Hangul syllables.
-            // This is visual distribution, not a claim of precise word timing.
-            val splittingUnspacedLine = tokens.size == 1 && mainWordTexts.size > 1
-            val fallbackTokens = if (splittingUnspacedLine) {
-                tokens.single().map(Char::toString)
-            } else tokens
-            return distributeByNativeWordWeight(
-                fallbackTokens, mainWordTexts,
-                separator = if (splittingUnspacedLine) "" else " ",
-            )
+            return verifiedNativeSegments(pronunciation, mainWordTexts, alignedWords)
+                ?: emptyList()
         }
 
         return distributeByNativeWordWeight(tokens, mainWordTexts)

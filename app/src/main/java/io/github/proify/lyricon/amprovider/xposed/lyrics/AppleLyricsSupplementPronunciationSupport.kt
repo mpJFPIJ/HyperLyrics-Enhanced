@@ -513,19 +513,29 @@ private fun AppleLyricsSupplementHooks.hookApplePronunciationWordsGetter(
                 // Apple's active-word highlight. The former line-wide sibling
                 // was appended after the translation, with no active highlighting.
                 pronunciationState.forgetLineWide(currentAppleLyricsSongId, originalText)
-                mainWords?.takeIf { nativeVectorSize(it) > 0 }?.also { vector ->
-                    registerApplePronunciationRenderPlan(
-                        vector = vector,
-                        pronunciation = pronunciation,
-                        alignedWords = alignedWords,
-                    )
+                if (presentation == ApplePronunciationPresentationMode.LINE_WIDE) {
                     reportApplePronunciationRuntimeDiagnostic(
-                        stage = "word_track_registered",
-                        details = "words=${nativeVectorSize(vector)},mode=$presentation," +
-                            "aligned=${if (alignedWords != null) 1 else 0}",
-                        dedupeKey = "word_track_registered:$methodName",
+                        stage = "unaligned_reading_kept_without_fake_word_timing",
+                        details = "words=${nativeTexts.size},readingChars=${pronunciation.length}," +
+                            "status=${if (begin != null && end != null) "ai_or_provider" else "unknown"}",
+                        dedupeKey = "unaligned_reading:$methodName",
                     )
-                } ?: emptyApplePronunciationWords(original, mainWords) ?: original
+                    emptyApplePronunciationWords(original, mainWords) ?: original
+                } else {
+                    mainWords?.takeIf { nativeVectorSize(it) > 0 }?.also { vector ->
+                        registerApplePronunciationRenderPlan(
+                            vector = vector,
+                            pronunciation = pronunciation,
+                            alignedWords = alignedWords,
+                        )
+                        reportApplePronunciationRuntimeDiagnostic(
+                            stage = "word_track_registered",
+                            details = "words=${nativeVectorSize(vector)},mode=$presentation," +
+                                "aligned=${if (alignedWords != null) 1 else 0}",
+                            dedupeKey = "word_track_registered:$methodName",
+                        )
+                    } ?: emptyApplePronunciationWords(original, mainWords) ?: original
+                }
             }
             ApplePronunciationWordTrack.HIDDEN -> {
                 pronunciationState.forgetLineWide(currentAppleLyricsSongId, originalText)

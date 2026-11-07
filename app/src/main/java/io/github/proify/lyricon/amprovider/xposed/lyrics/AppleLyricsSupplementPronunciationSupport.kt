@@ -219,19 +219,22 @@ internal fun AppleLyricsSupplementHooks.bindLineWidePronunciation(
     root: android.view.View?,
 ) {
     val songId = currentAppleLyricsSongId
-    val observedSource = lineWidePronunciationRow.visibleOriginalSource(root)
+    val observedCells = lineWidePronunciationRow.visibleNativeCellTexts(root).orEmpty()
     val revision = nativeOnlineTranslationStore.revision()
     val payload = pronunciationState.lineWideForHolder(
         holder = context.holder,
         songId = songId,
-        observedSourceText = observedSource,
+        observedSourceText = null,
         revision = revision,
+        observedSourceCells = observedCells,
     )
-    // A pending native getter must belong to the same source text that Apple
-    // actually bound. Never put another line's reading on a recycled holder.
-    val sourceMatches = observedSource.isNullOrBlank() || payload == null ||
-        AppleLineWidePronunciationRowPolicy.sourceKey(payload.sourceText) ==
-        AppleLineWidePronunciationRowPolicy.sourceKey(observedSource)
+    // Verify the actual Japanese source cells, independent of whether the
+    // following translation is Korean, English, Chinese or something else.
+    // This also prevents recycled holders from displaying the wrong line.
+    val sourceMatches = payload == null ||
+        AppleLineWidePronunciationRowPolicy.insertionIndex(
+            payload.sourceText, observedCells,
+        ) != null
     val shown = lineWidePronunciationRow.bind(
         root = root,
         payload = payload.takeIf { sourceMatches },
@@ -248,7 +251,7 @@ internal fun AppleLyricsSupplementHooks.bindLineWidePronunciation(
             "stage=linewide_holder_bound shown=${if (shown) 1 else 0} " +
                 "candidate=${if (payload != null) 1 else 0} " +
                 "sourceMatch=${if (sourceMatches) 1 else 0} " +
-                "sourceChars=${observedSource?.length ?: -1} " +
+                "sourceCells=${observedCells.size} " +
                 "readingChars=${payload?.pronunciation?.length ?: 0} " +
                 "position=${context.position ?: -1}",
         )

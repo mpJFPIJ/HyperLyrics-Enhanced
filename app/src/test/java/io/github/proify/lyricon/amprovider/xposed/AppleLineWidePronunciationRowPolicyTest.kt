@@ -130,6 +130,38 @@ class AppleLineWidePronunciationRowPolicyTest {
     }
 
     @Test
+    fun `English translation after Japanese source must not hide a valid Hangul reading`() {
+        val state = AppleLyricsPronunciationState()
+        val payload = AppleLineWidePronunciationPayload(
+            "song", "line", "ダーリンベイビー", "다아린 베이비", 7L,
+        )
+        state.rememberLineWide(payload, null)
+        val cells = listOf("ダー", "リン", "ベイビー", "Darling baby")
+        assertEquals(3, AppleLineWidePronunciationRowPolicy.insertionIndex(payload.sourceText, cells))
+        assertEquals(
+            payload,
+            state.lineWideForHolder(null, "song", null, 7L, cells),
+        )
+    }
+
+    @Test
+    fun `multiple matching source prefixes are ambiguous when holder is unavailable`() {
+        val state = AppleLyricsPronunciationState()
+        state.rememberLineWide(
+            AppleLineWidePronunciationPayload("song", "short", "ダー", "다아", 7L), null,
+        )
+        state.rememberLineWide(
+            AppleLineWidePronunciationPayload(
+                "song", "long", "ダーリンベイビー", "다아린 베이비", 7L,
+            ), null,
+        )
+        assertNull(state.lineWideForHolder(
+            null, "song", null, 7L,
+            listOf("ダー", "リン", "ベイビー", "Darling baby"),
+        ))
+    }
+
+    @Test
     fun `official or newly aligned words remove a previous full line candidate`() {
         val state = AppleLyricsPronunciationState()
         val source = "脳みその中から"

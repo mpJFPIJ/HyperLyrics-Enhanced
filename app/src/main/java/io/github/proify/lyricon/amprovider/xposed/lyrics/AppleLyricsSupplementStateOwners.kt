@@ -128,17 +128,33 @@ internal class AppleLyricsPronunciationState {
         songId: String?,
         observedSourceText: String?,
         revision: Long,
+        observedSourceCells: List<String> = emptyList(),
     ): AppleLineWidePronunciationPayload? {
         val pending = holder?.let { lineWideByHolder[it] }
         if (pending != null && pending.songId == songId && pending.revision == revision) {
             return pending
         }
-        if (songId == null || observedSourceText.isNullOrBlank()) return null
+        if (songId == null ||
+            (observedSourceText.isNullOrBlank() && observedSourceCells.isEmpty())
+        ) return null
         synchronized(lineWideBySource) {
             if (lineWideSongId != songId || lineWideRevision != revision) return null
-            return lineWideBySource[
-                AppleLineWidePronunciationRowPolicy.sourceKey(observedSourceText)
-            ]
+            if (!observedSourceText.isNullOrBlank()) {
+                val exact = lineWideBySource[
+                    AppleLineWidePronunciationRowPolicy.sourceKey(observedSourceText)
+                ]
+                if (exact != null) return exact
+            }
+            // An English/Chinese translation can follow Japanese cells, so the
+            // rendered text as a whole is not the original lyric's identity.
+            // Prefer a single verified Japanese source prefix and fail closed
+            // when two registered lines could both match the same holder.
+            if (observedSourceCells.isEmpty()) return null
+            return lineWideBySource.values.singleOrNull { candidate ->
+                AppleLineWidePronunciationRowPolicy.insertionIndex(
+                    candidate.sourceText, observedSourceCells,
+                ) != null
+            }
         }
     }
 

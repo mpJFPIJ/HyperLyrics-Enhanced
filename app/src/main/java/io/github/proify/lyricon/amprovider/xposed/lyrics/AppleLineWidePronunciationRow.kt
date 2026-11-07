@@ -4,6 +4,7 @@ import android.os.Build
 import android.annotation.SuppressLint
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Rect
 import android.text.Layout
 import android.graphics.text.LineBreaker
 import android.view.Gravity
@@ -76,6 +77,29 @@ internal class AppleLineWidePronunciationRow {
     @SuppressLint("AppCompatCustomView")
     private class ReadingView(context: android.content.Context) : TextView(context) {
         var sourceWords: List<TextView> = emptyList()
+        private val visibleBounds = Rect()
+        private val highlightPulse = object : Runnable {
+            override fun run() {
+                if (!isAttachedToWindow) return
+                val onScreen = isShown && getGlobalVisibleRect(visibleBounds)
+                if (onScreen) syncNativeHighlight()
+                // A sibling's RenderNode may animate without invalidating this
+                // TextView. Poll only while attached, at a slower idle cadence
+                // for lines that have scrolled offscreen.
+                postDelayed(this, if (onScreen) 33L else 250L)
+            }
+        }
+
+        override fun onAttachedToWindow() {
+            super.onAttachedToWindow()
+            removeCallbacks(highlightPulse)
+            post(highlightPulse)
+        }
+
+        override fun onDetachedFromWindow() {
+            removeCallbacks(highlightPulse)
+            super.onDetachedFromWindow()
+        }
 
         /** Apple's own word views animate their text color and parent alpha. */
         private fun syncNativeHighlight() {
@@ -128,9 +152,7 @@ internal class AppleLineWidePronunciationRow {
             )
         ) return false
 
-        val childText = (0 until anchor.childCount).map { index ->
-            nativeWordTexts(anchor.getChildAt(index)).joinToString("") { it.text.toString() }
-        }
+        val childText = visibleNativeCellTexts(root).orEmpty()
         val insertionIndex = AppleLineWidePronunciationRowPolicy.insertionIndex(
             payload?.sourceText.orEmpty(), childText,
         ) ?: return false
@@ -177,18 +199,12 @@ internal class AppleLineWidePronunciationRow {
     }
 
     /** Used only as an ambiguity-checked fallback when native getters run before bind. */
-    fun visibleOriginalSource(root: View?): String? {
+    /** Cell boundaries are needed to distinguish the source from any translation script. */
+    fun visibleNativeCellTexts(root: View?): List<String>? {
         val group = anchor(root) ?: return null
-        val text = StringBuilder()
-        for (index in 0 until group.childCount) {
-            val words = nativeWordTexts(group.getChildAt(index))
-            val part = words.joinToString("") { it.text.toString() }
-            // In Korean translation mode the following Hangul cells belong to
-            // the translation, not the Japanese lyric whose reading we bind.
-            if (part.any { it in '가'..'힣' }) break
-            text.append(part)
+        return (0 until group.childCount).map { index ->
+            nativeWordTexts(group.getChildAt(index)).joinToString("") { it.text.toString() }
         }
-        return text.toString().takeIf(String::isNotBlank)
     }
 
     private fun anchor(root: View?): ViewGroup? {

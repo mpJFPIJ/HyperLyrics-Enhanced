@@ -49,7 +49,10 @@ object RomanizationPolicy {
                     Character.UnicodeScript.HAN,
                     Character.UnicodeScript.HIRAGANA,
                     Character.UnicodeScript.KATAKANA -> hasForeignLetter = true
-                    else -> return null // never annotate original Korean lines
+                    // U+30FC (ー) is a Japanese long-vowel sign, classified as
+                    // UnicodeScript.COMMON despite being a letter. It may
+                    // appear inside otherwise valid Katakana lyrics.
+                    else -> if (code != 0x30FC) return null // never annotate Korean lines
                 }
             }
             index += Character.charCount(code)

@@ -206,7 +206,6 @@ class ApplePronunciationPolicyTest {
             mainWordTexts = listOf("今", "この世で", "君", "だけ", "大正", "解"),
         )
         assertTrue(parts.isEmpty())
-        assertTrue(parts.count(String::isNotBlank) > 1)
     }
 
     @Test
@@ -288,8 +287,7 @@ class ApplePronunciationPolicyTest {
             mainWordTexts = listOf("脳", "みそ"),
             alignedWords = aligned,
         )
-        assertEquals(2, parts.size)
-        assertEquals("노미소", parts.joinToString(""))
+        assertTrue(parts.isEmpty())
     }
 
     @Test

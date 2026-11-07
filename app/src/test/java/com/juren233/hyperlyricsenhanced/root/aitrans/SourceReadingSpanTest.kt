@@ -6,6 +6,30 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SourceReadingSpanTest {
+    @Test fun anUnsupportedLargeTokenRetriesSmallerDictionarySplitBeforeDroppingLine() {
+        var calls = 0
+        val result = SourceReadingAssembler.retryModes("半端なく", 3) { mode ->
+            calls++
+            when (mode) {
+                0 -> listOf(RawReadingToken(0, 5, "*"))
+                else -> listOf(
+                    RawReadingToken(0, 2, "ハンパ"),
+                    RawReadingToken(2, 4, "ナク"),
+                )
+            }
+        }
+        assertEquals(LineReadingStatus.COMPLETE, result.status)
+        assertEquals("한파나쿠", result.text)
+        assertEquals(2, calls)
+    }
+
+    @Test fun everyUnsupportedDictionarySplitStillFailsClosed() {
+        val result = SourceReadingAssembler.retryModes("未知語", 3) {
+            listOf(RawReadingToken(0, 3, "*"))
+        }
+        assertNull(result.text)
+        assertEquals(LineReadingStatus.MISSING_UNSUPPORTED, result.status)
+    }
     @Test fun repeatedJapaneseWordsKeepOriginalSourceOffsets() {
         val reading = SourceReadingAssembler.assemble(
             "駄目駄目",

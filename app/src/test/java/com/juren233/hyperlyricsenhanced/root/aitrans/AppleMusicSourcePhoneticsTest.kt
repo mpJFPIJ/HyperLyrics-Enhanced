@@ -23,7 +23,7 @@ class AppleMusicSourcePhoneticsTest {
         assertEquals("안 돼", result.translation)
     }
 
-    @Test fun splitNativeWordKeepsCompleteReadingButRejectsGuessedWordTiming() {
+    @Test fun splitNativeWordKeepsCompleteReadingOnOneAnchoredTimedCell() {
         val line = RichLyricLine(
             text = "駄目", words = listOf(LyricWord(text = "駄"), LyricWord(text = "目")),
             translation = "안 돼",
@@ -32,11 +32,24 @@ class AppleMusicSourcePhoneticsTest {
 
         val result = AppleMusicSourcePhonetics.attach(line, "駄目", reading)
 
-        assertEquals("LINE_WIDE", result.pronunciationStatus)
+        assertEquals("SOURCE_GROUPED", result.pronunciationStatus)
         assertEquals("다메", result.roma)
-        assertNull(result.pronunciationWords)
+        assertEquals(listOf("다메", ""), result.pronunciationWords?.map { it.hangul })
         assertEquals("안 돼", result.translation)
         assertTrue(result.pronunciationSpans.orEmpty().isNotEmpty())
+    }
+
+    @Test fun temporarySudachiFailureDoesNotEraseExistingReadingOfMixedKanaLyric() {
+        val source = "ダーリン半端なくラブ！ときらめき浮き足立つフィロソフィ"
+        val line = RichLyricLine(text = source, roma = "다링 한파나쿠 라부 토 키라메키 우키아시다츠 피로소피",
+            translation = "달링, 말로 다 할 수 없을 만큼 사랑해")
+        val incomplete = LineReadingResult(null, emptyList(), LineReadingStatus.MISSING_UNSUPPORTED)
+
+        val result = AppleMusicSourcePhonetics.attach(line, source, incomplete)
+
+        assertEquals(line.roma, result.roma)
+        assertEquals("AI_FALLBACK_UNVERIFIED", result.pronunciationStatus)
+        assertEquals(line.translation, result.translation)
     }
 
     @Test fun unverifiableSoundsNeverOverrideSourceWithPlausibleFiller() {

@@ -31,15 +31,19 @@ internal object SudachiReadingEngine {
         val dic = getDictionary()
             ?: return LineReadingResult(null, emptyList(), LineReadingStatus.MISSING_UNSUPPORTED)
         return runCatching {
-            val tokens = dic.create().tokenize(Tokenizer.SplitMode.C, text).map { word ->
-                RawReadingToken(
-                    sourceStart = word.begin(),
-                    sourceEnd = word.end(),
-                    readingForm = word.readingForm(),
-                    isParticle = word.partOfSpeech().firstOrNull() == "助詞",
-                )
+            // Preserve the whole-line context while retrying more fine-grained
+            // Sudachi segmentation only if a coarse unknown token caused loss.
+            val modes = listOf(Tokenizer.SplitMode.C, Tokenizer.SplitMode.B, Tokenizer.SplitMode.A)
+            SourceReadingAssembler.retryModes(text, modes.size) { mode ->
+                dic.create().tokenize(modes[mode], text).map { word ->
+                    RawReadingToken(
+                        sourceStart = word.begin(),
+                        sourceEnd = word.end(),
+                        readingForm = word.readingForm(),
+                        isParticle = word.partOfSpeech().firstOrNull() == "助詞",
+                    )
+                }
             }
-            SourceReadingAssembler.assemble(text, tokens)
         }.getOrElse {
             Log.w(TAG, "Full-line reading failed: ${it.javaClass.simpleName}")
             LineReadingResult(null, emptyList(), LineReadingStatus.MISSING_UNSUPPORTED)

@@ -8,6 +8,8 @@ internal enum class AlignmentFailure {
 
 internal sealed interface WordAlignmentResult {
     data class Verified(val words: List<LyricWordPronunciation>) : WordAlignmentResult
+    /** A complete source token crosses native word cells; sound stays intact on its first cell. */
+    data class Grouped(val words: List<LyricWordPronunciation>) : WordAlignmentResult
     data class LineWide(val reason: AlignmentFailure) : WordAlignmentResult
 }
 
@@ -42,18 +44,22 @@ internal object AppleWordReadingAlignment {
 
         val sounds = MutableList(appleWords.size) { StringBuilder() }
         var previousEnd = 0
+        var grouped = false
         for (span in spans) {
             if (span.sourceStart < previousEnd || span.sourceEnd <= span.sourceStart ||
                 span.sourceEnd > original.length ||
                 original.substring(span.sourceStart, span.sourceEnd) != span.sourceText ||
                 span.hangul.isBlank()
             ) return WordAlignmentResult.LineWide(AlignmentFailure.INVALID_SPANS)
-            val wordIndex = ranges.indexOfFirst { range ->
-                span.sourceStart >= range.first && span.sourceEnd - 1 <= range.last
-            }
-            if (wordIndex == -1) {
+            val wordIndex = ranges.indexOfFirst { span.sourceStart in it }
+            val endWordIndex = ranges.indexOfFirst { span.sourceEnd - 1 in it }
+            if (wordIndex == -1 || endWordIndex == -1 || endWordIndex < wordIndex) {
                 return WordAlignmentResult.LineWide(AlignmentFailure.BOUNDARY_SPLIT)
             }
+            // A morphological span is an indivisible verified sound. Its native
+            // presentation may cover more than one Apple karaoke cell; never
+            // fabricate arbitrary Hangul syllable boundaries to fill those cells.
+            if (wordIndex != endWordIndex) grouped = true
             sounds[wordIndex].append(span.hangul)
             previousEnd = span.sourceEnd
         }
@@ -70,8 +76,10 @@ internal object AppleWordReadingAlignment {
         if (joined.isEmpty() || expectedHangul != null &&
             joined != expectedHangul.filter { it in '가'..'힣' }
         ) return WordAlignmentResult.LineWide(AlignmentFailure.SOUND_MISMATCH)
-        return WordAlignmentResult.Verified(appleWords.mapIndexed { index, source ->
+        val words = appleWords.mapIndexed { index, source ->
             LyricWordPronunciation(source, sounds[index].toString())
-        })
+        }
+        return if (grouped) WordAlignmentResult.Grouped(words)
+        else WordAlignmentResult.Verified(words)
     }
 }

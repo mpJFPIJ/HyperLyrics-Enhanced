@@ -7,6 +7,7 @@ import com.juren233.hyperlyricsenhanced.common.lyric.OnlineTranslationMatchStat
 import com.juren233.hyperlyricsenhanced.common.lyric.OnlineTranslationMatchStatsCodec
 import com.juren233.hyperlyricsenhanced.lyric.model.Song
 import com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation
+import com.juren233.hyperlyricsenhanced.lyric.model.LyricPronunciationSpan
 
 internal class AppleNativeOnlineTranslationStore {
     private data class TimingKey(
@@ -23,6 +24,7 @@ internal class AppleNativeOnlineTranslationStore {
         val translation: String?,
         val pronunciation: String?,
         val wordPronunciations: List<LyricWordPronunciation>?,
+        val pronunciationSpans: List<LyricPronunciationSpan>?,
         val pronunciationStatus: String?,
     )
 
@@ -105,16 +107,24 @@ internal class AppleNativeOnlineTranslationStore {
      */
     private fun preservePronunciation(next: Overlay, previous: Overlay): Overlay {
         val merged = next.exactContent.mapValues { (key, content) ->
-            val existing = previous.exactContent[key]?.pronunciation
-                ?: previous.translationsByTiming[key.timing]
-                    ?.singleOrNull()?.content?.pronunciation
+            val previousContent = previous.exactContent[key]
+                ?: previous.translationsByTiming[key.timing]?.singleOrNull()?.content
+            val existing = previousContent?.pronunciation
             // Prefer requested Hangul display when AI provides it, while
             // preserving older romanization whenever no Hangul was returned.
             // The source lyrics and Apple's native track remain unchanged.
             val displayReading = content.pronunciation
                 ?.takeIf(RomanizationPolicy::isHangulPronunciation)
                 ?: existing ?: content.pronunciation
-            content.copy(pronunciation = displayReading)
+            val keptPrevious = displayReading == existing &&
+                !RomanizationPolicy.isHangulPronunciation(content.pronunciation)
+            content.copy(
+                pronunciation = displayReading,
+                wordPronunciations = if (keptPrevious) previousContent?.wordPronunciations
+                    else content.wordPronunciations,
+                pronunciationSpans = if (keptPrevious) previousContent?.pronunciationSpans
+                    else content.pronunciationSpans,
+            )
         }
         val hasPronunciation = merged.values.any { it.pronunciation != null }
         return next.copy(
@@ -142,6 +152,7 @@ internal class AppleNativeOnlineTranslationStore {
                 translation = sanitizeContent(line.translation),
                 pronunciation = RomanizationPolicy.sanitizeSupplement(line.text, line.roma),
                 wordPronunciations = line.pronunciationWords,
+                pronunciationSpans = line.pronunciationSpans,
                 pronunciationStatus = line.pronunciationStatus,
             )
             if (content.translation == null && content.pronunciation == null &&
@@ -227,6 +238,15 @@ internal class AppleNativeOnlineTranslationStore {
     ): List<LyricWordPronunciation>? = content(songId, begin, end, text, aiOverlay)
         ?.takeIf { RomanizationPolicy.isHangulPronunciation(it.pronunciation) }
         ?.wordPronunciations
+
+    fun aiHangulPronunciationSpans(
+        songId: String?,
+        begin: Long,
+        end: Long,
+        text: String?,
+    ): List<LyricPronunciationSpan>? = content(songId, begin, end, text, aiOverlay)
+        ?.takeIf { RomanizationPolicy.isHangulPronunciation(it.pronunciation) }
+        ?.pronunciationSpans
 
     fun aiHangulPronunciationStatus(
         songId: String?,

@@ -38,6 +38,23 @@ internal object SourceReadingAssembler {
         "heart" to "하트", "world" to "월드", "dream" to "드림",
     )
 
+    /** Sudachi's longer C-mode unknown compounds sometimes have valid B/A-mode readings. */
+    fun retryModes(
+        source: String,
+        modeCount: Int,
+        tokenize: (Int) -> List<RawReadingToken>,
+    ): LineReadingResult {
+        if (source.isBlank()) return LineReadingResult(null, emptyList(), LineReadingStatus.EMPTY)
+        var failure = LineReadingResult(null, emptyList(), LineReadingStatus.MISSING_UNSUPPORTED)
+        for (mode in 0 until modeCount) {
+            val analyzed = runCatching { assemble(source, tokenize(mode)) }.getOrNull()
+                ?: continue
+            if (analyzed.status == LineReadingStatus.COMPLETE) return analyzed
+            failure = analyzed
+        }
+        return failure
+    }
+
     fun assemble(source: String, tokens: List<RawReadingToken>): LineReadingResult {
         if (source.isBlank()) return LineReadingResult(null, emptyList(), LineReadingStatus.EMPTY)
         val result = StringBuilder()

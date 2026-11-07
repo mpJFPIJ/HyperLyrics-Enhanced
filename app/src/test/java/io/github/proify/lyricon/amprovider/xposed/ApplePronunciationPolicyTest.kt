@@ -1,5 +1,8 @@
 package io.github.proify.lyricon.amprovider.xposed
 
+import com.juren233.hyperlyricsenhanced.root.aitrans.AppleWordReadingAlignment
+import com.juren233.hyperlyricsenhanced.root.aitrans.SourceReadingSpan
+import com.juren233.hyperlyricsenhanced.root.aitrans.WordAlignmentResult
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -7,6 +10,26 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ApplePronunciationPolicyTest {
+    @Test fun `source grouped phonetics reuse native timed word track for highlight`() {
+        val nativeWords = listOf("駄", "目", "脳", "みそ")
+        val mapped = AppleWordReadingAlignment.align(
+            "駄目脳みそ", nativeWords,
+            listOf(
+                SourceReadingSpan(0, 2, "駄目", "ダメ", "다메"),
+                SourceReadingSpan(2, 3, "脳", "ノウ", "노"),
+                SourceReadingSpan(3, 5, "みそ", "ミソ", "미소"),
+            ),
+            "다메노미소",
+        ) as WordAlignmentResult.Grouped
+        assertEquals(ApplePronunciationPresentationMode.ALIGNED_WORDS,
+            ApplePronunciationPolicy.presentationMode(
+                "다메노미소", false, nativeWords, mapped.words,
+            ))
+        assertEquals(listOf("다메", "", "노", "미소"),
+            ApplePronunciationPolicy.verifiedNativeSegments(
+                "다메노미소", nativeWords, mapped.words,
+            ))
+    }
     @Test
     fun `refreshes official pronunciation when it arrives after the first presentation`() {
         assertEquals(

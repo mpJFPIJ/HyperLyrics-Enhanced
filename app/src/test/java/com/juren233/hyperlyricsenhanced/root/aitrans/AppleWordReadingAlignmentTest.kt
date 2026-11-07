@@ -26,11 +26,41 @@ class AppleWordReadingAlignmentTest {
             (result as WordAlignmentResult.Verified).words.map { it.hangul })
     }
 
-    @Test fun splitMorphologicalTokenIsAlwaysLineWide() {
+    @Test fun splitMorphologicalTokenKeepsWholeVerifiedSoundOnItsFirstNativeCell() {
         val result = AppleWordReadingAlignment.align(
             "駄目", listOf("駄", "目"), listOf(span(0, 2, "駄目", "다메")),
         )
-        assertEquals(WordAlignmentResult.LineWide(AlignmentFailure.BOUNDARY_SPLIT), result)
+        assertTrue(result is WordAlignmentResult.Grouped)
+        assertEquals(listOf("다메", ""),
+            (result as WordAlignmentResult.Grouped).words.map { it.hangul })
+        assertEquals("다메", result.words.joinToString("") { it.hangul })
+    }
+
+    @Test fun mixedWholeAndSplitTokensRetainExactSoundAndSourceOrder() {
+        val result = AppleWordReadingAlignment.align(
+            "駄目駄目脳みその中から",
+            listOf("駄", "目", "駄目", "脳", "みそ", "の", "中", "から"),
+            listOf(
+                span(0, 2, "駄目", "다메"), span(2, 4, "駄目", "다메"),
+                span(4, 5, "脳", "노"), span(5, 7, "みそ", "미소"),
+                span(7, 8, "の", "노"), span(8, 9, "中", "나카"),
+                span(9, 11, "から", "카라"),
+            ),
+            expectedHangul = "다메다메노미소노나카카라",
+        )
+        assertTrue(result is WordAlignmentResult.Grouped)
+        val words = (result as WordAlignmentResult.Grouped).words
+        assertEquals(listOf("다메", "", "다메", "노", "미소", "노", "나카", "카라"),
+            words.map { it.hangul })
+        assertEquals("다메다메노미소노나카카라", words.joinToString("") { it.hangul })
+    }
+
+    @Test fun rejectingIncorrectSoundEvenWhenSourceGroupingMatches() {
+        assertEquals(WordAlignmentResult.LineWide(AlignmentFailure.SOUND_MISMATCH),
+            AppleWordReadingAlignment.align(
+                "駄目", listOf("駄", "目"), listOf(span(0, 2, "駄目", "다메")),
+                expectedHangul = "키고",
+            ))
     }
 
     @Test fun overlappingOrForeignTextNeverProducesVerifiedWordMap() {

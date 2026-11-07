@@ -2,6 +2,7 @@ package io.github.proify.lyricon.amprovider.xposed
 
 import com.juren233.hyperlyricsenhanced.lyric.model.RichLyricLine
 import com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation
+import com.juren233.hyperlyricsenhanced.lyric.model.LyricPronunciationSpan
 import com.juren233.hyperlyricsenhanced.lyric.model.Song
 import com.juren233.hyperlyricsenhanced.lyric.model.lyricMetadataOf
 import com.juren233.hyperlyricsenhanced.common.lyric.LyricMetadataKeys
@@ -12,6 +13,17 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AppleNativeOnlineTranslationStoreTest {
+    @Test fun `source spans survive transport for alignment to actual Apple native word cells`() {
+        val store = AppleNativeOnlineTranslationStore()
+        val spans = listOf(LyricPronunciationSpan(0, 2, "駄目", "다메"))
+        store.receive(Song(id = "100", lyrics = listOf(RichLyricLine(
+            begin = 1_000, end = 2_000, text = "駄目", roma = "다메",
+            pronunciationSpans = spans,
+        ))), preserveExistingPronunciation = true)
+
+        assertEquals(spans, store.aiHangulPronunciationSpans("100", 1_000, 2_000, "駄目"))
+        assertNull(store.aiHangulPronunciationSpans("100", 2_000, 3_000, "駄目"))
+    }
     @Test fun `unsupported pronunciation status survives without manufactured sound`() {
         val store = AppleNativeOnlineTranslationStore()
         store.receive(Song(id = "100", lyrics = listOf(RichLyricLine(

@@ -35,6 +35,13 @@ internal object ProviderLogger {
         HookLogger.e(TAG, message, throwable)
 }
 
+/** Ensures release-safe native holder geometry reaches NPatch's exported module stream. */
+internal object ApplePronunciationAnchorReporter {
+    fun record(message: String) {
+        HookLogger.i("ApplePronunciationAnchor", message)
+    }
+}
+
 internal object AppleReflection {
     private val methodsByClass =
         ConcurrentHashMap<Class<*>, Map<String, List<Method>>>()

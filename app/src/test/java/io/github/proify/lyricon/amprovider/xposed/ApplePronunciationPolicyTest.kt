@@ -1,5 +1,8 @@
 package io.github.proify.lyricon.amprovider.xposed
 
+import com.juren233.hyperlyricsenhanced.root.aitrans.AppleWordReadingAlignment
+import com.juren233.hyperlyricsenhanced.root.aitrans.SourceReadingSpan
+import com.juren233.hyperlyricsenhanced.root.aitrans.WordAlignmentResult
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -7,6 +10,57 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ApplePronunciationPolicyTest {
+    @Test
+    fun `never sends a grouped Japanese morpheme with an empty native word cell to karaoke renderer`() {
+        val grouped = listOf(
+            com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation("ダー", "다린"),
+            com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation("リン", ""),
+            com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation("ベイビー", "베이비"),
+        )
+        assertNull(ApplePronunciationPolicy.verifiedNativeSegments(
+            "다린베이비", listOf("ダー", "リン", "ベイビー"), grouped,
+        ))
+        assertEquals(
+            ApplePronunciationPresentationMode.LINE_WIDE,
+            ApplePronunciationPolicy.presentationMode(
+                "다린베이비", false, listOf("ダー", "リン", "ベイビー"), grouped,
+            ),
+        )
+    }
+
+    @Test
+    fun `native punctuation with an empty phonetic cell also falls back instead of revealing source glyphs`() {
+        val aligned = listOf(
+            com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation("ラブ", "라부"),
+            com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation("！", ""),
+            com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation("と", "토"),
+        )
+        assertNull(ApplePronunciationPolicy.verifiedNativeSegments(
+            "라부토", listOf("ラブ", "！", "と"), aligned,
+        ))
+        assertEquals(emptyList<String>(), ApplePronunciationPolicy.displaySegments(
+            "라부토", listOf("ラブ", "！", "と"), aligned,
+        ))
+    }
+    @Test fun `grouped source reading keeps complete Hangul but never enters native word timing`() {
+        val nativeWords = listOf("駄", "目", "脳", "みそ")
+        val mapped = AppleWordReadingAlignment.align(
+            "駄目脳みそ", nativeWords,
+            listOf(
+                SourceReadingSpan(0, 2, "駄目", "ダメ", "다메"),
+                SourceReadingSpan(2, 3, "脳", "ノウ", "노"),
+                SourceReadingSpan(3, 5, "みそ", "ミソ", "미소"),
+            ),
+            "다메노미소",
+        ) as WordAlignmentResult.Grouped
+        assertEquals(ApplePronunciationPresentationMode.LINE_WIDE,
+            ApplePronunciationPolicy.presentationMode(
+                "다메노미소", false, nativeWords, mapped.words,
+            ))
+        assertNull(ApplePronunciationPolicy.verifiedNativeSegments(
+            "다메노미소", nativeWords, mapped.words,
+        ))
+    }
     @Test
     fun `refreshes official pronunciation when it arrives after the first presentation`() {
         assertEquals(
@@ -154,6 +208,117 @@ class ApplePronunciationPolicyTest {
                 mainWordTexts = listOf("君", "の", "名", "は"),
             ),
         )
+    }
+
+    @Test
+    fun `unverified long Hangul cannot be assigned guessed native timing`() {
+        val parts = ApplePronunciationPolicy.displaySegments(
+            pronunciation = "다메 다메 다메 노미소노 나카 카라 야메로 바카 토 와메쿠",
+            mainWordTexts = listOf("駄目", "駄目", "駄目", "脳", "みそ", "の", "中", "から"),
+        )
+        assertTrue(parts.isEmpty())
+    }
+
+    @Test
+    fun `unspaced Hangul cannot be fabricated into multiple native cells`() {
+        assertTrue(ApplePronunciationPolicy.shouldUseLineTextOnly("키미노나와", 4))
+        assertFalse(ApplePronunciationPolicy.shouldUseLineTextOnly("키미 노 나 와", 4))
+        val parts = ApplePronunciationPolicy.displaySegments(
+            pronunciation = "키미노나와",
+            mainWordTexts = listOf("君", "の", "名", "は"),
+        )
+        assertTrue(parts.isEmpty())
+    }
+
+    @Test
+    fun `unverified syllable groups are never treated as timed source words`() {
+        val parts = ApplePronunciationPolicy.displaySegments(
+            pronunciation = "이마 코노세데 키미 다케 다이세이카이",
+            mainWordTexts = listOf("今", "この世で", "君", "だけ", "大正", "解"),
+        )
+        assertTrue(parts.isEmpty())
+    }
+
+    @Test
+    fun `mismatched source cells and Hangul groups produce no timed cells`() {
+        val parts = ApplePronunciationPolicy.displaySegments(
+            pronunciation = "키미 노 나 와",
+            mainWordTexts = listOf("君の", "名は"),
+        )
+        assertTrue(parts.isEmpty())
+    }
+
+    @Test
+    fun `uses individually verified readings for matching Apple native karaoke words`() {
+        val aligned = listOf(
+            com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation("駄目", "다메"),
+            com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation("駄目", "다메"),
+            com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation("脳", "노"),
+            com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation("みそ", "미소"),
+        )
+        assertEquals(
+            listOf("다메", "다메", "노", "미소"),
+            ApplePronunciationPolicy.displaySegments(
+                pronunciation = "다메 다메 노미소",
+                mainWordTexts = listOf("駄目", "駄目", "脳", "みそ"),
+                alignedWords = aligned,
+            ),
+        )
+    }
+
+    @Test
+    fun `refuses native word cells when a Korean reading cannot be aligned exactly`() {
+        val sourceWords = listOf("駄目", "駄目", "脳", "みそ", "の", "中", "から")
+        val reading = "다메 다메 노미소노 나카카라"
+        assertNull(ApplePronunciationPolicy.verifiedNativeSegments(reading, sourceWords, null))
+        assertEquals(
+            ApplePronunciationPresentationMode.LINE_WIDE,
+            ApplePronunciationPolicy.presentationMode(
+                pronunciation = reading,
+                hasOfficialTimedWords = false,
+                nativeWords = sourceWords,
+                alignedWords = null,
+            ),
+        )
+    }
+
+    @Test
+    fun `uses Apple word timing only if source and Hangul both match`() {
+        val mapping = listOf(
+            com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation("駄目", "다메"),
+            com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation("脳", "노"),
+            com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation("みそ", "미소"),
+        )
+        assertEquals(
+            listOf("다메", "노", "미소"),
+            ApplePronunciationPolicy.verifiedNativeSegments(
+                "다메 노미소", listOf("駄目", "脳", "みそ"), mapping,
+            ),
+        )
+        assertNull(
+            ApplePronunciationPolicy.verifiedNativeSegments(
+                "다메 노미소", listOf("駄目", "脳みそ"), mapping,
+            ),
+        )
+        assertNull(
+            ApplePronunciationPolicy.verifiedNativeSegments(
+                "다메 노미소ㅋㅋ", listOf("駄目", "脳", "みそ"), mapping,
+            ),
+        )
+    }
+
+    @Test
+    fun `rejects stale word alignments from another line`() {
+        val aligned = listOf(
+            com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation("君", "키미"),
+            com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation("名", "나"),
+        )
+        val parts = ApplePronunciationPolicy.displaySegments(
+            pronunciation = "노미소",
+            mainWordTexts = listOf("脳", "みそ"),
+            alignedWords = aligned,
+        )
+        assertTrue(parts.isEmpty())
     }
 
     @Test

@@ -1,6 +1,8 @@
 package io.github.proify.lyricon.amprovider.xposed
 
 import com.juren233.hyperlyricsenhanced.lyric.model.RichLyricLine
+import com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation
+import com.juren233.hyperlyricsenhanced.lyric.model.LyricPronunciationSpan
 import com.juren233.hyperlyricsenhanced.lyric.model.Song
 import com.juren233.hyperlyricsenhanced.lyric.model.lyricMetadataOf
 import com.juren233.hyperlyricsenhanced.common.lyric.LyricMetadataKeys
@@ -11,6 +13,82 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AppleNativeOnlineTranslationStoreTest {
+    @Test fun `source spans survive transport for alignment to actual Apple native word cells`() {
+        val store = AppleNativeOnlineTranslationStore()
+        val spans = listOf(LyricPronunciationSpan(0, 2, "駄目", "다메"))
+        store.receive(Song(id = "100", lyrics = listOf(RichLyricLine(
+            begin = 1_000, end = 2_000, text = "駄目", roma = "다메",
+            pronunciationSpans = spans,
+        ))), preserveExistingPronunciation = true)
+
+        assertEquals(spans, store.aiHangulPronunciationSpans("100", 1_000, 2_000, "駄目"))
+        assertNull(store.aiHangulPronunciationSpans("100", 2_000, 3_000, "駄目"))
+    }
+
+    @Test fun `translation only AI refresh keeps previously verified reading spans`() {
+        val store = AppleNativeOnlineTranslationStore()
+        val spans = listOf(LyricPronunciationSpan(0, 2, "駄目", "다메"))
+        val first = Song(id = "100", lyrics = listOf(RichLyricLine(
+            begin = 1_000, end = 2_000, text = "駄目", roma = "다메",
+            pronunciationSpans = spans, pronunciationStatus = "ALIGNED",
+            translation = "안 돼",
+        )))
+        store.receive(first, preserveExistingPronunciation = true)
+        store.receive(Song(id = "100", lyrics = listOf(RichLyricLine(
+            begin = 1_000, end = 2_000, text = "駄目", roma = null,
+            translation = "그러면 안 돼",
+        ))), preserveExistingPronunciation = true)
+
+        assertEquals("다메", store.aiHangulPronunciation("100", 1_000, 2_000, "駄目"))
+        assertEquals(spans, store.aiHangulPronunciationSpans("100", 1_000, 2_000, "駄目"))
+        assertEquals("ALIGNED", store.aiHangulPronunciationStatus("100", 1_000, 2_000, "駄目"))
+        assertEquals("그러면 안 돼", store.aiTranslation("100", 1_000, 2_000, "駄目"))
+    }
+    @Test fun `unsupported pronunciation status survives without manufactured sound`() {
+        val store = AppleNativeOnlineTranslationStore()
+        store.receive(Song(id = "100", lyrics = listOf(RichLyricLine(
+            begin = 3_000, end = 4_000, text = "未知語", roma = null,
+            pronunciationStatus = "MISSING_UNSUPPORTED",
+        ))), preserveExistingPronunciation = true)
+        assertEquals("MISSING_UNSUPPORTED", store.aiHangulPronunciationStatus("100", 3_000, 4_000, "未知語"))
+        assertNull(store.aiHangulPronunciation("100", 3_000, 4_000, "未知語"))
+        // A unique timing key deliberately supports alternate native text;
+        // a different time must still never inherit the unsupported marker.
+        assertEquals("MISSING_UNSUPPORTED", store.aiHangulPronunciationStatus("100", 3_000, 4_000, "別の歌詞"))
+        assertNull(store.aiHangulPronunciationStatus("100", 4_000, 5_000, "未知語"))
+    }
+
+    @Test fun `line wide status remains addressable without exposing stale foreign song`() {
+        val store = AppleNativeOnlineTranslationStore()
+        store.receive(Song(id = "100", lyrics = listOf(RichLyricLine(
+            begin = 1_000, end = 2_000, text = "駄目", roma = "다메",
+            pronunciationStatus = "LINE_WIDE",
+        ))), preserveExistingPronunciation = true)
+        assertEquals("LINE_WIDE", store.aiHangulPronunciationStatus("100", 1_000, 2_000, "駄目"))
+        assertNull(store.aiHangulPronunciationStatus("200", 1_000, 2_000, "駄目"))
+        store.clear("100")
+        assertNull(store.aiHangulPronunciationStatus("100", 1_000, 2_000, "駄目"))
+    }
+
+    @Test
+    fun `retains verified word readings only in matching standalone AI overlay`() {
+        val store = AppleNativeOnlineTranslationStore()
+        val words = listOf(
+            LyricWordPronunciation("駄目", "다메"),
+            LyricWordPronunciation("脳", "노"),
+        )
+        store.receive(
+            Song(id = "100", lyrics = listOf(RichLyricLine(
+                begin = 1_000, end = 2_000, text = "駄目脳", roma = "다메 노",
+                pronunciationWords = words,
+            ))),
+            preserveExistingPronunciation = true,
+        )
+        assertEquals(words, store.aiHangulPronunciationWords("100", 1_000, 2_000, "駄目脳"))
+        assertNull(store.aiHangulPronunciationWords("100", 2_000, 3_000, "駄目脳"))
+        assertNull(store.aiHangulPronunciationWords("200", 1_000, 2_000, "駄目脳"))
+    }
+
     @Test
     fun `exposes independent online content sources only for available content`() {
         val store = AppleNativeOnlineTranslationStore()
@@ -508,6 +586,52 @@ class AppleNativeOnlineTranslationStoreTest {
         assertFalse(store.hasTranslation("100"))
     }
 
+    @Test
+    fun `AI phonetics do not appear before AI response and survive provider refresh`() {
+        val store = AppleNativeOnlineTranslationStore()
+        val online = song("100", RichLyricLine(
+            begin = 1000, end = 2000, text = "君の名は",
+            translation = "你的名字", roma = "키미노 나와아",
+        ))
+        store.receive(online)
+        assertTrue(store.hasHangulPronunciation("100"))
+        assertFalse(store.hasAiHangulPronunciation("100"))
+        assertNull(store.aiHangulPronunciation("100", 1000, 2000, "君の名は"))
+
+        val ai = song("100", RichLyricLine(
+            begin = 1000, end = 2000, text = "君の名は",
+            translation = "너의 이름은", roma = "키미노 나와",
+        ))
+        store.receive(ai, preserveExistingPronunciation = true)
+        assertTrue(store.hasAiHangulPronunciation("100"))
+        assertEquals("키미노 나와", store.aiHangulPronunciation("100", 1000, 2000, "君の名は"))
+        assertEquals("너의 이름은", store.aiTranslation("100", 1000, 2000, "君の名は"))
+
+        // Auto provider updates must not replace separately pinned AI result.
+        store.receive(online)
+        assertEquals("키미노 나와", store.aiHangulPronunciation("100", 1000, 2000, "君の名は"))
+        assertEquals("너의 이름은", store.aiTranslation("100", 1000, 2000, "君の名は"))
+        store.receive(online.copy(id = "200"))
+        assertFalse(store.hasAiHangulPronunciation("100"))
+        assertNull(store.aiTranslation("100", 1000, 2000, "君の名は"))
+    }
+
+    @Test
+    fun `AI translation without generated pronunciation does not label provider as AI`() {
+        val store = AppleNativeOnlineTranslationStore()
+        store.receive(song("100", RichLyricLine(
+            begin = 1000, end = 2000, text = "君の名は", roma = "키미노 나와아",
+        )))
+        store.receive(song("100", RichLyricLine(
+            begin = 1000, end = 2000, text = "君の名は",
+            translation = "너의 이름은", roma = null,
+        )), preserveExistingPronunciation = true)
+        assertTrue(store.hasPronunciation("100"))
+        assertFalse(store.hasAiHangulPronunciation("100"))
+        assertNull(store.aiHangulPronunciation("100", 1000, 2000, "君の名は"))
+        assertEquals("너의 이름은", store.aiTranslation("100", 1000, 2000, "君の名は"))
+    }
+
     private fun assertReceipt(
         store: AppleNativeOnlineTranslationStore,
         song: Song,
@@ -528,4 +652,85 @@ class AppleNativeOnlineTranslationStoreTest {
         id = id,
         lyrics = lines.toList(),
     )
+
+    @Test
+    fun `standalone AI translation preserves previously available pronunciation`() {
+        val store = AppleNativeOnlineTranslationStore()
+        store.receive(
+            Song(
+                id = "100",
+                metadata = lyricMetadataOf(
+                    LyricMetadataKeys.ONLINE_PRONUNCIATION_SOURCE to "NE",
+                ),
+                lyrics = listOf(RichLyricLine(
+                    begin = 1_000, end = 2_000, text = "君の名は", roma = "Kimi no na wa",
+                )),
+            )
+        )
+
+        store.receive(
+            song("100", RichLyricLine(
+                begin = 1_000, end = 2_000, text = "君の名は",
+                translation = "너의 이름은", roma = "AI imperfect romaji",
+            )),
+            preserveExistingPronunciation = true,
+        )
+        assertEquals("너의 이름은", store.translation("100", 1_000, 2_000, "君の名は"))
+        assertEquals("Kimi no na wa", store.pronunciation("100", 1_000, 2_000, "君の名は"))
+        assertEquals("NE", store.pronunciationSource("100"))
+    }
+
+    @Test
+    fun `normal source changes still replace pronunciation and AI cannot leak across songs`() {
+        val store = AppleNativeOnlineTranslationStore()
+        store.update(song("100", RichLyricLine(
+            begin = 1_000, end = 2_000, text = "君の名は", roma = "Kimi no na wa",
+        )))
+        store.receive(song("100", RichLyricLine(
+            begin = 1_000, end = 2_000, text = "君の名は", translation = "너의 이름은",
+        )))
+        assertFalse(store.hasPronunciation("100"))
+
+        store.update(song("100", RichLyricLine(
+            begin = 1_000, end = 2_000, text = "君の名は", roma = "Kimi no na wa",
+        )))
+        store.receive(song("200", RichLyricLine(
+            begin = 1_000, end = 2_000, text = "君の名は", translation = "다른 곡",
+        )), preserveExistingPronunciation = true)
+        assertFalse(store.hasPronunciation("200"))
+        assertNull(store.pronunciation("200", 1_000, 2_000, "君の名は"))
+    }
+
+    @Test
+    fun `standalone AI Hangul overrides displayed Latin romaji but keeps other lines`() {
+        val store = AppleNativeOnlineTranslationStore()
+        store.update(song("ja", RichLyricLine(
+            begin = 1_000, end = 2_000, text = "君の名は",
+            roma = "Kimi no na wa",
+        ), RichLyricLine(
+            begin = 2_000, end = 3_000, text = "ありがとう",
+            roma = "Arigatou",
+        )))
+        store.receive(song("ja", RichLyricLine(
+            begin = 1_000, end = 2_000, text = "君の名は",
+            translation = "너의 이름은", roma = "키미노 나와",
+        ), RichLyricLine(
+            begin = 2_000, end = 3_000, text = "ありがとう",
+            translation = "고마워",
+        )), preserveExistingPronunciation = true)
+        assertEquals("키미노 나와", store.pronunciation("ja", 1_000, 2_000, "君の名は"))
+        assertEquals("Arigatou", store.pronunciation("ja", 2_000, 3_000, "ありがとう"))
+        assertTrue(store.hasPronunciation("ja"))
+    }
+
+    @Test
+    fun `store exposes validated Korean-script pronunciation for English lines`() {
+        val store = AppleNativeOnlineTranslationStore()
+        store.update(song("english", RichLyricLine(
+            begin = 1_000, end = 2_000, text = "I love you",
+            translation = "사랑해", roma = "아이 러브 유",
+        )))
+        assertTrue(store.hasPronunciation("english"))
+        assertEquals("아이 러브 유", store.pronunciation("english", 1_000, 2_000, "I love you"))
+    }
 }

@@ -35,6 +35,8 @@ sealed interface Route : NavKey {
     @Serializable
     data object LyricSettings : Route
     @Serializable
+    data object AiTranslationCache : Route
+    @Serializable
     data object OnlineTranslationSources : Route
     @Serializable
     data object LyricDisplay : Route

@@ -11,6 +11,9 @@ import android.util.Log
 import com.juren233.hyperlyricsenhanced.BuildConfig
 import com.juren233.hyperlyricsenhanced.common.RootConstants
 import com.juren233.hyperlyricsenhanced.common.lyric.RomanizationPolicy
+import com.juren233.hyperlyricsenhanced.root.aitrans.AppleWordReadingAlignment
+import com.juren233.hyperlyricsenhanced.root.aitrans.SourceReadingSpan
+import com.juren233.hyperlyricsenhanced.root.aitrans.WordAlignmentResult
 import kotlin.math.abs
 
 internal fun AppleLyricsSupplementHooks.hookAppleLyricTextGetter(clazz: Class<*>, name: String) {
@@ -39,11 +42,26 @@ internal fun AppleLyricsSupplementHooks.hookAppleLyricTextGetter(clazz: Class<*>
             lyricsRuntimeMember(
                 AppleMusicRuntimeMember.LYRICS_NATIVE_TRANSLATION_TEXT_METHOD
             ) -> {
-                val text = selectAppleLyricsText(
-                    official = AppleNativeOnlineTranslationStore.sanitizeContent(originalText),
-                    fallback = { onlineTranslationForNativeLine(chain.thisObject) },
-                ).text
-                val result = AppleLyricTextTransform.transform(text) ?: original
+                if (!requestedAppleLyricsRowVisibility().translation) {
+                    return@installResultOverrideHook ""
+                }
+                // For Korean-target songs, existing official/third-party Chinese
+                // content must not win over a later AI Hangul translation.
+                val userTranslation = userCorrectionForNativeLine(chain.thisObject)?.translation
+                val official = AppleNativeOnlineTranslationStore.sanitizeContent(originalText)
+                val text = if (koreanTranslationTargetSelected()) {
+                    KoreanLyricsDisplayPolicy.select(
+                        userCorrection = userTranslation,
+                        supplement = onlineTranslationForNativeLine(chain.thisObject),
+                        official = official,
+                    )
+                } else {
+                    userTranslation ?: selectAppleLyricsText(
+                        official = official,
+                        fallback = { onlineTranslationForNativeLine(chain.thisObject) },
+                    ).text
+                }
+                val result = AppleLyricTextTransform.transform(text.orEmpty()) ?: text.orEmpty()
                 if (BuildConfig.DEBUG) {
                     ProviderLogger.debug(
                         "[LyricsScrollDiag] getTranslationText: line=${System.identityHashCode(chain.thisObject)}, " +
@@ -55,17 +73,48 @@ internal fun AppleLyricsSupplementHooks.hookAppleLyricTextGetter(clazz: Class<*>
             lyricsRuntimeMember(
                 AppleMusicRuntimeMember.LYRICS_NATIVE_PRONUNCIATION_TEXT_METHOD
             ) -> {
-                if (shouldHideMandarinPronunciation(lyricObject = chain.thisObject)) {
+                if (!requestedAppleLyricsRowVisibility().pronunciation ||
+                    shouldHideMandarinPronunciation(lyricObject = chain.thisObject)
+                ) {
                     return@installResultOverrideHook ""
                 }
+                // The independent full-width Hangul row owns this source line.
+                // Do not also expose raw native pronunciation text when Apple
+                // fails to allocate an empty native pronunciation vector.
+                val originalSource = nativeOriginalLineText(chain.thisObject)
+                if (showHangulSupplementPronunciation() && pronunciationState.hasLineWide(
+                        currentAppleLyricsSongId,
+                        originalSource,
+                        nativeOnlineTranslationStore.revision(),
+                        pronunciationSourcePriority(),
+                    )
+                ) return@installResultOverrideHook ""
                 val officialText = RomanizationPolicy.sanitize(
                     originalText = nativeOriginalLineText(chain.thisObject),
                     pronunciation = originalText,
                 )
-                val selection = selectAppleLyricsText(officialText) {
-                    onlinePronunciationForNativeLine(chain.thisObject)
+                val userReading = RomanizationPolicy.sanitizeSupplement(
+                    originalText = nativeOriginalLineText(chain.thisObject),
+                    pronunciation = userCorrectionForNativeLine(chain.thisObject)?.pronunciation,
+                )?.takeIf {
+                    if (RomanizationPolicy.isHangulPronunciation(it))
+                        showHangulSupplementPronunciation()
+                    else showNativeApplePronunciation()
                 }
-                val onlineText = selection.text.takeIf { selection.fromFallback }
+                val onlineReading = onlinePronunciationForNativeLine(chain.thisObject)
+                // Keep Apple-native timing intact while allowing a user-selected
+                // overlay preference. Hangul-first retains the previous behavior.
+                val selection = ApplePronunciationSourcePolicy.select(
+                    official = officialText,
+                    supplement = onlineReading,
+                    priority = pronunciationSourcePriority(),
+                    hangulOnly = nativeOnlineTranslationStore.hasHangulPronunciation(
+                        currentAppleLyricsSongId
+                    ),
+                    allowAppleNative = showNativeApplePronunciation(),
+                    allowHangulSupplement = showHangulSupplementPronunciation(),
+                )
+                val onlineText = selection.text.takeIf { selection.fromSupplement && userReading == null }
                 if (onlineText != null) {
                     reportApplePronunciationRuntimeDiagnostic(
                         stage = "line_text_overlay",
@@ -75,7 +124,7 @@ internal fun AppleLyricsSupplementHooks.hookAppleLyricTextGetter(clazz: Class<*>
                         ),
                     )
                 }
-                val text = selection.text
+                val text = userReading ?: selection.text
                 val displayText = ApplePronunciationPolicy.nonNullDisplayText(
                     AppleLyricTextTransform.transform(text)
                 )
@@ -91,7 +140,10 @@ internal fun AppleLyricsSupplementHooks.hookAppleLyricTextGetter(clazz: Class<*>
             lyricsRuntimeMember(
                 AppleMusicRuntimeMember.LYRICS_NATIVE_PRONUNCIATION_BACKGROUND_TEXT_METHOD
             ) -> {
-                if (shouldHideMandarinPronunciation(lyricObject = chain.thisObject)) {
+                if (!requestedAppleLyricsRowVisibility().pronunciation ||
+                    shouldHideMandarinPronunciation(lyricObject = chain.thisObject) ||
+                    !showNativeApplePronunciation()
+                ) {
                     return@installResultOverrideHook ""
                 }
                 val text = RomanizationPolicy.sanitize(
@@ -143,6 +195,86 @@ internal fun AppleLyricsSupplementHooks.hookApplePronunciationWordsGetters(clazz
         ),
         onlineFallback = false,
     )
+}
+
+/** Cache the full reading before Apple renders its native word cells. */
+private fun AppleLyricsSupplementHooks.rememberLineWideApplePronunciation(
+    originalText: String?,
+    pronunciation: String,
+    begin: Long?,
+    end: Long?,
+    timedWords: List<AppleTimedSourceWord>,
+    phoneticSpans: List<ApplePronunciationSourceToken>,
+) {
+    val songId = currentAppleLyricsSongId?.takeIf(String::isNotBlank) ?: return
+    val source = originalText?.takeIf(String::isNotBlank) ?: return
+    val payload = AppleLineWidePronunciationPayload(
+        songId = songId,
+        lineKey = "${begin ?: -1L}:${end ?: -1L}:${source.hashCode()}",
+        sourceText = source,
+        pronunciation = pronunciation,
+        revision = nativeOnlineTranslationStore.revision(),
+        sourcePriority = pronunciationSourcePriority(),
+        timedWords = timedWords,
+        phoneticSpans = phoneticSpans,
+    )
+    pronunciationState.rememberLineWide(payload, diagnostics.currentBindingContext()?.holder)
+    if (lineWideRegisteredDiagnosticCount.incrementAndGet() <= 24) {
+        ApplePronunciationAnchorReporter.record(
+            "stage=linewide_registered sourceChars=${source.length} " +
+                "readingChars=${pronunciation.length} " +
+                "timedWords=${timedWords.size} sourceSpans=${phoneticSpans.size} " +
+                "holderKnown=${if (diagnostics.currentBindingContext()?.holder != null) 1 else 0}",
+        )
+    }
+}
+
+/** Bind only after Apple finished creating/reusing the source lyric's real ViewHolder. */
+internal fun AppleLyricsSupplementHooks.bindLineWidePronunciation(
+    context: AppleLyricsBindingDiagnosticContext,
+    root: android.view.View?,
+) {
+    val songId = currentAppleLyricsSongId
+    val observedCells = lineWidePronunciationRow.visibleNativeCellTexts(root).orEmpty()
+    val revision = nativeOnlineTranslationStore.revision()
+    val payload = pronunciationState.lineWideForHolder(
+        holder = context.holder,
+        songId = songId,
+        observedSourceText = null,
+        revision = revision,
+        observedSourceCells = observedCells,
+    )
+    // Verify the actual Japanese source cells, independent of whether the
+    // following translation is Korean, English, Chinese or something else.
+    // This also prevents recycled holders from displaying the wrong line.
+    val sourceMatches = payload == null ||
+        AppleLineWidePronunciationRowPolicy.verifiedInsertionIndex(
+            payload.sourceText, observedCells,
+        ) != null
+    val shown = lineWidePronunciationRow.bind(
+        root = root,
+        payload = payload.takeIf { sourceMatches },
+        currentSongId = songId,
+        currentRevision = revision,
+        visible = requestedAppleLyricsRowVisibility().pronunciation &&
+            showHangulSupplementPronunciation() && !shouldHideMandarinPronunciation(),
+        currentSourcePriority = pronunciationSourcePriority(),
+        playbackPositionMs = { appleLyricsCurrentPlaybackPositionMs() },
+    )
+    val count = if (shown) lineWideShownDiagnosticCount.incrementAndGet()
+        else lineWideMissingDiagnosticCount.incrementAndGet()
+    if (count <= 24) {
+        ApplePronunciationAnchorReporter.record(
+            "stage=linewide_holder_bound shown=${if (shown) 1 else 0} " +
+                "candidate=${if (payload != null) 1 else 0} " +
+                "sourceMatch=${if (sourceMatches) 1 else 0} " +
+                "sourceCells=${observedCells.size} " +
+                "readingChars=${payload?.pronunciation?.length ?: 0} " +
+                "nativeTimedWords=${payload?.timedWords?.size ?: 0} " +
+                "sourcePhoneticSpans=${payload?.phoneticSpans?.size ?: 0} " +
+                "position=${context.position ?: -1}",
+        )
+    }
 }
 
 /**
@@ -239,7 +371,10 @@ private fun AppleLyricsSupplementHooks.hookApplePronunciationWordsGetter(
             return@installResultOverrideHook original
         }
         val line = chain.thisObject ?: return@installResultOverrideHook original
-        if (shouldHideMandarinPronunciation(lyricObject = line)) {
+        if (!requestedAppleLyricsRowVisibility().pronunciation ||
+            shouldHideMandarinPronunciation(lyricObject = line) ||
+            (!onlineFallback && !showNativeApplePronunciation())
+        ) {
             return@installResultOverrideHook emptyApplePronunciationWords(
                 originalVector = original,
                 mainWords = null,
@@ -255,7 +390,33 @@ private fun AppleLyricsSupplementHooks.hookApplePronunciationWordsGetter(
         } else {
             null
         }
-        val hasValidOfficialWords = officialPronunciation != null &&
+        val userPronunciation = if (onlineFallback) {
+            RomanizationPolicy.sanitizeSupplement(
+                originalText = originalText,
+                pronunciation = userCorrectionForNativeLine(line)?.pronunciation,
+            )?.takeIf {
+                if (RomanizationPolicy.isHangulPronunciation(it))
+                    showHangulSupplementPronunciation()
+                else showNativeApplePronunciation()
+            }
+        } else {
+            null
+        }
+        val selectedPronunciation = userPronunciation?.let {
+            ApplePronunciationSourcePolicy.Selection(it, fromSupplement = true)
+        } ?: ApplePronunciationSourcePolicy.select(
+            official = officialPronunciation,
+            supplement = onlinePronunciation,
+            priority = pronunciationSourcePriority(),
+            hangulOnly = nativeOnlineTranslationStore.hasHangulPronunciation(
+                currentAppleLyricsSongId
+            ),
+            allowAppleNative = showNativeApplePronunciation(),
+            allowHangulSupplement = showHangulSupplementPronunciation(),
+        )
+        val hasValidOfficialWords = selectedPronunciation.text != null &&
+            !selectedPronunciation.fromSupplement &&
+            officialPronunciation != null &&
             RomanizationPolicy.sanitize(
                 originalText = originalText,
                 pronunciation = nativeRawWordVectorText(original),
@@ -273,7 +434,9 @@ private fun AppleLyricsSupplementHooks.hookApplePronunciationWordsGetter(
                 pronunciationWordBegins = nativeRenderableWordBegins(original),
             )
         val mainTimingPronunciation = when {
-            officialPronunciation != null && !hasCompatibleOfficialWords -> {
+            selectedPronunciation.fromSupplement -> selectedPronunciation.text
+            selectedPronunciation.text != null &&
+                officialPronunciation != null && !hasCompatibleOfficialWords -> {
                 reportApplePronunciationRuntimeDiagnostic(
                     stage = "official_word_timing_fallback",
                     details = nativeLineDiagnosticDetails(
@@ -293,39 +456,154 @@ private fun AppleLyricsSupplementHooks.hookApplePronunciationWordsGetter(
                 )
                 officialPronunciation
             }
-            else -> onlinePronunciation
+            else -> null
         }
         val wordTrack = ApplePronunciationPolicy.wordTrack(
             hasValidOfficialPronunciation = hasCompatibleOfficialWords,
             hasOnlinePronunciation = mainTimingPronunciation != null,
         )
         val resolvedWords = when (wordTrack) {
-            ApplePronunciationWordTrack.OFFICIAL -> original
+            ApplePronunciationWordTrack.OFFICIAL -> {
+                pronunciationState.forgetLineWide(currentAppleLyricsSongId, originalText)
+                original
+            }
             ApplePronunciationWordTrack.MAIN_LINE_TIMING -> {
-                mainWords?.takeIf { nativeVectorSize(it) > 0 }?.also { vector ->
-                    registerApplePronunciationRenderPlan(
-                        vector = vector,
-                        pronunciation = requireNotNull(mainTimingPronunciation),
+                val pronunciation = requireNotNull(mainTimingPronunciation)
+                val begin = runCatching {
+                    (lyricsNativeCall(line, AppleMusicRuntimeMember.LYRICS_NATIVE_BEGIN_METHOD)
+                        as Number).toLong()
+                }.getOrNull()
+                val end = runCatching {
+                    (lyricsNativeCall(line, AppleMusicRuntimeMember.LYRICS_NATIVE_END_METHOD)
+                        as Number).toLong()
+                }.getOrNull()
+                val nativeTexts = AppleLyricTextTransform.withRawReads {
+                    nativeVectorItems(mainWords, limit = 256)
+                        .filterNot { word ->
+                            runCatching {
+                                lyricsNativeCall(
+                                    word, AppleMusicRuntimeMember.LYRICS_NATIVE_WHITESPACE_METHOD,
+                                ) as? Boolean
+                            }.getOrNull() == true
+                        }
+                        .map { word ->
+                            runCatching {
+                                lyricsNativeCall(
+                                    word, AppleMusicRuntimeMember.LYRICS_NATIVE_LINE_TEXT_METHOD,
+                                ) as? String
+                            }.getOrNull().orEmpty()
+                        }
+                }
+                val isAiReading = userPronunciation == null &&
+                    selectedPronunciation.fromSupplement &&
+                    mainTimingPronunciation == onlinePronunciation && begin != null && end != null &&
+                    mainTimingPronunciation == nativeOnlineTranslationStore.aiHangulPronunciation(
+                        currentAppleLyricsSongId, begin, end, originalText,
                     )
+                val sourceSpans = if (isAiReading) {
+                    nativeOnlineTranslationStore.aiHangulPronunciationSpans(
+                        currentAppleLyricsSongId, begin!!, end!!, originalText,
+                    )
+                } else null
+                val alignedWords = if (isAiReading) {
+                    val fromSource = sourceSpans?.let { spans ->
+                        AppleWordReadingAlignment.align(
+                            original = originalText.orEmpty(),
+                            appleWords = nativeTexts,
+                            spans = spans.map { span ->
+                                SourceReadingSpan(
+                                    span.start, span.end, span.source, "", span.hangul,
+                                )
+                            },
+                            expectedHangul = pronunciation,
+                        )
+                    }
+                    when (fromSource) {
+                        is WordAlignmentResult.Verified -> fromSource.words
+                        is WordAlignmentResult.Grouped -> fromSource.words
+                        else -> nativeOnlineTranslationStore.aiHangulPronunciationWords(
+                            currentAppleLyricsSongId, begin!!, end!!, originalText,
+                        )
+                    }
+                } else null
+                // Native pronunciation cells are a separate flexbox layout; they
+                // can expose Japanese fallback glyphs when word maps are partial.
+                // Korean supplement always uses a single safe interlinear row,
+                // with our own per-syllable Apple-clock animation.
+                val presentation = if (RomanizationPolicy.isHangulPronunciation(pronunciation)) {
+                    ApplePronunciationPresentationMode.LINE_WIDE
+                } else ApplePronunciationPolicy.presentationMode(
+                    pronunciation = pronunciation,
+                    hasOfficialTimedWords = false,
+                    nativeWords = nativeTexts,
+                    alignedWords = alignedWords,
+                )
+                if (presentation == ApplePronunciationPresentationMode.LINE_WIDE) {
+                    if (onlineFallback) {
+                        rememberLineWideApplePronunciation(
+                            originalText = originalText,
+                            pronunciation = pronunciation,
+                            begin = begin,
+                            end = end,
+                            timedWords = nativeMainWordTimings(mainWords).ifEmpty {
+                                // Some native Apple lines have only a real line
+                                // begin/end, without per-word times. Interpolate
+                                // Hangul across that genuine line window rather
+                                // than leaving a visible reading entirely static.
+                                if (begin != null && end != null && end > begin &&
+                                    !originalText.isNullOrBlank()
+                                ) listOf(AppleTimedSourceWord(originalText, begin, end))
+                                else emptyList()
+                            },
+                            phoneticSpans = sourceSpans.orEmpty().map { span ->
+                                ApplePronunciationSourceToken(
+                                    sourceStart = span.start,
+                                    sourceEnd = span.end,
+                                    hangul = span.hangul,
+                                    sourceText = span.source,
+                                )
+                            },
+                        )
+                    }
                     reportApplePronunciationRuntimeDiagnostic(
-                        stage = "word_track_registered",
-                        details = nativeLineDiagnosticDetails(
-                            line = line,
-                            pronunciation = mainTimingPronunciation,
-                        ) + ", method=$methodName/$parameterCount, " +
-                            "vector=${System.identityHashCode(vector)}, " +
-                            "words=${nativeVectorSize(vector)}, track=$wordTrack",
-                        dedupeKey = "word_track_registered:$methodName",
+                        stage = "safe_line_reading_registered",
+                        details = "words=${nativeTexts.size},readingChars=${pronunciation.length}," +
+                            "status=${if (begin != null && end != null) "ai_or_provider" else "unknown"}",
+                        dedupeKey = "safe_line_reading:$methodName",
                     )
-                } ?: emptyApplePronunciationWords(
+                    val empty = emptyApplePronunciationWords(original, mainWords)
+                    if (empty == null) {
+                        reportApplePronunciationRuntimeDiagnostic(
+                            stage = "linewide_native_vector_unavailable",
+                            details = nativeLineDiagnosticDetails(line, pronunciation),
+                            dedupeKey = "linewide_native_vector_unavailable:$methodName",
+                        )
+                    }
+                    empty ?: original
+                } else {
+                    pronunciationState.forgetLineWide(currentAppleLyricsSongId, originalText)
+                    mainWords?.takeIf { nativeVectorSize(it) > 0 }?.also { vector ->
+                        registerApplePronunciationRenderPlan(
+                            vector = vector,
+                            pronunciation = pronunciation,
+                            alignedWords = alignedWords,
+                        )
+                        reportApplePronunciationRuntimeDiagnostic(
+                            stage = "word_track_registered",
+                            details = "words=${nativeVectorSize(vector)},mode=$presentation," +
+                                "aligned=${if (alignedWords != null) 1 else 0}",
+                            dedupeKey = "word_track_registered:$methodName",
+                        )
+                    } ?: emptyApplePronunciationWords(original, mainWords) ?: original
+                }
+            }
+            ApplePronunciationWordTrack.HIDDEN -> {
+                pronunciationState.forgetLineWide(currentAppleLyricsSongId, originalText)
+                emptyApplePronunciationWords(
                     originalVector = original,
-                    mainWords = mainWords,
+                    mainWords = null,
                 ) ?: original
             }
-            ApplePronunciationWordTrack.HIDDEN -> emptyApplePronunciationWords(
-                originalVector = original,
-                mainWords = null,
-            ) ?: original
         }
         logApplePronunciationWordBinding(
             line = line,
@@ -538,6 +816,32 @@ private fun AppleLyricsSupplementHooks.debugAppleOfficialPronunciationAlignment(
         "pronunciation=${debugAppleWordTimings(pronunciation)}"
 }
 
+/** Read-only native timing snapshot for Hangul rendering; no JNI object escapes the hook. */
+private fun AppleLyricsSupplementHooks.nativeMainWordTimings(vector: Any?): List<AppleTimedSourceWord> =
+    AppleLyricTextTransform.withRawReads {
+        nativeVectorItems(vector, limit = 256).mapNotNull { word ->
+            runCatching {
+                if (lyricsNativeCall(
+                        word, AppleMusicRuntimeMember.LYRICS_NATIVE_WHITESPACE_METHOD,
+                    ) as? Boolean == true
+                ) return@mapNotNull null
+                val begin = (
+                    lyricsNativeCall(word, AppleMusicRuntimeMember.LYRICS_NATIVE_BEGIN_METHOD)
+                        as? Number
+                    )?.toLong() ?: return@mapNotNull null
+                val duration = (
+                    lyricsNativeCall(word, AppleMusicRuntimeMember.LYRICS_NATIVE_DURATION_METHOD)
+                        as? Number
+                    )?.toLong() ?: return@mapNotNull null
+                val text = lyricsNativeCall(
+                    word, AppleMusicRuntimeMember.LYRICS_NATIVE_LINE_TEXT_METHOD,
+                ) as? String ?: return@mapNotNull null
+                if (duration <= 0L || begin < 0L || text.isBlank()) return@mapNotNull null
+                AppleTimedSourceWord(text, begin, begin + duration)
+            }.getOrNull()
+        }
+    }
+
 private fun AppleLyricsSupplementHooks.debugAppleWordTimings(vector: Any?): List<AppleDebugWordTiming> =
     AppleLyricTextTransform.withRawReads {
         nativeVectorItems(vector, limit = 32).mapNotNull { word ->
@@ -647,8 +951,9 @@ private fun AppleLyricsSupplementHooks.emptyApplePronunciationWords(
 private fun AppleLyricsSupplementHooks.registerApplePronunciationRenderPlan(
     vector: Any,
     pronunciation: String,
+    alignedWords: List<com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation>? = null,
 ) {
-    pronunciationState.registerRenderPlan(vector, ApplePronunciationRenderPlan(pronunciation))
+    pronunciationState.registerRenderPlan(vector, ApplePronunciationRenderPlan(pronunciation, alignedWords))
 }
 
 private fun AppleLyricsSupplementHooks.consumeApplePronunciationRenderPlan(vector: Any): ApplePronunciationRenderPlan? =
@@ -686,17 +991,16 @@ private fun AppleLyricsSupplementHooks.buildApplePronunciationWordRenderContext(
     val segments = ApplePronunciationPolicy.displaySegments(
         pronunciation = plan.pronunciation,
         mainWordTexts = mainWordTexts,
+        alignedWords = plan.alignedWords,
     )
     if (segments.isEmpty()) return null
     reportApplePronunciationRuntimeDiagnostic(
         stage = "word_segments_mapped",
-        details = "mainWords=${mainWordTexts.joinToString(prefix = "[", postfix = "]")}, " +
-            "segments=${segments.joinToString(prefix = "[", postfix = "]")}",
-        dedupeKey = "word_segments_mapped:${mainWordTexts.joinToString("|")}:" +
-            plan.pronunciation,
+        details = "mainWordCount=${mainWordTexts.size}, " +
+            "segmentCount=${segments.size}, visibleSegments=${segments.count(String::isNotEmpty)}",
+        dedupeKey = "word_segments_mapped:${mainWordTexts.size}:${segments.size}",
     )
 
-    val lastVisibleSegment = segments.indexOfLast(String::isNotEmpty)
     val displayTextByWord = LinkedHashMap<ApplePronunciationWordKey, String>(words.size)
     words.forEach { word ->
         lyricsWordKey(word)?.let { key -> displayTextByWord[key] = "" }
@@ -704,11 +1008,9 @@ private fun AppleLyricsSupplementHooks.buildApplePronunciationWordRenderContext(
     contentWords.forEachIndexed { index, word ->
         val key = lyricsWordKey(word) ?: return@forEachIndexed
         val segment = segments[index]
-        displayTextByWord[key] = when {
-            segment.isEmpty() -> ""
-            index < lastVisibleSegment -> "$segment "
-            else -> segment
-        }
+        // Apple already lays out the native cells; inserted trailing spaces
+        // create false word gaps and can trigger an unwanted Hangul wrap.
+        displayTextByWord[key] = segment
     }
     return ApplePronunciationWordRenderContext(
         displayTextByWord = displayTextByWord,

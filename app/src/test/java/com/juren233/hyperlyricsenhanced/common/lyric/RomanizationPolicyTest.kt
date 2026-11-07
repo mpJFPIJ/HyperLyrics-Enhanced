@@ -61,4 +61,44 @@ class RomanizationPolicyTest {
         assertFalse(RomanizationPolicy.isLatinLanguageTag("zh-Hans"))
         assertFalse(RomanizationPolicy.isLatinLanguageTag(null))
     }
+
+    @Test
+    fun `accepts Hangul pronunciations for both English and Japanese supplements`() {
+        assertEquals(
+            "아이 러브 유",
+            RomanizationPolicy.sanitizeSupplement("I love you", "아이 러브 유"),
+        )
+        assertEquals(
+            "키미노 나와",
+            RomanizationPolicy.sanitizeSupplement("君の名は", "키미노 나와"),
+        )
+        assertEquals(
+            "아리가토",
+            RomanizationPolicy.sanitizeHangulSupplement("ありがとう", "아리가토"),
+        )
+        assertNull(RomanizationPolicy.sanitize("I love you", "아이 러브 유"))
+        assertNull(RomanizationPolicy.sanitizeSupplement("I love you", "アイ ラブ ユー"))
+        assertNull(RomanizationPolicy.sanitizeHangulSupplement("君の名は", "Kimi no na wa"))
+        assertNull(RomanizationPolicy.sanitizeSupplement("I love you", "아이 love 유"))
+        assertNull(RomanizationPolicy.sanitizeSupplement("안녕하세요", "안녕하세요"))
+        assertNull(RomanizationPolicy.sanitizeSupplement("...", "아이 러브 유"))
+        assertEquals(
+            "Kimi no na wa",
+            RomanizationPolicy.sanitizeSupplement("君の名は", "Kimi no na wa"),
+        )
+        assertTrue(RomanizationPolicy.isHangulPronunciation("키미노 나와"))
+        assertFalse(RomanizationPolicy.isHangulPronunciation("kimi no na wa"))
+    }
+
+    @Test
+    fun `Japanese prolonged vowel mark does not invalidate a Hangul pronunciation`() {
+        assertEquals(
+            "다링 한파나쿠 라부 토 키라메키 우키아시다츠 피로소피",
+            RomanizationPolicy.sanitizeHangulSupplement(
+                "ダーリン半端なくラブ！ときらめき浮き足立つフィロソフィ",
+                "다링 한파나쿠 라부 토 키라메키 우키아시다츠 피로소피",
+            ),
+        )
+        assertNull(RomanizationPolicy.sanitizeHangulSupplement("한국어ー", "한국어"))
+    }
 }

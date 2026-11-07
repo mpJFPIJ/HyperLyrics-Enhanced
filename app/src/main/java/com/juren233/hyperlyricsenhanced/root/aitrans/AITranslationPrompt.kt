@@ -14,7 +14,47 @@ internal object AITranslationPrompt {
         val artist = song?.artist ?: "Unknown Artist"
         val prompt = configs.prompt.takeIf { it.isNotBlank() } ?: DEFAULT_PROMPT
 
-        return AiTranslationConfigs.getPrompt(target, title, artist, prompt)
+        val basePrompt = AiTranslationConfigs.getPrompt(target, title, artist, prompt)
+        if (song == null || !AIPronunciationPolicy.shouldEnrich(song) ||
+            !AiProviderCapabilities.forConfig(configs).requestAiPronunciation
+        ) return basePrompt
+
+        return basePrompt + """
+
+# Additional pronunciation output (same API request; independent of translation)
+For BOTH Japanese and English ORIGINAL lyric lines, include the "roma" field
+as a natural Korean Hangul phonetic transcription of how the ORIGINAL line
+is sung or spoken. "roma" is a legacy field name: its value MUST be Hangul,
+NOT Latin-script Japanese romaji, Hepburn, English spelling, or IPA.
+Write every phonetic syllable in Korean Hangul for every Japanese/English line.
+Even if Apple supplies ja-Latn romanization, do not copy any Latin alphabet into
+"roma". For Japanese, first determine the standard reading of kanji + kana in the
+ORIGINAL sentence, then transcribe that Japanese SOUND into natural Hangul.
+Do not derive pronunciation from a Chinese interpretation, the Korean meaning,
+or a visually similar kanji. Use the surrounding Japanese grammar to resolve
+ambiguous kanji, and preserve long vowels, small tsu and syllable boundaries.
+Do not collapse an entire multi-word lyric line into one unspaced Hangul token.
+Separate meaningful spoken words or short phrases with natural spaces; do not
+invent spaces in the middle of one Japanese word merely to match a visual cell.
+Examples of sound accuracy: 駄目 -> 다메 (not 다무);
+脳みそ -> 노미소; 可愛い -> 카와이이; 君の名は -> 키미노 나와.
+Read the exact original line; never fabricate or paraphrase a different lyric.
+For English, preserve the actual spoken syllables, not the English spelling
+or the Korean meaning. Don't arbitrarily omit any original words.
+If uncertain, prefer a conservative common reading, not invented syllables.
+Do not omit "roma" for a Japanese/English line solely because translation exists.
+Examples:
+Japanese "君の名は" -> "키미노 나와" (NOT "kimi no na wa")
+Japanese "ありがとう" -> "아리가토"
+English "I love you" -> "아이 러브 유" (NOT "사랑해")
+"trans" is the Korean MEANING translation and "roma" is Korean-script SOUND.
+They must be separate even if the translated meaning is already in Korean.
+Do not generate pronunciation for original Korean or unrelated languages.
+For mixed Japanese-English songs, apply the appropriate reading per line.
+Keep the original index and "trans" field. Example:
+{"translations":[{"index":0,"trans":"너의 이름은","roma":"키미노 나와"}]}
+Output only one valid JSON object without Markdown.
+""".trimIndent()
     }
 }
 

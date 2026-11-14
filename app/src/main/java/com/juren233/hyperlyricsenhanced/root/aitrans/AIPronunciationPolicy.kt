@@ -1,7 +1,6 @@
 package com.juren233.hyperlyricsenhanced.root.aitrans
 
 import com.juren233.hyperlyricsenhanced.lyric.model.Song
-import com.juren233.hyperlyricsenhanced.common.lyric.RomanizationPolicy
 
 /**
  * Narrow enrichment gate: phonetic supplements for Japanese and English only.
@@ -9,13 +8,47 @@ import com.juren233.hyperlyricsenhanced.common.lyric.RomanizationPolicy
  */
 internal object AIPronunciationPolicy {
     fun shouldEnrich(song: Song): Boolean {
+        // Third-party Hangul readings can be very inaccurate. Their presence
+        // must not suppress the user-requested AI pronunciation pass.
+        // Only the original lyric language determines enrichment eligibility.
         val lines = song.lyrics.orEmpty()
-            .filter { !RomanizationPolicy.isHangulPronunciation(it.roma) }
             .mapNotNull { it.text?.trim() }
             .filter(String::isNotBlank)
         return lines.any(::hasJapaneseKana) || (lines.isNotEmpty() &&
             lines.count(::hasEnglishLetters) * 2 >= lines.size &&
             lines.none(::hasNonLatinLetters))
+    }
+
+    /** Do not count punctuation or a Korean original as a missing reading. */
+    fun eligibleForeignLine(text: String): Boolean {
+        val letters = text.codePoints().toArray().filter(Character::isLetter)
+        if (letters.isEmpty()) return false
+        if (letters.any {
+                Character.UnicodeScript.of(it) == Character.UnicodeScript.HANGUL
+            }) return false
+        return letters.any {
+            when (Character.UnicodeScript.of(it)) {
+                Character.UnicodeScript.HIRAGANA,
+                Character.UnicodeScript.KATAKANA,
+                Character.UnicodeScript.HAN,
+                Character.UnicodeScript.LATIN -> true
+                else -> false
+            }
+        }
+    }
+
+    fun missingReadingIndices(
+        lines: List<TranslationRequestItem>,
+        current: List<TranslationItem>,
+    ): Set<Int> {
+        val byIndex = current.associateBy { it.index }
+        return lines.asSequence()
+            .filter { eligibleForeignLine(it.text) }
+            .filterNot { line ->
+                com.juren233.hyperlyricsenhanced.common.lyric.RomanizationPolicy
+                    .isHangulPronunciation(byIndex[line.index]?.roma)
+            }
+            .map { it.index }.toSet()
     }
 
     private fun hasJapaneseKana(text: String): Boolean =

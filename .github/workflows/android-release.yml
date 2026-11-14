@@ -4,7 +4,7 @@ on:
   push:
     branches: [main, '[0-9]+.[0-9]+.[0-9]+']
   pull_request:
-    branches: [main, '[0-9]+.[0-9]+.[0-9]+']
+    branches: [main, 'feature/npatch-applemusic-ai-bridge', '[0-9]+.[0-9]+.[0-9]+']
   workflow_dispatch:
 
 concurrency:
@@ -105,7 +105,22 @@ jobs:
         run: |
           set -euo pipefail
           ./gradlew --no-daemon --max-workers=2 \
-            :app:testDebugUnitTest :app:lintDebug :app:lintRelease
+            :app:testDebugUnitTest :app:lintDebug :app:lintRelease \
+            -PciBuildCommit="$GITHUB_SHA" -PciBuildRun="$GITHUB_RUN_ID"
+
+      # Keep the test evidence available even when compilation or lint fails.
+      - name: Upload JVM test and lint reports
+        if: always() && steps.gate.outputs.skip != 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: unit-test-lint-reports-${{ github.run_number }}
+          path: |
+            app/build/test-results/testDebugUnitTest/**/*.xml
+            app/build/reports/tests/testDebugUnitTest/**
+            app/build/reports/lint-results-*.html
+            app/build/reports/lint-results-*.xml
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: 构建 Debug 或 Release Build
         if: steps.gate.outputs.skip != 'true'
@@ -117,10 +132,12 @@ jobs:
 
           if [[ "$CHANNEL" == "stable" || "$CHANNEL" == "beta" ]]; then
             ./gradlew --no-daemon --max-workers=2 assembleDebug assembleRelease \
-              --build-cache -PciVersionName="$FULL_NAME"
+              --build-cache -PciVersionName="$FULL_NAME" \
+              -PciBuildCommit="$GITHUB_SHA" -PciBuildRun="$GITHUB_RUN_ID"
           else
             ./gradlew --no-daemon --max-workers=2 assembleDebug \
-              --build-cache -PciVersionName="$FULL_NAME"
+              --build-cache -PciVersionName="$FULL_NAME" \
+              -PciBuildCommit="$GITHUB_SHA" -PciBuildRun="$GITHUB_RUN_ID"
           fi
 
       - name: 校验 Release Provider ABI Verify Release Provider ABI

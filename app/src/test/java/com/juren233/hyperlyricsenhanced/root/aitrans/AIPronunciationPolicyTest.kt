@@ -11,6 +11,23 @@ class AIPronunciationPolicyTest {
     private fun song(vararg texts: String): Song =
         Song(lyrics = texts.map { RichLyricLine(text = it) })
 
+    @Test fun aSingleMissingLineStillNeedsRepairWhenOtherLinesAreComplete() {
+        val input = listOf(
+            TranslationRequestItem(0, "ありがとう"),
+            TranslationRequestItem(1, "I miss you"),
+            TranslationRequestItem(2, "사랑해"),
+            TranslationRequestItem(3, "..."),
+        )
+        val cached = listOf(
+            TranslationItem(0, trans = "고마워", roma = "아리가토"),
+            TranslationItem(1, trans = "보고 싶어"),
+        )
+        assertTrue(AIPronunciationPolicy.missingReadingIndices(input, cached) == setOf(1))
+        assertTrue(AIPronunciationPolicy.missingReadingIndices(
+            input, cached + TranslationItem(1, "보고 싶어", "아이 미스 유"),
+        ).isEmpty())
+    }
+
     @Test fun enrichesJapaneseAndEnglishLyrics() {
         assertTrue(AIPronunciationPolicy.shouldEnrich(song("君の名は", "ありがとう")))
         assertTrue(AIPronunciationPolicy.shouldEnrich(song("I love you", "forever yours")))
@@ -34,7 +51,7 @@ class AIPronunciationPolicyTest {
             RichLyricLine(text = "こんにちは", roma = "콘니치와"),
             RichLyricLine(text = "ありがとう", roma = "아리가토"),
         ))
-        assertFalse(AIPronunciationPolicy.shouldEnrich(hangul))
+        assertTrue(AIPronunciationPolicy.shouldEnrich(hangul))
     }
 
     @Test fun pronunciationCacheDoesNotDestroyLegacyTranslationKey() {
@@ -54,7 +71,10 @@ class AIPronunciationPolicyTest {
         val english = AITranslationPrompt.build(cfg, song("I miss you"))
         val korean = AITranslationPrompt.build(cfg, song("안녕하세요"))
         assertTrue(jp.contains("MUST be Hangul"))
+        assertTrue(jp.contains("한국인이 실제 노래 가사"))
+        assertFalse(jp.contains("输入输出规范"))
         assertTrue(jp.contains("키미노 나와"))
+        assertTrue(jp.contains("Do not collapse"))
         assertTrue(english.contains("Korean Hangul"))
         assertFalse(korean.contains("MUST be Hangul"))
     }

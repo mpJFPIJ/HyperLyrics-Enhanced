@@ -88,6 +88,12 @@ internal class AppleDirectPlayer(
     private var registered = false
 
     private val translationReceiver = object : IAppleMusicTranslationReceiver.Stub() {
+        override fun onAiTranslationProgress(
+            stage: String?, batch: Int, totalBatches: Int, fragments: Int,
+        ) {
+            AppleAiProgressOverlay.update(stage ?: return, batch, totalBatches, fragments)
+        }
+
         override fun onOnlineTranslationResult(compressedSong: ByteArray) {
             val callbackStartedAtNanos = SystemClock.elapsedRealtimeNanos()
             pronunciationDiagnostic(
@@ -159,6 +165,14 @@ internal class AppleDirectPlayer(
         context = context,
         isSystemUiBridgeActive = { isActive },
         onTranslationReceived = onStandaloneAiTranslationReceived,
+        onTranslationCleared = { songId ->
+            onOnlineTranslationCleared(songId)
+            mainHandler.post {
+                android.widget.Toast.makeText(
+                    context, "현재 곡 AI 번역을 삭제했어요", android.widget.Toast.LENGTH_SHORT,
+                ).show()
+            }
+        },
     )
 
     private val registrationReceiver = object : BroadcastReceiver() {
@@ -329,6 +343,15 @@ internal class AppleDirectPlayer(
     override val isActive: Boolean
         get() = connection.current?.binder?.isBinderAlive == true
 
+    private var latestSongIdForAiClear: String? = null
+
+    /** Only the NPatch standalone AI cache is owned by this endpoint. */
+    fun clearCurrentSongAiTranslation(songId: String): Boolean {
+        if (isActive || latestSongIdForAiClear != songId) return false
+        val payload = latestSongPayload ?: return false
+        return appAiTranslation.clearSong(payload, songId)
+    }
+
     override fun setSong(song: Song?): Boolean {
         val payload = runCatching {
             song?.let { json.encodeToString(it).toByteArray(Charsets.UTF_8).deflate() }
@@ -341,8 +364,9 @@ internal class AppleDirectPlayer(
             return false
         }
         latestSongPayload = payload
+        latestSongIdForAiClear = song?.id
         // Clear any older fallback request once SystemUI's regular bridge is active.
-        appAiTranslation.submit(if (isActive) byteArrayOf() else payload)
+        appAiTranslation.submit(if (isActive) byteArrayOf() else payload, song?.id)
         return send(reconnectIfMissing = true) { target -> target.onSongChanged(payload) }
     }
 

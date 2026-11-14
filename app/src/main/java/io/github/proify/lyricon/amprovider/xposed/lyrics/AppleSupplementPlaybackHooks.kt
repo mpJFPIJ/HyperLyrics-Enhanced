@@ -281,7 +281,9 @@ internal fun AppleLyricsSupplementHooks.hookLyricBuildMethod() {
             applyConfiguredContentUiLanguageCallback()
             val onlineTranslation = resolvedSongId?.let(::hasAnyOnlineTranslation) == true
             val onlinePronunciation =
-                resolvedSongId?.let(nativeOnlineTranslationStore::hasPronunciation) == true
+                resolvedSongId?.let(::hasUserPronunciationCorrection) == true ||
+                    (isNativeOnlineTranslationEnabled() &&
+                        resolvedSongId?.let(nativeOnlineTranslationStore::hasPronunciation) == true)
             val officialPronunciation = contentSource == APPLE_LYRICS_REQUEST_SOURCE_APPLE &&
                 hasValidOfficialRomanization(songNative)
             // 补充歌词有自己的 requestMissingLyricsPresentationRefresh 收尾；

@@ -25,6 +25,8 @@ internal data class AppleLineWidePronunciationPayload(
     val pronunciation: String,
     val revision: Long,
     val sourcePriority: Int = 0,
+    val lineBeginMs: Long? = null,
+    val lineEndMs: Long? = null,
     val timedWords: List<AppleTimedSourceWord> = emptyList(),
     val phoneticSpans: List<ApplePronunciationSourceToken> = emptyList(),
     val repeatTimings: List<List<AppleTimedSourceWord>> = emptyList(),
@@ -273,6 +275,8 @@ internal class AppleLineWidePronunciationRow {
                         pronunciation = text,
                         timedWords = native,
                         phoneticSpans = payload.phoneticSpans,
+                        lineBeginMs = payload.lineBeginMs,
+                        lineEndMs = payload.lineEndMs,
                     )
                 },
             )

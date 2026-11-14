@@ -133,4 +133,41 @@ class AppleTimedPronunciationHighlightPolicyTest {
             assertFalse(verified.any { it.start == untimedIndex })
         }
     }
+    @Test
+    fun `partial Apple word times keep real anchors and animate missing syllables`() {
+        val units = AppleTimedPronunciationHighlightPolicy.units(
+            sourceText = "ABC", pronunciation = "가나다",
+            timedWords = listOf(
+                AppleTimedSourceWord("A", 100, 200),
+                AppleTimedSourceWord("C", 700, 800),
+            ),
+            lineBeginMs = 50, lineEndMs = 850,
+        )
+        assertEquals(3, units.size)
+        assertEquals(listOf(100L, 200L, 700L), units.map { it.beginMs })
+        assertEquals(listOf(200L, 700L, 800L), units.map { it.endMs })
+        assertEquals(0.5f, AppleTimedPronunciationHighlightPolicy.progress(450, units[1]), 0.001f)
+        assertEquals(0f, AppleTimedPronunciationHighlightPolicy.progress(450, units[2]), 0.001f)
+    }
+
+    @Test
+    fun `real native line window animates when word objects have no timestamps`() {
+        val units = AppleTimedPronunciationHighlightPolicy.units(
+            sourceText = "ありがとう", pronunciation = "아리가토",
+            timedWords = emptyList(), lineBeginMs = 1000, lineEndMs = 1800,
+        )
+        assertEquals(4, units.size)
+        assertTrue(units.all { it.endMs > it.beginMs })
+        assertEquals(1000L, units.first().beginMs)
+        assertEquals(1800L, units.last().endMs)
+    }
+
+    @Test
+    fun `invalid line bounds cannot be mistaken for verified karaoke timing`() {
+        assertTrue(AppleTimedPronunciationHighlightPolicy.units(
+            sourceText = "だめ", pronunciation = "다메",
+            timedWords = emptyList(), lineBeginMs = 900, lineEndMs = 800,
+        ).isEmpty())
+    }
+
 }

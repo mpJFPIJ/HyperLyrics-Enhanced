@@ -215,6 +215,8 @@ private fun AppleLyricsSupplementHooks.rememberLineWideApplePronunciation(
         pronunciation = pronunciation,
         revision = nativeOnlineTranslationStore.revision(),
         sourcePriority = pronunciationSourcePriority(),
+        lineBeginMs = begin,
+        lineEndMs = end,
         timedWords = timedWords,
         phoneticSpans = phoneticSpans,
     )

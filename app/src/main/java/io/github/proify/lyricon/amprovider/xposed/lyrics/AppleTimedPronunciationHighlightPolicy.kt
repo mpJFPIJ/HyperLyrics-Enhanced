@@ -43,6 +43,8 @@ internal object AppleTimedPronunciationHighlightPolicy {
         pronunciation: String,
         timedWords: List<AppleTimedSourceWord>,
         phoneticSpans: List<ApplePronunciationSourceToken> = emptyList(),
+        lineBeginMs: Long? = null,
+        lineEndMs: Long? = null,
     ): List<AppleTimedReadingUnit> {
         if (sourceText.isBlank() || pronunciation.isBlank()) return emptyList()
         val sourceChars = sourceText.indices.filter { sourceText[it].isLetterOrDigit() }
@@ -62,7 +64,9 @@ internal object AppleTimedPronunciationHighlightPolicy {
                 endMs = word.endMs,
             )
         }
-        if (located.isEmpty()) return emptyList()
+        val hasLineWindow = lineBeginMs != null && lineEndMs != null &&
+            lineBeginMs >= 0L && lineEndMs > lineBeginMs
+        if (located.isEmpty() && !hasLineWindow) return emptyList()
         val coveredSourcePositions = BooleanArray(sourceText.length)
         located.forEach { word ->
             for (index in word.sourceStart until word.sourceEnd) {
@@ -80,10 +84,26 @@ internal object AppleTimedPronunciationHighlightPolicy {
             val word = located.firstOrNull { native ->
                 if (ending) sourceOffset > native.sourceStart && sourceOffset <= native.sourceEnd
                 else sourceOffset >= native.sourceStart && sourceOffset < native.sourceEnd
-            } ?: return null
-            val fraction = ((sourceOffset - word.sourceStart) /
-                (word.sourceEnd - word.sourceStart)).coerceIn(0.0, 1.0)
-            return (word.beginMs + (word.endMs - word.beginMs) * fraction).roundToLong()
+            }
+            if (word != null) {
+                val fraction = ((sourceOffset - word.sourceStart) /
+                    (word.sourceEnd - word.sourceStart)).coerceIn(0.0, 1.0)
+                return (word.beginMs + (word.endMs - word.beginMs) * fraction).roundToLong()
+            }
+            // Some Apple rows expose only some word timestamps. Preserve each
+            // real timestamp; interpolate *only the uncovered interval* between
+            // neighboring Apple words and/or the genuine native line boundaries.
+            if (!hasLineWindow) return null
+            val before = located.lastOrNull { it.sourceEnd <= sourceOffset }
+            val after = located.firstOrNull { it.sourceStart >= sourceOffset }
+            val sourceFrom = (before?.sourceEnd ?: 0).toDouble()
+            val sourceTo = (after?.sourceStart ?: sourceText.length).toDouble()
+            val timeFrom = before?.endMs ?: lineBeginMs!!
+            val timeTo = after?.beginMs ?: lineEndMs!!
+            if (sourceTo <= sourceFrom || timeTo <= timeFrom) return null
+            val fraction = ((sourceOffset - sourceFrom) /
+                (sourceTo - sourceFrom)).coerceIn(0.0, 1.0)
+            return (timeFrom + (timeTo - timeFrom) * fraction).roundToLong()
         }
 
         // Validate a *complete* reading before taking its exact source offsets.
@@ -117,12 +137,12 @@ internal object AppleTimedPronunciationHighlightPolicy {
         } else {
             // If Apple's timing is partial, estimating the whole reading
             // from the remaining words would light missing syllables too early.
-            if (!fullNativeCoverage) return emptyList()
+            if (!fullNativeCoverage && !hasLineWindow) return emptyList()
             // Manual/unsupported text has no verified phonetic token map.
             // Use Apple word times, distributing syllables across the source;
             // this approximation is still progressive rather than a whole-line flash.
-            val sourceStart = located.first().sourceStart.toDouble()
-            val sourceEnd = located.last().sourceEnd.toDouble()
+            val sourceStart = 0.0
+            val sourceEnd = sourceText.length.toDouble()
             val width = sourceEnd - sourceStart
             List(pronouncedOffsets.size) { index ->
                 (sourceStart + width * index / pronouncedOffsets.size) to

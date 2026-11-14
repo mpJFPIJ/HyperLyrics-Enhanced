@@ -22,11 +22,15 @@ internal object AppleMusicSourcePhonetics {
             // including a single-kana-plus-kanji line. Entirely unknown
             // kanji (e.g. 未知語 -> invented 키코) still fail closed.
             val kanaCount = sourceText.count { it in '\u3040'..'\u30ff' }
+            val englishOnly = sourceText.any { it in 'a'..'z' || it in 'A'..'Z' } &&
+                sourceText.none { it in '\u3040'..'\u30ff' || it in '\u3400'..'\u9fff' ||
+                    it in '가'..'힣' }
             val previousReading = RomanizationPolicy.sanitizeHangulSupplement(
                 sourceText, line.roma,
             )?.takeIf { candidate ->
-                kanaCount >= 1 && candidate.count { it in '가'..'힣' } >=
-                    maxOf(1, kanaCount / 2)
+                (englishOnly || kanaCount >= 1) &&
+                    candidate.count { it in '가'..'힣' } >=
+                        maxOf(1, kanaCount / 2)
             }
             return line.copy(
                 roma = previousReading,

@@ -8,6 +8,16 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AppleMusicSourcePhoneticsTest {
+    @Test fun unsupportedEnglishSourceKeepsValidAiHangulFallback() {
+        val text = "I miss everything about you"
+        val line = RichLyricLine(text = text, roma = "아이 미스 에브리싱 어바웃 유",
+            translation = "너의 모든 게 그리워")
+        val missing = LineReadingResult(null, emptyList(), LineReadingStatus.MISSING_UNSUPPORTED)
+        val result = AppleMusicSourcePhonetics.attach(line, text, missing)
+        assertEquals(line.roma, result.roma)
+        assertEquals("AI_FALLBACK_UNVERIFIED", result.pronunciationStatus)
+    }
+
     @Test fun inheritedReadingMustNotHideNewlyVerifiedLocalPronunciation() {
         val line = RichLyricLine(
             text = "駄目", words = listOf(LyricWord(text = "駄目")),

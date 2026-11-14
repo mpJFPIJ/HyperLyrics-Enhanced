@@ -206,11 +206,18 @@ object AITranslator {
                 song, AiLyricComposition.merge(legacyResults.orEmpty(), locallyRead), forceOverride,
             )
         }
-        return AITranslationApplicator.apply(
-            song, AiLyricComposition.merge(
-                mergeWithLegacyTranslations(legacyResults, apiResults), locallyRead,
-            ), forceOverride,
+        val composed = AiLyricComposition.merge(
+            mergeWithLegacyTranslations(legacyResults, apiResults), locallyRead,
         )
+        // A translation-only provider may return every Korean meaning but zero
+        // Hangul readings. Repair each *missing* Japanese/English line separately,
+        // rather than leaving it permanently blank just because most lines passed.
+        val completed = maybeRepairCachedPhonetics(
+            songContentId, configs, song, originalLines, includePronunciation,
+            composed, startingEpoch,
+        )
+        if (cache.currentGroupEpoch(groupId) != startingEpoch) return song
+        return AITranslationApplicator.apply(song, completed, forceOverride)
     }
 
     private fun locallyReadableSong(song: Song): List<TranslationItem> {
@@ -252,9 +259,11 @@ object AITranslator {
         expectedEpoch: Long,
     ): List<TranslationItem> {
         if (!includePronunciation ||
-            !AiProviderCapabilities.forConfig(configs).requestAiPronunciation ||
-            !KoreanLyricOutputPolicy.needsPronunciationRepair(cached, originalLines.size) ||
-            GroqApiKeyPool.configured(configs).isEmpty()
+            GroqApiKeyPool.configured(configs).isEmpty() ||
+            AIPronunciationPolicy.missingReadingIndices(
+                originalLines.mapIndexed { index, line -> TranslationRequestItem(index, line) },
+                cached,
+            ).isEmpty()
         ) return cached
         val now = System.nanoTime() / 1_000_000L
         val last = phoneticsRepairAttemptAt[key]

@@ -1,5 +1,6 @@
 package com.juren233.hyperlyricsenhanced.root.aitrans
 
+import com.juren233.hyperlyricsenhanced.common.lyric.RomanizationPolicy
 import com.juren233.hyperlyricsenhanced.common.extensions.json
 import com.juren233.hyperlyricsenhanced.common.extensions.toJson
 import com.juren233.hyperlyricsenhanced.lyric.model.Song
@@ -218,11 +219,19 @@ JSON 객체 형식: {"translations":[{"index":3,"trans":"","roma":"다메"}]}.
         payload: TranslationRequest,
         items: List<TranslationItem>,
     ): List<TranslationItem> {
-        if (song == null || !AIPronunciationPolicy.shouldEnrich(song) ||
-            !KoreanLyricOutputPolicy.needsPronunciationRepair(items, payload.lyrics.size)
-        ) return items
+        if (song == null || !AIPronunciationPolicy.shouldEnrich(song)) return items
         if (GroqApiKeyPool.configured(configs).isEmpty()) return items
-        LogManager.i("AppleMusicAiService", "stage=groq_phonetics_repair_start")
+        val missingIndices = AIPronunciationPolicy.missingReadingIndices(payload.lyrics, items)
+        if (missingIndices.isEmpty()) return items
+        // One bounded call for the missing lines only. Never regenerate a good
+        // reading or include original Korean/punctuation lines in this request.
+        val missingPayload = TranslationRequest(
+            payload.lyrics.filter { it.index in missingIndices },
+        )
+        LogManager.i(
+            "AppleMusicAiService",
+            "stage=groq_phonetics_repair_start missing=${missingPayload.lyrics.size}",
+        )
         val prompt = """
 너는 일본어·영어 노래 원문을 한글 소리로 옮기는 전문 발음 교열자다.
 일본어 한자·히라가나·가타카나를 문맥에 맞게 실제 일본어 발음으로 읽는다.
@@ -237,20 +246,20 @@ JSON 객체 하나만 출력: {"translations":[{"index":0,"trans":"","roma":"키
             model = FALLBACK_MODEL,
             messages = listOf(
                 ChatMessage("system", prompt),
-                ChatMessage("user", payload.toJson()),
+                ChatMessage("user", missingPayload.toJson()),
             ),
             responseFormat = ResponseFormat("json_object"),
             reasoningFormat = reasoningFormatFor(FALLBACK_MODEL),
             reasoningEffort = "low",
             maxCompletionTokens = AiTranslationRecoveryPolicy.outputTokenBudget(
-                configs.maxTokens, payload.lyrics.size,
+                configs.maxTokens, missingPayload.lyrics.size,
             ).coerceAtMost(8_192),
         )
         val response = send(configs, request.toJson(), "phonetics") ?: return items
         val content = extractContent(response) ?: return items
         val parsed = runCatching {
             AITranslationResponseParser.parse(
-                content, payload.lyrics.map { it.index }.toSet(),
+                content, missingIndices,
             )
         }.getOrNull().orEmpty()
         val merged = KoreanLyricOutputPolicy.mergePhonetics(items, parsed)

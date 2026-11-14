@@ -19,6 +19,38 @@ internal object AIPronunciationPolicy {
             lines.none(::hasNonLatinLetters))
     }
 
+    /** Do not count punctuation or a Korean original as a missing reading. */
+    fun eligibleForeignLine(text: String): Boolean {
+        val letters = text.codePoints().toArray().filter(Character::isLetter)
+        if (letters.isEmpty()) return false
+        if (letters.any {
+                Character.UnicodeScript.of(it) == Character.UnicodeScript.HANGUL
+            }) return false
+        return letters.any {
+            when (Character.UnicodeScript.of(it)) {
+                Character.UnicodeScript.HIRAGANA,
+                Character.UnicodeScript.KATAKANA,
+                Character.UnicodeScript.HAN,
+                Character.UnicodeScript.LATIN -> true
+                else -> false
+            }
+        }
+    }
+
+    fun missingReadingIndices(
+        lines: List<TranslationRequestItem>,
+        current: List<TranslationItem>,
+    ): Set<Int> {
+        val byIndex = current.associateBy { it.index }
+        return lines.asSequence()
+            .filter { eligibleForeignLine(it.text) }
+            .filterNot { line ->
+                com.juren233.hyperlyricsenhanced.common.lyric.RomanizationPolicy
+                    .isHangulPronunciation(byIndex[line.index]?.roma)
+            }
+            .map { it.index }.toSet()
+    }
+
     private fun hasJapaneseKana(text: String): Boolean =
         text.codePoints().anyMatch { code ->
             when (Character.UnicodeScript.of(code)) {

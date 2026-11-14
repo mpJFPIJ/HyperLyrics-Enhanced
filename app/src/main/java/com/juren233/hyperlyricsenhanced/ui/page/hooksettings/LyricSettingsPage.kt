@@ -521,14 +521,14 @@ fun LyricSettingsPage() {
                                 onClick = { showGroqKeyDialog = true },
                             )
                             ArrowPreference(
-                                title = if (koreanLocale) "권장 모델: Gemini 3.8 Flash"
-                                    else "Recommended model: Gemini 3.8 Flash",
+                                title = if (koreanLocale) "권장 번역 모델: Cohere North Small Translate"
+                                    else "Recommended translator: Cohere North Small Translate",
                                 summary = if (koreanLocale)
-                                    "한국어 가사 번역은 Gemini 3.8 Flash, 일본어 발음은 Sudachi·Apple 원본 타이밍을 우선 사용합니다. Google Gemini API 키를 위에 등록해야 합니다. 기존 키는 삭제하지 않습니다."
-                                    else "Use Gemini 3.8 Flash for Korean lyric translation and Sudachi/Apple timing for readings. Enter a Google Gemini API key above; existing keys are not erased.",
+                                    "일본어·한국어 번역 전용 Cohere North와 Sudachi/Apple 원본 발음 시간 처리를 분리합니다. Cohere API 키가 필요하며, 기존 API 키는 삭제하지 않습니다."
+                                    else "Separate Japanese-to-Korean translation with Cohere North from Sudachi/Apple-timed readings. Requires a Cohere API key; existing keys are preserved.",
                                 onClick = {
-                                    model = "gemini-3.8-flash"
-                                    baseUrl = "https://generativelanguage.googleapis.com/v1beta/openai/"
+                                    model = "north-small-translate-1.0"
+                                    baseUrl = "https://api.cohere.ai/v2"
                                     targetLang = "한국어"
                                     aiTransEnabled = true
                                     webSearchEnabled = false

@@ -716,8 +716,8 @@ object RootConstants {
     const val DEFAULT_HOOK_AI_TRANS_WEB_SEARCH = false
     const val DEFAULT_HOOK_AI_TRANS_SHOW_PROGRESS = false
     const val DEFAULT_HOOK_AI_TRANS_TARGET_LANG = "한국어"
-    const val DEFAULT_HOOK_AI_TRANS_MODEL = "gemini-3.8-flash"
-    const val DEFAULT_HOOK_AI_TRANS_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
+    const val DEFAULT_HOOK_AI_TRANS_MODEL = "north-small-translate-1.0"
+    const val DEFAULT_HOOK_AI_TRANS_BASE_URL = "https://api.cohere.ai/v2"
     const val DEFAULT_HOOK_AI_TRANS_PROMPT = """당신은 일본어·영어 노래의 문맥을 정확히 읽는 전문 한국어 가사 번역가입니다.
 가사 전체의 화자·감정·시제·은유를 파악하고 각 줄의 본래 의미를 자연스러운 한국어로 전달하세요.
 원문에 없는 비유, 감정, 인물, 사건, 라임을 창작하지 마세요.

@@ -222,6 +222,11 @@ class AppleMusicAiTranslationService : Service() {
                         // Korean original tracks must never receive AI Korean subtitles,
                         // including from previously cached model responses.
                         if (com.juren233.hyperlyricsenhanced.root.aitrans.KoreanSongTranslationPolicy
+                                .isKoreanTarget(prefs.getString(
+                                    RootConstants.KEY_HOOK_AI_TRANS_TARGET_LANG,
+                                    RootConstants.DEFAULT_HOOK_AI_TRANS_TARGET_LANG,
+                                )) &&
+                            com.juren233.hyperlyricsenhanced.root.aitrans.KoreanSongTranslationPolicy
                                 .isKoreanSong(song.lyrics.orEmpty().map { it.text.orEmpty() })
                         ) {
                             sendProgress(serial, requestKey, AiTranslationProgress("skipped"))

@@ -57,7 +57,8 @@ object AITranslator {
         onProgress: ((AiTranslationProgress) -> Unit)? = null,
     ): Song {
         // Do not re-translate Korean songs or restore stale Korean-to-Korean AI caches.
-        if (KoreanSongTranslationPolicy.isKoreanSong(
+        if (KoreanSongTranslationPolicy.isKoreanTarget(configs.targetLanguage) &&
+            KoreanSongTranslationPolicy.isKoreanSong(
                 song.lyrics.orEmpty().map { it.text.orEmpty() },
             )
         ) {

@@ -56,16 +56,15 @@ internal object AppleMusicSourcePhonetics {
             spans = analyzed.spans,
             expectedHangul = reading,
         )
+        val projected = AppleNativeReadingProjection.project(
+            original = sourceText,
+            appleWords = line.words.orEmpty().map { it.text.orEmpty() },
+            spans = analyzed.spans,
+            expectedHangul = reading,
+        )
         return line.copy(
             roma = reading,
-            pronunciationWords = when (alignment) {
-                is WordAlignmentResult.Verified -> alignment.words
-                    .takeIf { words -> words.all { it.hangul.isNotBlank() } }
-                // A grouped pronunciation has a blank native word cell. Apple
-                // can show that cell's Japanese text in the reading row.
-                is WordAlignmentResult.Grouped -> null
-                else -> null
-            },
+            pronunciationWords = projected?.words,
             pronunciationSpans = analyzed.spans.map { span ->
                 LyricPronunciationSpan(
                     start = span.sourceStart,
@@ -74,10 +73,9 @@ internal object AppleMusicSourcePhonetics {
                     hangul = span.hangul,
                 )
             },
-            pronunciationStatus = when (alignment) {
-                is WordAlignmentResult.Verified ->
-                    if (alignment.words.all { it.hangul.isNotBlank() }) "ALIGNED" else "LINE_WIDE"
-                is WordAlignmentResult.Grouped -> "LINE_WIDE"
+            pronunciationStatus = when {
+                projected?.approximate == true -> "PROJECTED_NATIVE_WORDS"
+                projected != null -> "ALIGNED"
                 else -> "LINE_WIDE"
             },
         )

@@ -11,6 +11,7 @@ import android.util.Log
 import com.juren233.hyperlyricsenhanced.BuildConfig
 import com.juren233.hyperlyricsenhanced.common.RootConstants
 import com.juren233.hyperlyricsenhanced.common.lyric.RomanizationPolicy
+import com.juren233.hyperlyricsenhanced.root.aitrans.AppleNativeReadingProjection
 import com.juren233.hyperlyricsenhanced.root.aitrans.AppleWordReadingAlignment
 import com.juren233.hyperlyricsenhanced.root.aitrans.SourceReadingSpan
 import com.juren233.hyperlyricsenhanced.root.aitrans.WordAlignmentResult
@@ -533,7 +534,17 @@ private fun AppleLyricsSupplementHooks.hookApplePronunciationWordsGetter(
                             expectedHangul = pronunciation,
                         )
                     }
-                    when (fromSource) {
+                    val projected = sourceSpans?.let { spans ->
+                        AppleNativeReadingProjection.project(
+                            original = originalText.orEmpty(),
+                            appleWords = nativeTexts,
+                            spans = spans.map {
+                                SourceReadingSpan(it.start, it.end, it.source, "", it.hangul)
+                            },
+                            expectedHangul = pronunciation,
+                        )
+                    }
+                    projected?.words ?: when (fromSource) {
                         is WordAlignmentResult.Verified -> fromSource.words
                         is WordAlignmentResult.Grouped -> fromSource.words
                         else -> nativeOnlineTranslationStore.aiHangulPronunciationWords(

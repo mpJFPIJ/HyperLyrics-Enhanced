@@ -22,7 +22,11 @@ internal object ApplePronunciationPolicy {
                     // Japanese glyph when the override is empty. Never use a
                     // grouped morpheme or punctuation gap as a timed word.
                     reading.hangul.isNotBlank() &&
-                    RomanizationPolicy.isHangulPronunciation(reading.hangul)
+                    (RomanizationPolicy.isHangulPronunciation(reading.hangul) ||
+                        (source.none(Char::isLetterOrDigit) &&
+                            reading.hangul ==
+                                com.juren233.hyperlyricsenhanced.root.aitrans
+                                    .AppleNativeReadingProjection.EMPTY_PRONUNCIATION_CELL))
             }
         ) return null
         return alignedWords.map { it.hangul }.takeIf {

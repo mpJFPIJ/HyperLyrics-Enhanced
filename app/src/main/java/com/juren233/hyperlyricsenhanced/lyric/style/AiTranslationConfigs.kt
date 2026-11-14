@@ -155,8 +155,11 @@ trans에는 한국어로 옮긴 뜻만 적는다. 별도의 한글 발음 지시
                 setOf("한국어", "한국말", "korean", "ko", "ko-kr")
             return (if (koreanTarget) KOREAN_CORE_PROMPT else CORE_PROMPT)
                 .replace("{style_prompt}",
-                    if (koreanTarget && prompt.trim() == USER_PROMPT.trim())
-                        KOREAN_STYLE_PROMPT else prompt
+                    if (koreanTarget && (
+                            prompt.trim() == USER_PROMPT.trim() ||
+                            prompt.trimStart().startsWith("你是一个歌词翻译专家，遵循") ||
+                            prompt.trimStart().startsWith("你是本地化歌词翻译专家")
+                        )) KOREAN_STYLE_PROMPT else prompt
                 )
                 .replace("{title}", escape(title))
                 .replace("{artist}", escape(artist))

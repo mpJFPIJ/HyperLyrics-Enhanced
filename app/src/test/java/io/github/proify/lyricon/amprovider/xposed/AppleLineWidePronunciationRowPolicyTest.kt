@@ -8,6 +8,13 @@ import org.junit.Test
 
 class AppleLineWidePronunciationRowPolicyTest {
     @Test
+    fun `verified native source can have Japanese translation following it`() {
+        val cells = listOf("君", "の", "名は", "あなたの名前は")
+        assertEquals(3, AppleLineWidePronunciationRowPolicy.insertionIndex("君の名は", cells))
+        assertNull(AppleLineWidePronunciationRowPolicy.verifiedInsertionIndex("君の名は", cells))
+    }
+
+    @Test
     fun `reading is inserted directly after source cells rather than after later translation`() {
         assertEquals(
             3,

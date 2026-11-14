@@ -225,6 +225,7 @@ internal class AppleLineWidePronunciationRow {
         currentRevision: Long,
         visible: Boolean,
         currentSourcePriority: Int,
+        trustedHolder: Boolean = false,
         playbackPositionMs: () -> Long? = { null },
     ): Boolean {
         val anchor = anchor(root) ?: return false
@@ -235,9 +236,12 @@ internal class AppleLineWidePronunciationRow {
         ) return false
 
         val childText = visibleNativeCellTexts(root).orEmpty()
-        val insertionIndex = AppleLineWidePronunciationRowPolicy.verifiedInsertionIndex(
-            payload?.sourceText.orEmpty(), childText,
-        ) ?: return false
+        val insertionIndex = (if (trustedHolder)
+            AppleLineWidePronunciationRowPolicy.insertionIndex(
+                payload?.sourceText.orEmpty(), childText,
+            ) else AppleLineWidePronunciationRowPolicy.verifiedInsertionIndex(
+                payload?.sourceText.orEmpty(), childText,
+            )) ?: return false
         val sourceWords = (0 until insertionIndex).flatMap { index ->
             nativeWordTexts(anchor.getChildAt(index))
         }
@@ -249,8 +253,7 @@ internal class AppleLineWidePronunciationRow {
             this.sourceWords = sourceWords
             setTextSize(
                 TypedValue.COMPLEX_UNIT_PX,
-                sourceStyle?.textSize?.times(0.49f)
-                    ?: (16f * resources.displayMetrics.scaledDensity),
+                sourceStyle.textSize * 0.88f,
             )
             // Any syllable with no verified native timing stays visibly dim.
             setTextColor(Color.rgb(110, 110, 110))

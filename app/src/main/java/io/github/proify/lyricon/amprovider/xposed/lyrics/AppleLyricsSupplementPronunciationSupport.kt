@@ -249,10 +249,22 @@ internal fun AppleLyricsSupplementHooks.bindLineWidePronunciation(
     // Verify the actual Japanese source cells, independent of whether the
     // following translation is Korean, English, Chinese or something else.
     // This also prevents recycled holders from displaying the wrong line.
+    // A ViewHolder-specific payload came from the same native lyric instance;
+    // it may safely precede a Japanese-language translation. Source-only cached
+    // lookups still require a strict no-Japanese-continuation guard.
+    val holderPayload = pronunciationState.lineWideForHolder(
+        holder = context.holder,
+        songId = songId,
+        observedSourceText = null,
+        revision = revision,
+    )
+    val trustedHolder = payload != null && payload === holderPayload
     val sourceMatches = payload == null ||
-        AppleLineWidePronunciationRowPolicy.verifiedInsertionIndex(
+        (if (trustedHolder) AppleLineWidePronunciationRowPolicy.insertionIndex(
             payload.sourceText, observedCells,
-        ) != null
+        ) else AppleLineWidePronunciationRowPolicy.verifiedInsertionIndex(
+            payload.sourceText, observedCells,
+        )) != null
     val shown = lineWidePronunciationRow.bind(
         root = root,
         payload = payload.takeIf { sourceMatches },
@@ -261,6 +273,7 @@ internal fun AppleLyricsSupplementHooks.bindLineWidePronunciation(
         visible = requestedAppleLyricsRowVisibility().pronunciation &&
             showHangulSupplementPronunciation() && !shouldHideMandarinPronunciation(),
         currentSourcePriority = pronunciationSourcePriority(),
+        trustedHolder = trustedHolder,
         playbackPositionMs = { appleLyricsCurrentPlaybackPositionMs() },
     )
     val count = if (shown) lineWideShownDiagnosticCount.incrementAndGet()
@@ -528,13 +541,12 @@ private fun AppleLyricsSupplementHooks.hookApplePronunciationWordsGetter(
                         )
                     }
                 } else null
-                // Native pronunciation cells are a separate flexbox layout; they
-                // can expose Japanese fallback glyphs when word maps are partial.
-                // Korean supplement always uses a single safe interlinear row,
-                // with our own per-syllable Apple-clock animation.
-                val presentation = if (RomanizationPolicy.isHangulPronunciation(pronunciation)) {
-                    ApplePronunciationPresentationMode.LINE_WIDE
-                } else ApplePronunciationPolicy.presentationMode(
+                // Reuse Apple's own native pronunciation-cell renderer whenever
+                // every original word has a verified Hangul counterpart. This
+                // inherits Apple's real word clock, font layout and highlight.
+                // A partial/grouped map must not leak Japanese glyphs in empty
+                // pronunciation cells; only those rows take the safe fallback.
+                val presentation = ApplePronunciationPolicy.presentationMode(
                     pronunciation = pronunciation,
                     hasOfficialTimedWords = false,
                     nativeWords = nativeTexts,

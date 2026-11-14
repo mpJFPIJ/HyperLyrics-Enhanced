@@ -11,6 +11,25 @@ import org.junit.Test
 
 class ApplePronunciationPolicyTest {
     @Test
+    fun `fully verified reading prefers Apple native word pronunciation cells`() {
+        val words = listOf(
+            com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation("君", "키미"),
+            com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation("の", "노"),
+            com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation("名は", "나와"),
+        )
+        assertEquals(
+            ApplePronunciationPresentationMode.ALIGNED_WORDS,
+            ApplePronunciationPolicy.presentationMode(
+                "키미노나와", false, listOf("君", "の", "名は"), words,
+            ),
+        )
+        assertEquals(listOf("키미", "노", "나와"),
+            ApplePronunciationPolicy.verifiedNativeSegments(
+                "키미노나와", listOf("君", "の", "名は"), words,
+            ))
+    }
+
+    @Test
     fun `never sends a grouped Japanese morpheme with an empty native word cell to karaoke renderer`() {
         val grouped = listOf(
             com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation("ダー", "다린"),

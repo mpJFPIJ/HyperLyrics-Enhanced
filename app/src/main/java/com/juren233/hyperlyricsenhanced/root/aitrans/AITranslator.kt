@@ -68,7 +68,18 @@ object AITranslator {
         if (!configs.isUsable) {
             HookLogger.w("AITranslator", "跳过翻译：配置不完整，API Key 或其他配置为空")
             onProgress?.invoke(AiTranslationProgress("pronouncing"))
-            return AITranslationApplicator.apply(song, locallyReadableSong(song), forceOverride)
+            val local = locallyReadableSong(song)
+            // Groq is an independent, optional pronunciation-only provider:
+            // a missing/expired Cohere translation key must not suppress it.
+            val lines = song.lyrics.orEmpty().map { it.text.orEmpty() }
+            val request = TranslationRequest(lines.mapIndexed { index, text ->
+                TranslationRequestItem(index, text)
+            })
+            val recovered = if (GroqApiKeyPool.configured(configs).isNotEmpty() &&
+                AIPronunciationPolicy.shouldEnrich(song)
+            ) GroqMultiModelClient.enrichMissingPronunciation(configs, song, request, local)
+            else local
+            return AITranslationApplicator.apply(song, recovered, forceOverride)
         }
         if (song.lyrics.isNullOrEmpty()) return song
 
@@ -202,9 +213,15 @@ object AITranslator {
         if (cache.currentGroupEpoch(groupId) != startingEpoch) return song
         if (apiResults.isNullOrEmpty()) {
             HookLogger.w("AITranslator", "翻译失败：未能获取到 ${song.name} 的 AI 翻译")
-            return AITranslationApplicator.apply(
-                song, AiLyricComposition.merge(legacyResults.orEmpty(), locallyRead), forceOverride,
+            // A translation network error should never suppress pronunciation
+            // already known locally or available from the independent key pool.
+            val previous = AiLyricComposition.merge(legacyResults.orEmpty(), locallyRead)
+            val recovered = maybeRepairCachedPhonetics(
+                songContentId, configs, song, originalLines, includePronunciation,
+                previous, startingEpoch,
             )
+            if (cache.currentGroupEpoch(groupId) != startingEpoch) return song
+            return AITranslationApplicator.apply(song, recovered, forceOverride)
         }
         val composed = AiLyricComposition.merge(
             mergeWithLegacyTranslations(legacyResults, apiResults), locallyRead,

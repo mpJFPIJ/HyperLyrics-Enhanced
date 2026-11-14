@@ -96,7 +96,7 @@ data class AiTranslationConfigs(
 4. 원문의 말투(반말·존댓말·독백·명령), 풍자·속어·완곡한 표현을 문맥에 맞게 보존한다.
 5. 앞뒤 줄과 연결되는 조사·주어·시제를 점검하고, 한국어에서 어색한 직역과 과장된 표현을 스스로 교열한다.
 6. 가사를 합치거나 쪼개지 않는다. 원문 내용과 의미를 임의로 생략하지 않는다.
-7. 이미 한국어인 줄, 기호·숫자만 있는 줄은 번역을 생략할 수 있다. 다른 언어로 된 의미 있는 가사는 빠뜨리지 않는다.
+7. 이미 한국어인 원문은 번역하지 않는다. 일본어·영어가 섞인 곡에서도 한국어 줄을 다시 쓰지 않는다. 비한국어 의미 있는 줄은 빠뜨리지 않는다.
 8. 입력의 index를 원래 값 그대로 사용한다. 순서대로, 중복 없이, 없는 번호를 만들지 않는다.
 
 # 입력과 출력
@@ -109,6 +109,17 @@ trans에는 한국어로 옮긴 뜻만 적는다. 별도의 한글 발음 지시
 # 사용자 문체 요청
 아래 스타일은 의미 정확성과 위 지침을 위반하지 않는 범위에서 반영한다.
 {style_prompt}
+""".trimIndent()
+
+        // The old default asked models to replace metaphors and prioritize rhyme
+        // over meaning. Keep that style available to non-Korean/custom users,
+        // but use a faithful editorial default for Korean song translations.
+        private val KOREAN_STYLE_PROMPT = """
+가사의 원래 의미, 문맥, 화자의 말투를 가장 중요하게 생각해.
+노래 전체를 이해한 뒤 한 줄씩 한국인이 자연스럽게 읽을 수 있게 옮겨.
+직역투는 교정하되 원문에 없는 비유, 운율, 인물, 감정을 창작하지 마.
+반복되는 구절은 특별한 문맥 변화가 없으면 번역을 일관되게 유지해.
+일본어 고유명사와 문화적 표현은 맥락에 맞게 표현하고 임의로 삭제하지 마.
 """.trimIndent()
 
         val USER_PROMPT = """
@@ -143,7 +154,10 @@ trans에는 한국어로 옮긴 뜻만 적는다. 별도의 한글 발음 지시
             val koreanTarget = target.trim().lowercase() in
                 setOf("한국어", "한국말", "korean", "ko", "ko-kr")
             return (if (koreanTarget) KOREAN_CORE_PROMPT else CORE_PROMPT)
-                .replace("{style_prompt}", prompt)
+                .replace("{style_prompt}",
+                    if (koreanTarget && prompt.trim() == USER_PROMPT.trim())
+                        KOREAN_STYLE_PROMPT else prompt
+                )
                 .replace("{title}", escape(title))
                 .replace("{artist}", escape(artist))
                 .replace("{target}", escape(target))

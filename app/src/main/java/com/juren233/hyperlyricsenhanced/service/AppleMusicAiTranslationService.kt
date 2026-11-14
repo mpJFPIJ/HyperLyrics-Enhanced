@@ -219,6 +219,15 @@ class AppleMusicAiTranslationService : Service() {
                             RootConstants.KEY_HOOK_AI_TRANS_ENABLE,
                             RootConstants.DEFAULT_HOOK_AI_TRANS_ENABLE
                         )
+                        // Korean original tracks must never receive AI Korean subtitles,
+                        // including from previously cached model responses.
+                        if (com.juren233.hyperlyricsenhanced.root.aitrans.KoreanSongTranslationPolicy
+                                .isKoreanSong(song.lyrics.orEmpty().map { it.text.orEmpty() })
+                        ) {
+                            sendProgress(serial, requestKey, AiTranslationProgress("skipped"))
+                            LogManager.i(TAG, "stage=korean_original_skipped")
+                            return@launch
+                        }
                         val hasExisting = song.lyrics.orEmpty()
                             .any { !it.translation.isNullOrBlank() }
                         if (!AppleMusicAiTranslationPolicy.shouldTranslate(

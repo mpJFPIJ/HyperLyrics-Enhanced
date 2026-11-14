@@ -56,6 +56,14 @@ object AITranslator {
         forceOverride: Boolean = false,
         onProgress: ((AiTranslationProgress) -> Unit)? = null,
     ): Song {
+        // Do not re-translate Korean songs or restore stale Korean-to-Korean AI caches.
+        if (KoreanSongTranslationPolicy.isKoreanSong(
+                song.lyrics.orEmpty().map { it.text.orEmpty() },
+            )
+        ) {
+            onProgress?.invoke(AiTranslationProgress("skipped"))
+            return song
+        }
         if (!configs.isUsable) {
             HookLogger.w("AITranslator", "跳过翻译：配置不完整，API Key 或其他配置为空")
             onProgress?.invoke(AiTranslationProgress("pronouncing"))
@@ -139,7 +147,9 @@ object AITranslator {
             configs, song, originalLines, includePronunciation = includePronunciation,
         )
         val expectedIndices = originalLines.mapIndexedNotNull { index, line ->
-            index.takeIf { line.any(Char::isLetter) }
+            index.takeIf {
+                KoreanSongTranslationPolicy.shouldRequestTranslation(line, configs.targetLanguage)
+            }
         }.toSet()
         fun usableCache(items: List<TranslationItem>): Boolean =
             KoreanLyricOutputPolicy.acceptsComplete(items, expectedIndices, configs.targetLanguage)

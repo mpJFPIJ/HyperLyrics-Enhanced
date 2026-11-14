@@ -33,12 +33,17 @@ ORIGINAL sentence, then transcribe that Japanese SOUND into natural Hangul.
 Do not derive pronunciation from a Chinese interpretation, the Korean meaning,
 or a visually similar kanji. Use the surrounding Japanese grammar to resolve
 ambiguous kanji, and preserve long vowels, small tsu and syllable boundaries.
-Do not collapse an entire multi-word lyric line into one unspaced Hangul token.
+Keep the Korean reading aligned to the original spoken words in order; this
+will be synchronized to Apple's native karaoke timestamps. Never insert,
+remove, reorder or merge audible source words. Do not collapse an entire
+multi-word lyric line into one unspaced Hangul token.
 Separate meaningful spoken words or short phrases with natural spaces; do not
 invent spaces in the middle of one Japanese word merely to match a visual cell.
 Examples of sound accuracy: 駄目 -> 다메 (not 다무);
 脳みそ -> 노미소; 可愛い -> 카와이이; 君の名は -> 키미노 나와.
 Read the exact original line; never fabricate or paraphrase a different lyric.
+For Korean original lines do not output a Korean-to-Korean translation or roma.
+For repeated source lines, use consistent readings unless context changes.
 For English, preserve the actual spoken syllables, not the English spelling
 or the Korean meaning. Don't arbitrarily omit any original words.
 If uncertain, prefer a conservative common reading, not invented syllables.

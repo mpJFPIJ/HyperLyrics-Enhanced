@@ -24,7 +24,7 @@ internal object AITranslationKey {
             append("model=").appendLine(configs.model.orEmpty().trim().lowercase())
             append("prompt=").appendLine(configs.prompt)
             // Prevent old low-quality Chinese-biased prompts from poisoning the new translation.
-            appendLine("translation=ko-native-editor-v3-model-aware")
+            appendLine("translation=ko-native-editor-v4-original-language-guard")
             // Invalidate older unreviewed phonetic results without deleting user data.
             if (includePronunciation) appendLine("pronunciation=ja-hangul-en-hangul-v5-kanji-review")
             if (configs.webSearchEnabled) appendLine(

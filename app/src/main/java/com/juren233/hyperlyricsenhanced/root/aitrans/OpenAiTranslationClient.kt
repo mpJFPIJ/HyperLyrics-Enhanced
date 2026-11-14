@@ -46,7 +46,9 @@ internal object OpenAiTranslationClient {
         }
 
         val requestItems = texts.mapIndexedNotNull { index, text ->
-            text.trim().takeIf(::shouldRequestTranslation)?.let {
+            text.trim().takeIf {
+                KoreanSongTranslationPolicy.shouldRequestTranslation(it, configs.targetLanguage)
+            }?.let {
                 TranslationRequestItem(index = index, text = it)
             }
         }
@@ -374,10 +376,6 @@ internal object OpenAiTranslationClient {
         } else reviewedResults
     }
 
-    private fun shouldRequestTranslation(text: String): Boolean {
-        if (text.isBlank()) return false
-        return text.any { it.isLetter() }
-    }
 }
 
 

@@ -13,6 +13,29 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AppleNativeOnlineTranslationStoreTest {
+    @Test fun `Japanese phonetics survive small native timing and punctuation differences`() {
+        val store = AppleNativeOnlineTranslationStore()
+        store.receive(Song(id = "100", lyrics = listOf(
+            RichLyricLine(
+                begin = 1_000, end = 2_000,
+                text = "「君の名は！」", roma = "키미노 나와",
+            ),
+        )), preserveExistingPronunciation = true)
+        assertEquals("키미노 나와",
+            store.aiHangulPronunciation("100", 1_240, 2_110, "君 の 名 は"))
+        assertNull(store.aiHangulPronunciation("200", 1_240, 2_110, "君 の 名 は"))
+        assertNull(store.aiHangulPronunciation("100", 5_000, 6_000, "君 の 名 は"))
+    }
+
+    @Test fun `ambiguous repeated lyrics never inherit an adjacent refrain's reading`() {
+        val store = AppleNativeOnlineTranslationStore()
+        store.receive(Song(id = "100", lyrics = listOf(
+            RichLyricLine(begin = 1_000, end = 1_400, text = "は", roma = "와"),
+            RichLyricLine(begin = 1_600, end = 2_000, text = "は", roma = "하"),
+        )), preserveExistingPronunciation = true)
+        assertNull(store.aiHangulPronunciation("100", 1_300, 1_700, "は"))
+    }
+
     @Test fun `source spans survive transport for alignment to actual Apple native word cells`() {
         val store = AppleNativeOnlineTranslationStore()
         val spans = listOf(LyricPronunciationSpan(0, 2, "駄目", "다메"))

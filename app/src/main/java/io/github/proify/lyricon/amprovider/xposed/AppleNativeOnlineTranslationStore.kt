@@ -321,12 +321,38 @@ internal class AppleNativeOnlineTranslationStore {
 
         val timing = TimingKey(begin, end)
         current.exactContent[LineKey(timing, normalizeText(text))]?.let { return it }
-        return current.translationsByTiming[timing]
-            ?.singleOrNull()
-            ?.content
+        current.translationsByTiming[timing]?.singleOrNull()?.content
+            ?.let { return it }
+
+        // Native Apple timed lines occasionally differ slightly from the
+        // standalone fetched lyric's begin/end, or punctuation/whitespace.
+        // Never use a global text-only match: repeated choruses could receive
+        // the wrong occurrence's Korean reading.
+        if (begin < 0 || end <= begin) return null
+        val identity = normalizedSourceIdentity(text)
+        if (identity.isEmpty()) return null
+        val candidates = current.exactContent.asSequence().mapNotNull { (key, value) ->
+            if (normalizedSourceIdentity(key.text) != identity) return@mapNotNull null
+            val beginDiff = kotlin.math.abs(key.timing.begin - begin)
+            val endDiff = kotlin.math.abs(key.timing.end - end)
+            if (beginDiff > 800L || endDiff > 800L) return@mapNotNull null
+            (beginDiff + endDiff) to value
+        }.sortedBy { it.first }.toList()
+        val closest = candidates.firstOrNull() ?: return null
+        val next = candidates.getOrNull(1)
+        // Equal-content refrains can share one reading. Otherwise require
+        // a clearly closer time anchor or refuse an ambiguous attachment.
+        if (next != null && next.second != closest.second &&
+            closest.first * 2L >= next.first
+        ) return null
+        return closest.second
     }
 
     companion object {
+        private fun normalizedSourceIdentity(text: String?): String =
+            normalizeText(text).lowercase(java.util.Locale.ROOT)
+                .filter(Char::isLetterOrDigit)
+
         val WHITESPACE = Regex("\\s+")
 
         fun sanitizeTranslation(text: String?): String? =

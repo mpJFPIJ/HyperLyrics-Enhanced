@@ -270,8 +270,10 @@ internal class AppleLineWidePronunciationRow {
             // next lyric RecyclerView bind to resolve cell widths.
             parent.requestLayout()
             parent.invalidate()
-            root.postOnAnimation {
-                if (root.isAttachedToWindow) root.requestLayout()
+            root?.let { view ->
+                view.postOnAnimation {
+                    if (view.isAttachedToWindow) view.requestLayout()
+                }
             }
         }
         return adjusted

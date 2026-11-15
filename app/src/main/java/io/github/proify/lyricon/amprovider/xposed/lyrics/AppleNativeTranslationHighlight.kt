@@ -126,7 +126,9 @@ internal class AppleNativeTranslationHighlight {
                 else -> 220L
             })
         }
-        val holderCtx = holder?.let { byHolder.remove(it) }
+        val holderCtx: Context? = holder?.let { key ->
+            byHolder[key].also { byHolder.remove(key) }
+        }
         val fallback = if (holderCtx == null && currentSongId != null &&
             observedSourceCells.isNotEmpty()
         ) synchronized(bySource) {

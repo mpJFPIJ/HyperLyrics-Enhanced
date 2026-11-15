@@ -54,11 +54,11 @@ internal object AppleTimedPronunciationHighlightPolicy {
         val normalizedSource = sourceChars.joinToString("") { sourceText[it].toString() }
         var sourceCursor = 0
         val located = timedWords.mapIndexedNotNull { nativeIndex, word ->
-            if (word.beginMs < 0L || word.endMs <= word.beginMs) return@mapNotNull null
+            if (word.beginMs < 0L || word.endMs <= word.beginMs) return@mapIndexedNotNull null
             val normalizedWord = word.text.filter(Char::isLetterOrDigit)
-            if (normalizedWord.isEmpty()) return@mapNotNull null
+            if (normalizedWord.isEmpty()) return@mapIndexedNotNull null
             val offset = normalizedSource.indexOf(normalizedWord, sourceCursor)
-            if (offset < 0) return@mapNotNull null
+            if (offset < 0) return@mapIndexedNotNull null
             sourceCursor = offset + normalizedWord.length
             LocatedWord(
                 sourceStart = sourceChars[offset],

@@ -38,6 +38,7 @@ internal class AppleNativeTranslationHighlight {
     )
     private val byHolder = WeakIdentityMap<Any, Context>()
     private val pulses = WeakHashMap<View, Pulse>()
+    private val bindingGenerations = WeakHashMap<View, Long>()
     private val bySource = LinkedHashMap<String, Context>()
     private val ambiguousSources = HashSet<String>()
     private var indexedSongId: String? = null
@@ -89,7 +90,10 @@ internal class AppleNativeTranslationHighlight {
 
     fun clearHolder(holder: Any?, root: View?) {
         holder?.let(byHolder::remove)
-        root?.let { pulses.remove(it)?.stop() }
+        root?.let { view ->
+            pulses.remove(view)?.stop()
+            bindingGenerations[view] = (bindingGenerations[view] ?: 0L) + 1L
+        }
     }
 
     fun bind(
@@ -100,9 +104,27 @@ internal class AppleNativeTranslationHighlight {
         enabled: Boolean,
         playbackPositionMs: () -> Long?,
         observedSourceCells: List<String> = emptyList(),
+        retry: Int = 0,
     ): Boolean {
         root ?: return false
-        pulses.remove(root)?.stop()
+        if (retry == 0) pulses.remove(root)?.stop()
+        val generation = bindingGenerations[root] ?: 0L
+        fun retryAfterLayout(ctx: Context? = null) {
+            if (retry >= 3 || !enabled) return
+            if (ctx != null && holder != null) byHolder[holder] = ctx
+            root.postDelayed({
+                if (bindingGenerations[root] == generation &&
+                    root.isAttachedToWindow
+                ) bind(
+                    holder, root, currentSongId, revision, enabled,
+                    playbackPositionMs, observedSourceCells, retry + 1,
+                )
+            }, when (retry) {
+                0 -> 24L
+                1 -> 96L
+                else -> 220L
+            })
+        }
         val holderCtx = holder?.let { byHolder.remove(it) }
         val fallback = if (holderCtx == null && currentSongId != null &&
             observedSourceCells.isNotEmpty()
@@ -114,7 +136,11 @@ internal class AppleNativeTranslationHighlight {
                 ) != null
             }
         } else null
-        val ctx = holderCtx ?: fallback ?: return false
+        val ctx = holderCtx ?: fallback
+        if (ctx == null) {
+            retryAfterLayout()
+            return false
+        }
         if (!enabled || ctx.songId != currentSongId || ctx.revision != revision) return false
         val texts = mutableListOf<TextView>()
         fun scan(view: View, depth: Int) {
@@ -129,7 +155,10 @@ internal class AppleNativeTranslationHighlight {
             }
         }
         scan(root, 0)
-        if (texts.isEmpty()) return false
+        if (texts.isEmpty()) {
+            retryAfterLayout(ctx)
+            return false
+        }
 
         // Exclude Hangul source-reading cells even when a short phonetic token
         // accidentally matches part of a translated word.
@@ -148,7 +177,10 @@ internal class AppleNativeTranslationHighlight {
             }
             !readingContainer
         }
-        if (translationView.isEmpty()) return false
+        if (translationView.isEmpty()) {
+            retryAfterLayout(ctx)
+            return false
+        }
         val pulse = Pulse(root, ctx, translationView, playbackPositionMs)
         pulses[root] = pulse
         pulse.start()

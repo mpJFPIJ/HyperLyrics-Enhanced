@@ -282,6 +282,7 @@ private fun AppleLyricsSupplementHooks.rememberLineWideApplePronunciation(
 internal fun AppleLyricsSupplementHooks.bindLineWidePronunciation(
     context: AppleLyricsBindingDiagnosticContext,
     root: android.view.View?,
+    retry: Int = 0,
 ) {
     val songId = currentAppleLyricsSongId
     val observedCells = lineWidePronunciationRow.visibleNativeCellTexts(root).orEmpty()
@@ -335,6 +336,21 @@ internal fun AppleLyricsSupplementHooks.bindLineWidePronunciation(
         playbackPositionMs = { appleLyricsCurrentPlaybackPositionMs() },
         observedSourceCells = observedCells,
     )
+    if (!shown && retry < 2 && root != null &&
+        (nativeOnlineTranslationStore.hasHangulPronunciation(songId) ||
+            nativeOnlineTranslationStore.hasAiHangulPronunciation(songId))
+    ) {
+        val generation = lineWideBindingGeneration[root]
+        root.postDelayed({
+            if (lineWideBindingGeneration[root] == generation &&
+                currentAppleLyricsSongId == songId &&
+                nativeOnlineTranslationStore.revision() == revision &&
+                root.isAttachedToWindow
+            ) {
+                bindLineWidePronunciation(context, root, retry + 1)
+            }
+        }, if (retry == 0) 36L else 120L)
+    }
     val count = if (shown) lineWideShownDiagnosticCount.incrementAndGet()
         else lineWideMissingDiagnosticCount.incrementAndGet()
     if (count <= 24) {

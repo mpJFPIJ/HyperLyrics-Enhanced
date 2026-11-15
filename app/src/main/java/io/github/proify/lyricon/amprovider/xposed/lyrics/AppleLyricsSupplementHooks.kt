@@ -291,6 +291,10 @@ internal class AppleLyricsSupplementHooks(
             holderBindingStart = { context, root ->
                 pronunciationState.beginHolderBinding(context.holder)
                 translationLineHighlight.clearHolder(context.holder, root)
+                root?.let { view ->
+                    lineWideBindingGeneration[view] =
+                        (lineWideBindingGeneration[view] ?: 0L) + 1L
+                }
                 lineWidePronunciationRow.clear(root)
             },
             holderBound = { context, root ->
@@ -300,6 +304,8 @@ internal class AppleLyricsSupplementHooks(
     }
     internal val lineWidePronunciationRow = AppleLineWidePronunciationRow()
     internal val translationLineHighlight = AppleNativeTranslationHighlight()
+    internal val lineWideBindingGeneration =
+        java.util.WeakHashMap<android.view.View, Long>()
     internal val lineWideMissingDiagnosticCount = AtomicInteger()
     internal val lineWideShownDiagnosticCount = AtomicInteger()
     internal val lineWideRegisteredDiagnosticCount = AtomicInteger()

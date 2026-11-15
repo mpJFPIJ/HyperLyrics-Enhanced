@@ -4,6 +4,18 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class PrimaryPronunciationClientTest {
+    @Test fun longSongsHaveNoSilent128LyricLimit() {
+        val request = TranslationRequest((0 until 211).map {
+            TranslationRequestItem(it, "ありがとう")
+        })
+        val batches = PrimaryPronunciationClient.missingBatches(
+            request, (0 until 211).toSet(),
+        )
+        assertEquals(14, batches.size)
+        assertEquals(211, batches.sumOf { it.size })
+        assertEquals(210, batches.last().last().index)
+    }
+
     @Test fun eachRecoveredIndexMustMatchTheJapaneseOriginal() {
         val payload = TranslationRequest(listOf(
             TranslationRequestItem(1, "君の名は"),

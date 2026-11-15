@@ -9,6 +9,10 @@ import com.juren233.hyperlyricsenhanced.utils.LogManager
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.delay
 import kotlinx.serialization.decodeFromString
 import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
@@ -20,6 +24,13 @@ import java.net.URL
  * Does not modify Korean meaning, source timestamps or cached good readings.
  */
 internal object PrimaryPronunciationClient {
+    /** No fixed 128-line song ceiling: all missing rows get a bounded batch. */
+    internal fun missingBatches(
+        original: TranslationRequest,
+        missing: Set<Int>,
+    ): List<List<TranslationRequestItem>> =
+        original.lyrics.filter { it.index in missing }.chunked(16)
+
     private fun prompt(song: Song): String = """
 당신은 일본어 노래 원문을 실제 일본어 소리에 맞춰 한글로 표기하는 발음 전문가다.
 제목: ${song.name.orEmpty().take(90)}
@@ -70,7 +81,7 @@ trans는 항상 빈 문자열이며 roma에는 발음만 한글로 적는다.
         // Index ranges remain original even when a request contains only
         // previously missing lines. A model returning a partial result is
         // acceptable here; successful lines remain cached.
-        for (batch in original.lyrics.filter { it.index in missing }.chunked(16).take(8)) {
+        for (batch in missingBatches(original, missing)) {
             val payload = TranslationRequest(batch)
             val budget = AiTranslationRecoveryPolicy.outputTokenBudget(
                 configs.maxTokens, batch.size,
@@ -92,8 +103,10 @@ trans는 항상 빈 문자열이며 roma에는 발음만 한글로 적는다.
                 request.model, messages, budget,
             ) else request.toJson()
             var response: String? = null
-            for (key in keys.take(2)) {
+            for ((attemptIndex, key) in keys.withIndex()) {
+                currentCoroutineContext().ensureActive()
                 var conn: HttpURLConnection? = null
+                var cancellationWatcher: Job? = null
                 try {
                     conn = (URL(endpoint).openConnection() as HttpURLConnection).apply {
                         requestMethod = "POST"
@@ -103,6 +116,7 @@ trans는 항상 빈 문자열이며 roma에는 발음만 한글로 적는다.
                         setRequestProperty("Content-Type", "application/json")
                         setRequestProperty("Authorization", "Bearer $key")
                     }
+                    cancellationWatcher = HttpConnectionCancellation.watch(conn)
                     OutputStreamWriter(conn.outputStream, Charsets.UTF_8).use {
                         it.write(body)
                     }
@@ -115,12 +129,17 @@ trans는 항상 빈 문자열이며 roma에는 발음만 한글로 적는다.
                     LogManager.w("AppleMusicAiService",
                         "stage=primary_phonetics_http code=$status")
                     if (status in 400..499 && status != 429) break
+                    if (attemptIndex + 1 < keys.size) delay(
+                        (250L * (attemptIndex + 1)).coerceAtMost(1_500L)
+                    )
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (error: Exception) {
+                    currentCoroutineContext().ensureActive()
                     LogManager.w("AppleMusicAiService",
                         "stage=primary_phonetics_io type=${error.javaClass.simpleName}")
                 } finally {
+                    cancellationWatcher?.cancel()
                     conn?.disconnect()
                 }
             }

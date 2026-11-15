@@ -62,9 +62,14 @@ internal object AppleMusicSourcePhonetics {
             spans = analyzed.spans,
             expectedHangul = reading,
         )
+        val renderable = projected ?: AppleNativeReadingProjection.projectApproximate(
+            original = sourceText,
+            appleWords = line.words.orEmpty().map { it.text.orEmpty() },
+            pronunciation = reading,
+        )
         return line.copy(
             roma = reading,
-            pronunciationWords = projected?.words,
+            pronunciationWords = renderable?.words,
             pronunciationSpans = analyzed.spans.map { span ->
                 LyricPronunciationSpan(
                     start = span.sourceStart,
@@ -74,8 +79,8 @@ internal object AppleMusicSourcePhonetics {
                 )
             },
             pronunciationStatus = when {
-                projected?.approximate == true -> "PROJECTED_NATIVE_WORDS"
-                projected != null -> "ALIGNED"
+                renderable?.approximate == true -> "PROJECTED_NATIVE_WORDS"
+                renderable != null -> "ALIGNED"
                 else -> "LINE_WIDE"
             },
         )

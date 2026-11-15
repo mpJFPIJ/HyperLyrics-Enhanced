@@ -7,6 +7,34 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AppleNativeReadingProjectionTest {
+    @Test fun aCompleteAIReadingWithoutSpansStillUsesNativeCells() {
+        val result = AppleNativeReadingProjection.projectApproximate(
+            original = "君の名は",
+            appleWords = listOf("君", "の", "名は"),
+            pronunciation = "키미노 나와",
+        )
+        assertTrue(result?.approximate == true)
+        assertEquals(3, result?.words?.size)
+        assertEquals("키미노나와", result?.words?.joinToString("") { it.hangul }
+            ?.replace(AppleNativeReadingProjection.EMPTY_PRONUNCIATION_CELL, ""))
+    }
+    @Test fun anUnrelatedSourceCannotReceiveARecycledJapanesePronunciation() {
+        assertNull(AppleNativeReadingProjection.projectApproximate(
+            original = "君の名は", appleWords = listOf("別の", "歌"),
+            pronunciation = "키미노 나와",
+        ))
+    }
+    @Test fun silentLongVowelCellCannotPrintJapaneseGlyph() {
+        val result = AppleNativeReadingProjection.projectApproximate(
+            original = "ダーリン", appleWords = listOf("ダ", "ー", "リン"),
+            pronunciation = "다린",
+        )
+        assertTrue(result != null)
+        assertEquals(3, result?.words?.size)
+        assertEquals("다린", result?.words?.joinToString("") { it.hangul }?.replace(
+            AppleNativeReadingProjection.EMPTY_PRONUNCIATION_CELL, "",
+        ))
+    }
     @Test fun groupedJapaneseMorphemeCanFollowNativeWordClock() {
         val result = AppleNativeReadingProjection.project(
             "駄目脳みそ", listOf("駄", "目", "脳", "みそ"),

@@ -15,6 +15,52 @@ internal object AppleNativeReadingProjection {
 
     data class Result(val words: List<LyricWordPronunciation>, val approximate: Boolean)
 
+    /**
+     * Last-resort karaoke-cell mapping when the song has a complete Hangul
+     * line but Sudachi/Apple source spans are unavailable. This is an
+     * explicit approximation: original native word timestamps remain intact.
+     * Reject unmatched source lines to prevent recycled-holder leakage.
+     */
+    fun projectApproximate(
+        original: String,
+        appleWords: List<String>,
+        pronunciation: String,
+    ): Result? {
+        if (appleWords.isEmpty() ||
+            com.juren233.hyperlyricsenhanced.common.lyric.RomanizationPolicy
+                .sanitizeHangulSupplement(original, pronunciation) == null
+        ) return null
+        fun compact(text: String): String = text.filter(Char::isLetterOrDigit)
+        if (compact(original).isEmpty() ||
+            compact(original) != compact(appleWords.joinToString(""))
+        ) return null
+        val syllables = pronunciation.filter { it in '가'..'힣' }
+        if (syllables.isEmpty() || pronunciation.any {
+                it.isLetter() && it !in '가'..'힣'
+            }) return null
+        val weights = appleWords.map { word -> word.count(Char::isLetterOrDigit) }
+        val total = weights.sum()
+        if (total == 0) return null
+        var accumulatedWeight = 0
+        var consumed = 0
+        val words = appleWords.mapIndexed { index, source ->
+            val start = accumulatedWeight * syllables.length / total
+            accumulatedWeight += weights[index]
+            val end = accumulatedWeight * syllables.length / total
+            // Source punctuation and long-vowel marks may have no separate
+            // spoken syllable. Use a non-rendering placeholder instead of
+            // exposing the original Japanese glyph or duplicating a sound.
+            val reading = syllables.substring(start, end)
+                .ifEmpty { EMPTY_PRONUNCIATION_CELL }
+            consumed += end - start
+            LyricWordPronunciation(source, reading)
+        }
+        if (consumed != syllables.length ||
+            words.joinToString("") { it.hangul }.filter { it in '가'..'힣' } != syllables
+        ) return null
+        return Result(words, approximate = true)
+    }
+
     fun project(
         original: String,
         appleWords: List<String>,

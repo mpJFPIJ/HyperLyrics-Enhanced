@@ -30,7 +30,12 @@ internal object ApplePronunciationPolicy {
             }
         ) return null
         return alignedWords.map { it.hangul }.takeIf {
-            RomanizationPolicy.sameHangulSounds(it.joinToString(""), pronunciation) &&
+            RomanizationPolicy.sameHangulSounds(
+                it.joinToString("").replace(
+                    com.juren233.hyperlyricsenhanced.root.aitrans
+                        .AppleNativeReadingProjection.EMPTY_PRONUNCIATION_CELL, "",
+                ), pronunciation,
+            ) &&
                 it.any(String::isNotBlank)
         }
     }

@@ -552,6 +552,15 @@ private fun AppleLyricsSupplementHooks.hookApplePronunciationWordsGetter(
                         )
                     }
                 } else null
+                val safeWordReadings = alignedWords?.takeIf { words ->
+                    ApplePronunciationPolicy.verifiedNativeSegments(
+                        pronunciation, nativeTexts, words,
+                    ) != null
+                } ?: AppleNativeReadingProjection.projectApproximate(
+                    original = originalText.orEmpty(),
+                    appleWords = nativeTexts,
+                    pronunciation = pronunciation,
+                )?.words
                 // Reuse Apple's own native pronunciation-cell renderer whenever
                 // every original word has a verified Hangul counterpart. This
                 // inherits Apple's real word clock, font layout and highlight.
@@ -561,7 +570,7 @@ private fun AppleLyricsSupplementHooks.hookApplePronunciationWordsGetter(
                     pronunciation = pronunciation,
                     hasOfficialTimedWords = false,
                     nativeWords = nativeTexts,
-                    alignedWords = alignedWords,
+                    alignedWords = safeWordReadings,
                 )
                 if (presentation == ApplePronunciationPresentationMode.LINE_WIDE) {
                     if (onlineFallback) {
@@ -611,7 +620,7 @@ private fun AppleLyricsSupplementHooks.hookApplePronunciationWordsGetter(
                         registerApplePronunciationRenderPlan(
                             vector = vector,
                             pronunciation = pronunciation,
-                            alignedWords = alignedWords,
+                            alignedWords = safeWordReadings,
                         )
                         reportApplePronunciationRuntimeDiagnostic(
                             stage = "word_track_registered",

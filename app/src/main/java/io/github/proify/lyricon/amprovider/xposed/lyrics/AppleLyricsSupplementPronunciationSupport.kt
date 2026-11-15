@@ -33,7 +33,7 @@ private fun AppleLyricsSupplementHooks.chosenAppleJapaneseReading(
     ) return official
     val isJapanese = original.orEmpty().any {
         it in '\u3040'..'\u30FF' || it in '\uFF66'..'\uFF9F'
-    } || pronunciationState.languages(currentAppleLyricsSongId).orEmpty()
+    } || currentAppleLyricsSongId?.let { pronunciationState.languages(it) }.orEmpty()
         .any { it.startsWith("ja", ignoreCase = true) }
     if (!isJapanese) return official
     return JapaneseRomajiToHangul.convert(official) ?: official

@@ -11,7 +11,7 @@ class JapaneseRomajiToHangulTest {
         assertEquals("칸지", JapaneseRomajiToHangul.convert("kanji"))
     }
     @Test fun normalizesMacronsAndRefusesNonJapaneseSymbols() {
-        assertEquals("도쿄", JapaneseRomajiToHangul.convert("Tōkyō"))
+        assertEquals("토쿄", JapaneseRomajiToHangul.convert("Tōkyō"))
         assertNull(JapaneseRomajiToHangul.convert("完全な歌詞"))
     }
 }

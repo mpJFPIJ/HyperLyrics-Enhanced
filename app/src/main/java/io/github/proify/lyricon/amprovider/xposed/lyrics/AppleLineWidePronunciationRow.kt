@@ -171,21 +171,24 @@ internal class AppleLineWidePronunciationRow {
             // Share that line-level fade without copying any word's *single*
             // highlight color onto the entire Korean sentence.
             val parentAnchor = parent as? View
-            val nativeStates = sourceWords.mapNotNull { source ->
-                if (!source.isAttachedToWindow || parentAnchor == null) return@mapNotNull null
+            val nativeStates = sourceWords.map { source ->
+                // Preserve source word indexes even if one TextView is
+                // temporarily detached during a RecyclerView animation.
+                if (!source.isAttachedToWindow || parentAnchor == null) return@map null
                 var opacity = 1f
                 var view: View? = source
                 while (view != null && view !== parentAnchor) {
                     opacity *= view.alpha
                     view = view.parent as? View
                 }
-                if (view !== parentAnchor) return@mapNotNull null
+                if (view !== parentAnchor) return@map null
                 val color = source.currentTextColor
                 val brightness = (0.2126f * Color.red(color) +
                     0.7152f * Color.green(color) + 0.0722f * Color.blue(color)) / 255f
                 brightness to opacity
             }
-            val defaultNativeBrightness = nativeStates.maxOfOrNull { it.first * it.second } ?: 1f
+            val defaultNativeBrightness = nativeStates.filterNotNull()
+                .maxOfOrNull { it.first * it.second } ?: 1f
             // The line-wide reading shares the same native parent fade.
             // Applying another max word alpha to the *entire* Hangul line
             // fades parts whose corresponding Japanese word is fully active.
@@ -208,9 +211,8 @@ internal class AppleLineWidePronunciationRow {
                 }
                 val nativeBrightness = nativeWord?.sourceWordIndex
                     ?.takeIf { it in nativeStates.indices }
-                    ?.let { index ->
-                        nativeStates[index].first * nativeStates[index].second
-                    } ?: defaultNativeBrightness
+                    ?.let(nativeStates::get)
+                    ?.let { it.first * it.second } ?: defaultNativeBrightness
                 if (kotlin.math.abs(style.nativeBrightness - nativeBrightness) > 0.01f) {
                     style.nativeBrightness = nativeBrightness
                     changed = true

@@ -151,15 +151,19 @@ internal class AppleNativeTranslationHighlight {
                 val active = AppleNativeTranslationHighlightPolicy.lineActive(
                     playbackPositionMs(), ctx.beginMs, ctx.endMs,
                 )
-                if (active != lastActive) {
-                    originals.forEach { (view, colors) ->
-                        // In native Apple layout each wrapped TextView can
-                        // otherwise retain a different active/color phase.
-                        view.setTextColor(if (active)
-                            ColorStateList.valueOf(Color.WHITE) else colors)
+                if (active) {
+                    originals.forEach { (view, _) ->
+                        // Native Apple periodically animates text colors. A
+                        // one-time white set is not enough: its next frame can
+                        // restore the faded upper half of a wrapped translation.
+                        if (view.currentTextColor != Color.WHITE) {
+                            view.setTextColor(Color.WHITE)
+                        }
                     }
-                    lastActive = active
+                } else if (lastActive == true) {
+                    originals.forEach { (view, colors) -> view.setTextColor(colors) }
                 }
+                lastActive = active
             }
             root.postDelayed(this, if (visible) 50L else 250L)
         }

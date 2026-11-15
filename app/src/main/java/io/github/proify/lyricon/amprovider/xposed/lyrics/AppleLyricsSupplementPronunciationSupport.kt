@@ -377,7 +377,10 @@ internal fun AppleLyricsSupplementHooks.hookApplePronunciationWordRendering() {
                     executable = method,
                     enter = enter@{ chain ->
                         val vector = chain.args.firstOrNull() ?: return@enter false
-                        val plan = consumeApplePronunciationRenderPlan(vector)
+                        // Do not discard a one-shot plan until we have a
+                        // usable native mapping. An early measurement pass may
+                        // probe the same vector before its words are ready.
+                        val plan = pronunciationState.peekRenderPlan(vector)
                         if (plan == null) {
                             if (
                                 nativeOnlineTranslationStore.hasPronunciation(
@@ -399,6 +402,7 @@ internal fun AppleLyricsSupplementHooks.hookApplePronunciationWordRendering() {
                         }
                         val context = buildApplePronunciationWordRenderContext(vector, plan)
                             ?: return@enter false
+                        consumeApplePronunciationRenderPlan(vector)
                         reportApplePronunciationRuntimeDiagnostic(
                             stage = "render_plan_consumed",
                             details = "method=${method.declaringClass.name}#" +

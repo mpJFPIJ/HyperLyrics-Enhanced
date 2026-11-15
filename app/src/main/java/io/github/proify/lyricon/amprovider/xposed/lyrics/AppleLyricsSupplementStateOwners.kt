@@ -63,11 +63,21 @@ internal class AppleLyricsPronunciationState {
     fun registerRenderPlan(vector: Any, plan: ApplePronunciationRenderPlan) {
         synchronized(pendingRenderPlans) {
             if (pendingRenderPlans.size >= MAX_RENDER_PLANS) {
-                pendingRenderPlans.clear()
+                // Evict just one stale plan; clearing everything here causes
+                // unrelated visible rows to lose the native word mapping.
+                val pending = pendingRenderPlans.keys.iterator()
+                if (pending.hasNext()) {
+                    pending.next()
+                    pending.remove()
+                }
             }
             pendingRenderPlans[vector] = plan
         }
     }
+
+    /** Inspect without deleting: an adapter may probe before it can map words. */
+    fun peekRenderPlan(vector: Any): ApplePronunciationRenderPlan? =
+        synchronized(pendingRenderPlans) { pendingRenderPlans[vector] }
 
     /** Consumes the plan registered for [vector], if any. */
     fun consumeRenderPlan(vector: Any): ApplePronunciationRenderPlan? =

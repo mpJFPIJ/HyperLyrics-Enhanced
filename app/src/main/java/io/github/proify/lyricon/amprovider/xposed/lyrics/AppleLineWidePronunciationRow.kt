@@ -254,6 +254,16 @@ internal class AppleLineWidePronunciationRow {
                 adjusted++
             }
         }
+        if (adjusted > 0) {
+            // Text-size mutation after native bind must trigger layout
+            // measurement on the same visible frame. Do not wait for the
+            // next lyric RecyclerView bind to resolve cell widths.
+            parent.requestLayout()
+            parent.invalidate()
+            root.postOnAnimation {
+                if (root.isAttachedToWindow) root.requestLayout()
+            }
+        }
         return adjusted
     }
 

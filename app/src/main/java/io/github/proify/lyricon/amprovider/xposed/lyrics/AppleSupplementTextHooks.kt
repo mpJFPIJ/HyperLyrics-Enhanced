@@ -483,7 +483,7 @@ internal fun AppleLyricsSupplementHooks.applyAppleNativePronunciationSelection(s
                 AppleMusicRuntimeMember.LYRICS_NATIVE_SONG_PRONUNCIATION_LANGUAGES_METHOD,
             )
         }.getOrNull()
-    ).filter(RomanizationPolicy::isLatinLanguageTag)
+    )
     val songId = nativeSongId(songNative)
     rememberApplePronunciationLanguages(songNative, officialLanguages)
     if (
@@ -499,11 +499,14 @@ internal fun AppleLyricsSupplementHooks.applyAppleNativePronunciationSelection(s
     }
     // A disabled Apple romanization is not a content source. When Hangul
     // arrives later, the existing supplement refresh can select its carrier.
-    val language = officialLanguages
-        .firstOrNull()
-        ?.takeIf { showNativeApplePronunciation() && hasValidOfficialRomanization(songNative) }
-        ?: thirdPartyPronunciationFallbackLanguage()
-        ?: return
+    val language = AppleNativePronunciationLanguagePolicy.select(
+        languages = officialLanguages,
+        hangulFirst = pronunciationSourcePriority() ==
+            RootConstants.APPLE_MUSIC_PRONUNCIATION_HANGUL_FIRST,
+        allowNative = showNativeApplePronunciation(),
+        hasLatinText = hasValidOfficialRomanization(songNative),
+        supplementLanguage = thirdPartyPronunciationFallbackLanguage(),
+    ) ?: return
     val selected = runCatching {
         lyricsNativeCall(
             songNative,

@@ -2,12 +2,26 @@ package com.juren233.hyperlyricsenhanced.root.aitrans
 
 import com.juren233.hyperlyricsenhanced.lyric.model.RichLyricLine
 import com.juren233.hyperlyricsenhanced.lyric.model.Song
+import com.juren233.hyperlyricsenhanced.lyric.model.lyricMetadataOf
+import com.juren233.hyperlyricsenhanced.common.lyric.LyricMetadataKeys
 import com.juren233.hyperlyricsenhanced.lyric.style.AiTranslationConfigs
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AIPronunciationPolicyTest {
+
+    @Test fun appleJapaneseLanguageIncludesKanjiOnlyLyricsWithoutTreatingChineseAsJapanese() {
+        val tagged = Song(
+            metadata = lyricMetadataOf(
+                LyricMetadataKeys.APPLE_PRONUNCIATION_LANGUAGES to "ja-Latn,ja-Kore",
+            ),
+            lyrics = listOf(RichLyricLine(text = "世界"), RichLyricLine(text = "未来")),
+        )
+        assertTrue(AIPronunciationPolicy.shouldEnrich(tagged))
+        assertFalse(AIPronunciationPolicy.shouldEnrich(song("你好", "世界")))
+    }
+
     private fun song(vararg texts: String): Song =
         Song(lyrics = texts.map { RichLyricLine(text = it) })
 

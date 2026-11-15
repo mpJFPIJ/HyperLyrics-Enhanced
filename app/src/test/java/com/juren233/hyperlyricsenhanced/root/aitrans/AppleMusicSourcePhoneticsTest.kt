@@ -8,6 +8,20 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AppleMusicSourcePhoneticsTest {
+
+    @Test fun realAiReadingRemainsVisibleWhenOfflinePureKanjiAnalysisFails() {
+        val text = "未知語"
+        val original = RichLyricLine(
+            text = text, roma = "미치고", pronunciationStatus = "AI_GENERATED_UNVERIFIED",
+            words = listOf(LyricWord(text = "未"), LyricWord(text = "知"), LyricWord(text = "語")),
+        )
+        val result = AppleMusicSourcePhonetics.attach(original, text,
+            LineReadingResult(null, emptyList(), LineReadingStatus.MISSING_UNSUPPORTED))
+        assertEquals("미치고", result.roma)
+        assertEquals("AI_FALLBACK_UNVERIFIED", result.pronunciationStatus)
+        assertEquals(3, result.pronunciationWords?.size)
+    }
+
     @Test fun unsupportedEnglishSourceKeepsValidAiHangulFallback() {
         val text = "I miss everything about you"
         val line = RichLyricLine(text = text, roma = "아이 미스 에브리싱 어바웃 유",

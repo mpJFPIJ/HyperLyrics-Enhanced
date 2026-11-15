@@ -7,6 +7,17 @@ import org.junit.Test
 
 class AITranslationApplicatorTest {
 
+    @Test fun aiPhoneticsHaveProvenanceIndependentOfTranslation() {
+        val song = Song(lyrics = listOf(RichLyricLine(text = "未知語")))
+        val translated = AITranslationApplicator.apply(
+            song, listOf(TranslationItem(0, "알 수 없는 말", "미치고")),
+        )
+        assertEquals("AI_GENERATED_UNVERIFIED",
+            translated.lyrics?.single()?.pronunciationStatus)
+        assertEquals("미치고", translated.lyrics?.single()?.roma)
+    }
+
+
     @Test
     fun `preserves online translations while filling unmatched lines`() {
         val song = Song(

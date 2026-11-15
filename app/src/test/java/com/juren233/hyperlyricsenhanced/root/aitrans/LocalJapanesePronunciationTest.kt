@@ -6,6 +6,18 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class LocalJapanesePronunciationTest {
+
+    @Test fun kanaOnlyFallsBackWhenSudachiFails() {
+        val failed = LineReadingResult(null, emptyList(), LineReadingStatus.MISSING_UNSUPPORTED)
+        val ordinary = LocalJapanesePronunciation.generateLine("ありがとう") { failed }
+        assertEquals(LineReadingStatus.COMPLETE, ordinary.status)
+        assertEquals("아리가토", ordinary.text)
+        assertTrue(ordinary.spans.isNotEmpty())
+        assertEquals("콘니치와",
+            LocalJapanesePronunciation.generateLine("こんにちは") { failed }.text)
+        assertNull(LocalJapanesePronunciation.generateLine("未知語") { failed }.text)
+    }
+
     @Test fun canonicalReadingAnalyzesJapaneseOriginalOnceNotEachWord() {
         val source = "駄目駄目脳みその中から"
         val observed = mutableListOf<String>()

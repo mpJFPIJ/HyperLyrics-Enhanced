@@ -300,6 +300,9 @@ internal fun AppleLyricsSupplementHooks.bindLineWidePronunciation(
         trustedHolder = trustedHolder,
         playbackPositionMs = { appleLyricsCurrentPlaybackPositionMs() },
     )
+    // The built-in Apple pronunciation text is often much smaller than the
+    // Japanese text. Keep its native position and timing, scale text only.
+    lineWidePronunciationRow.fitNativeHangulSize(root)
     val count = if (shown) lineWideShownDiagnosticCount.incrementAndGet()
         else lineWideMissingDiagnosticCount.incrementAndGet()
     if (count <= 24) {

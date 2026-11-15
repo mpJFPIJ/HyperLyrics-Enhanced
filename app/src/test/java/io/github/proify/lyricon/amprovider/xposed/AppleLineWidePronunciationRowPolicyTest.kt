@@ -15,6 +15,12 @@ class AppleLineWidePronunciationRowPolicyTest {
     }
 
     @Test
+    fun `native pronunciation font nearly matches original Japanese font`() {
+        assertEquals(36f, AppleLineWidePronunciationRowPolicy.readingTextPx(40f), 0.001f)
+        assertEquals(21.6f, AppleLineWidePronunciationRowPolicy.readingTextPx(24f), 0.001f)
+    }
+
+    @Test
     fun `reading is inserted directly after source cells rather than after later translation`() {
         assertEquals(
             3,

@@ -89,6 +89,9 @@ internal object AppleLineWidePronunciationRowPolicy {
         payload.revision == currentRevision && payload.sourcePriority == currentSourcePriority &&
         readableText(payload.pronunciation) != null
 
+    /** Native Apple pronunciation is scaled proportionally to its own source. */
+    fun readingTextPx(sourcePx: Float): Float = sourcePx * 0.90f
+
     /** Negative width uses MATCH_PARENT until the flexbox has been laid out. */
     fun fullWidth(measuredWidth: Int): Int = measuredWidth.takeIf { it > 0 } ?: -1
 }
@@ -209,6 +212,51 @@ internal class AppleLineWidePronunciationRow {
         }
     }
 
+    /** Size only Apple-native Hangul readings; never resize Japanese source or
+     * translated meaning. The pronunciation container belongs to Apple's own
+     * word-level karaoke hierarchy, preserving its highlight animation. */
+    fun fitNativeHangulSize(root: View?): Int {
+        val parent = anchor(root) ?: return 0
+        val views = mutableListOf<TextView>()
+        fun collect(view: View?, depth: Int) {
+            if (view == null || depth > 8 || view is ReadingView) return
+            if (view is TextView) views += view
+            else if (view is ViewGroup) {
+                for (i in 0 until view.childCount) collect(view.getChildAt(i), depth + 1)
+            }
+        }
+        collect(parent, 0)
+        fun isUnder(view: View, hint: String): Boolean {
+            var current = view.parent as? View
+            while (current != null && current !== parent) {
+                if (idName(current)?.contains(hint, ignoreCase = true) == true) return true
+                current = current.parent as? View
+            }
+            return false
+        }
+        val japaneseSource = views.filter { view ->
+            !isUnder(view, "translation") &&
+                view.text.any { c ->
+                    c in '\u3040'..'\u30FF' || c in '\u3400'..'\u9FFF' ||
+                        c in '\uF900'..'\uFAFF'
+                }
+        }
+        val sourceSize = japaneseSource.maxOfOrNull { it.textSize } ?: return 0
+        val targetSize = AppleLineWidePronunciationRowPolicy.readingTextPx(sourceSize)
+        if (targetSize <= 0f) return 0
+        var adjusted = 0
+        for (view in views) {
+            if (!isUnder(view, "pronunciation") || isUnder(view, "translation") ||
+                !view.text.any { it in '가'..'힣' }
+            ) continue
+            if (kotlin.math.abs(view.textSize - targetSize) > 0.8f) {
+                view.setTextSize(TypedValue.COMPLEX_UNIT_PX, targetSize)
+                adjusted++
+            }
+        }
+        return adjusted
+    }
+
     fun clear(root: View?) {
         val anchor = anchor(root) ?: return
         for (index in anchor.childCount - 1 downTo 0) {
@@ -253,7 +301,7 @@ internal class AppleLineWidePronunciationRow {
             this.sourceWords = sourceWords
             setTextSize(
                 TypedValue.COMPLEX_UNIT_PX,
-                sourceStyle.textSize * 0.88f,
+                AppleLineWidePronunciationRowPolicy.readingTextPx(sourceStyle.textSize),
             )
             // Any syllable with no verified native timing stays visibly dim.
             setTextColor(Color.rgb(110, 110, 110))

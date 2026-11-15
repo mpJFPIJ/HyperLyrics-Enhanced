@@ -54,7 +54,7 @@ trans는 항상 빈 문자열이며 roma에는 발음만 한글로 적는다.
     ): List<TranslationItem> = withContext(Dispatchers.IO) {
         if (!configs.isUsable) return@withContext current
         val keys = AiApiKeyPool.orderedForRequest(
-            configs.apiKeys.takeIf(List<String>::isNotEmpty)
+            configs.apiKeys.takeIf { it.isNotEmpty() }
                 ?: AiApiKeyPool.parse(null, configs.apiKey),
         )
         if (keys.isEmpty()) return@withContext current

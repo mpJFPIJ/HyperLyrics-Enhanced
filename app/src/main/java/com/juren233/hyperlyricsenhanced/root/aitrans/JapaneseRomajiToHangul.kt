@@ -66,6 +66,11 @@ internal object JapaneseRomajiToHangul {
                 index++
                 continue
             }
+            if (ch == 'n' && next == 'n') {
+                kana.append('ん')
+                index++
+                continue
+            }
             if (ch == 'n' && (next == null || next == '\'' ||
                 (next !in "aeiouy" && next != 'n'))) {
                 kana.append('ん')

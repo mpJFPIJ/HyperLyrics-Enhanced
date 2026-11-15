@@ -85,9 +85,9 @@ class ApplePronunciationSourcePolicyTest {
         assertEquals("키미노 나와", official.text)
         assertFalse(official.fromSupplement)
         assertEquals(
-            "AI 발음", ApplePronunciationSourcePolicy.select(
+            "인공지능 발음", ApplePronunciationSourcePolicy.select(
                 official = "키미노 나와",
-                supplement = "AI 발음",
+                supplement = "인공지능 발음",
                 priority = RootConstants.APPLE_MUSIC_PRONUNCIATION_HANGUL_FIRST,
                 hangulOnly = true,
             ).text,

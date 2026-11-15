@@ -61,9 +61,9 @@ internal class ApplePlaybackHooks(
     private var progressJob: Job? = null
     private var remotePlayer: RemotePlayer? = null
     /** Playback surface activity. BUFFERING remains active. */
-    private var playing = false
+    @Volatile private var playing = false
     /** True only while the media clock may advance. BUFFERING is false. */
-    private var timelineAdvancing = false
+    @Volatile private var timelineAdvancing = false
     private val exoPlaybackSignals =
         WeakIdentityMap<Any, AppleExoPlaybackIntentPolicy.Resolution>()
     private val networkErrorPlayer = ThreadLocal<Any?>()
@@ -73,13 +73,13 @@ internal class ApplePlaybackHooks(
     private var networkRetryAccess: NetworkRetryAccess? = null
     private var zeroPositionReadCount = 0
     private var hasLoggedNonZeroPosition = false
-    private var lastTimingSamplePosition = -1L
-    private var lastTimingSampleSongId: String? = null
+    @Volatile private var lastTimingSamplePosition = -1L
+    @Volatile private var lastTimingSampleSongId: String? = null
     private var lastTimingSampleAtMs = 0L
     private var lastTimingTraceAtMs = 0L
     private var lastTimingStateSignature: String? = null
-    private var lastExplicitSeekAtMs = 0L
-    private var lastExplicitSeekPosition = -1L
+    @Volatile private var lastExplicitSeekAtMs = 0L
+    @Volatile private var lastExplicitSeekPosition = -1L
     private var lastPlaybackAnchorAtMs = 0L
     private val atmosphereSessionCallbackHit = AtomicBoolean(false)
     private val atmosphereVariantCallbackHit = AtomicBoolean(false)

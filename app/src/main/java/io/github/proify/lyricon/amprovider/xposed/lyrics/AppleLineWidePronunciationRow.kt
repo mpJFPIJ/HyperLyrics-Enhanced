@@ -185,17 +185,20 @@ internal class AppleLineWidePronunciationRow {
                     0.7152f * Color.green(color) + 0.0722f * Color.blue(color)) / 255f
                 brightness to opacity
             }
-            val nativeBrightness = nativeStates.maxOfOrNull { it.first } ?: 1f
-            val nativeOpacity = nativeStates.maxOfOrNull { it.second } ?: 1f
-            if (kotlin.math.abs(alpha - nativeOpacity) > 0.01f) alpha = nativeOpacity
+            val defaultNativeBrightness = nativeStates.maxOfOrNull { it.first * it.second } ?: 1f
+            // The line-wide reading shares the same native parent fade.
+            // Applying another max word alpha to the *entire* Hangul line
+            // fades parts whose corresponding Japanese word is fully active.
+            if (kotlin.math.abs(alpha - 1f) > 0.01f) alpha = 1f
             val position = playbackPositionMs?.invoke()
             val activeVariant = position?.let {
                 AppleTimedPronunciationHighlightPolicy.closestVariant(it, timedVariants)
             }?.let(timedVariantLookups::get)
             var changed = false
             timedStyles.forEach { (offset, style) ->
+                val nativeWord = activeVariant?.get(offset)
                 val next = position?.let { now ->
-                    activeVariant?.get(offset)?.let { unit ->
+                    nativeWord?.let { unit ->
                         AppleTimedPronunciationHighlightPolicy.progress(now, unit)
                     }
                 } ?: 0f
@@ -203,6 +206,11 @@ internal class AppleLineWidePronunciationRow {
                     style.progress = next
                     changed = true
                 }
+                val nativeBrightness = nativeWord?.sourceWordIndex
+                    ?.takeIf { it in nativeStates.indices }
+                    ?.let { index ->
+                        nativeStates[index].first * nativeStates[index].second
+                    } ?: defaultNativeBrightness
                 if (kotlin.math.abs(style.nativeBrightness - nativeBrightness) > 0.01f) {
                     style.nativeBrightness = nativeBrightness
                     changed = true

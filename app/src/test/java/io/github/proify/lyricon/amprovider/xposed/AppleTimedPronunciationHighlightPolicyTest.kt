@@ -6,6 +6,23 @@ import org.junit.Assert.assertFalse
 import org.junit.Test
 
 class AppleTimedPronunciationHighlightPolicyTest {
+    @org.junit.Test fun `eachHangulSyllableTracksItsOwnOriginalAppleWordRatherThanBrightestWord`() {
+        val timed = listOf(
+            AppleTimedSourceWord("みその中", 1_000L, 2_000L),
+            AppleTimedSourceWord("から", 2_000L, 2_400L),
+        )
+        val units = AppleTimedPronunciationHighlightPolicy.units(
+            sourceText = "みその中から",
+            pronunciation = "미소노나카카라",
+            timedWords = timed,
+        )
+        org.junit.Assert.assertEquals("미소노나카카라".length, units.size)
+        org.junit.Assert.assertEquals(0, units.first().sourceWordIndex)
+        org.junit.Assert.assertEquals(1, units.last().sourceWordIndex)
+        org.junit.Assert.assertEquals(1f, AppleTimedPronunciationHighlightPolicy.progress(
+            2_400L, units.last()), 0.001f)
+    }
+
     @Test
     fun `hangul syllables highlight individually using real native word timings`() {
         val segments = AppleTimedPronunciationHighlightPolicy.units(

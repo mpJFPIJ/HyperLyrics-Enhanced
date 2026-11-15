@@ -23,6 +23,8 @@ internal data class AppleTimedReadingUnit(
     val end: Int,
     val beginMs: Long,
     val endMs: Long,
+    // Original Apple source word index; -1 when only line-level time exists.
+    val sourceWordIndex: Int = -1,
 )
 
 /**
@@ -36,6 +38,7 @@ internal object AppleTimedPronunciationHighlightPolicy {
         val sourceEnd: Int,
         val beginMs: Long,
         val endMs: Long,
+        val nativeIndex: Int,
     )
 
     fun units(
@@ -50,7 +53,7 @@ internal object AppleTimedPronunciationHighlightPolicy {
         val sourceChars = sourceText.indices.filter { sourceText[it].isLetterOrDigit() }
         val normalizedSource = sourceChars.joinToString("") { sourceText[it].toString() }
         var sourceCursor = 0
-        val located = timedWords.mapNotNull { word ->
+        val located = timedWords.mapIndexedNotNull { nativeIndex, word ->
             if (word.beginMs < 0L || word.endMs <= word.beginMs) return@mapNotNull null
             val normalizedWord = word.text.filter(Char::isLetterOrDigit)
             if (normalizedWord.isEmpty()) return@mapNotNull null
@@ -62,6 +65,7 @@ internal object AppleTimedPronunciationHighlightPolicy {
                 sourceEnd = sourceChars[sourceCursor - 1] + 1,
                 beginMs = word.beginMs,
                 endMs = word.endMs,
+                nativeIndex = nativeIndex,
             )
         }
         val hasLineWindow = lineBeginMs != null && lineEndMs != null &&
@@ -154,7 +158,13 @@ internal object AppleTimedPronunciationHighlightPolicy {
             val begin = clockAt(coordinate.first, ending = false) ?: return@mapNotNull null
             val end = clockAt(coordinate.second, ending = true) ?: return@mapNotNull null
             if (end <= begin) return@mapNotNull null
-            AppleTimedReadingUnit(textIndex, textIndex + 1, begin, end)
+            val midpoint = (coordinate.first + coordinate.second) / 2.0
+            val sourceWord = located.firstOrNull { native ->
+                midpoint >= native.sourceStart && midpoint < native.sourceEnd
+            }?.nativeIndex ?: -1
+            AppleTimedReadingUnit(
+                textIndex, textIndex + 1, begin, end, sourceWordIndex = sourceWord,
+            )
         }
     }
 

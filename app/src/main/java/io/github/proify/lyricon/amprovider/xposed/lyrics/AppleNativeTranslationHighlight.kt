@@ -209,10 +209,18 @@ internal class AppleNativeTranslationHighlight {
             val view: TextView,
             val colors: android.content.res.ColorStateList,
             val opacity: Float,
+            val currentColor: Int,
         )
         private val originals = views.map {
-            SavedStyle(it, it.textColors, it.alpha)
+            SavedStyle(it, it.textColors, it.alpha, it.currentTextColor)
         }
+        private val inactiveColor: Int = originals.minByOrNull {
+            val c = it.currentColor
+            Color.red(c) + Color.green(c) + Color.blue(c)
+        }?.currentColor ?: Color.GRAY
+        private val inactiveOpacity: Float = originals.minOfOrNull {
+            it.opacity
+        } ?: 1f
         private var running = false
         private var lastActive: Boolean? = null
         private val bounds = Rect()
@@ -269,10 +277,18 @@ internal class AppleNativeTranslationHighlight {
                             view.alpha = 1f
                         }
                     }
-                } else if (lastActive == true) {
+                } else {
+                    // A wrapped translation is ONE logical lyric sentence.
+                    // Apple's old word animation can leave a bright bottom
+                    // fragment and dim top fragment even after the line ends.
+                    // Keep the entire inactive translation in one neutral
+                    // state instead of restoring its per-fragment mismatch.
                     originals.forEach { saved ->
-                        saved.view.setTextColor(saved.colors)
-                        saved.view.alpha = saved.opacity
+                        val view = saved.view
+                        if (view.currentTextColor != inactiveColor)
+                            view.setTextColor(inactiveColor)
+                        if (kotlin.math.abs(view.alpha - inactiveOpacity) > 0.01f)
+                            view.alpha = inactiveOpacity
                     }
                 }
                 lastActive = active

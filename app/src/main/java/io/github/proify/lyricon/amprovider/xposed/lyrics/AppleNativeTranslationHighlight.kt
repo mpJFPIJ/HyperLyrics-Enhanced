@@ -30,6 +30,7 @@ internal object AppleNativeTranslationHighlightPolicy {
 internal class AppleNativeTranslationHighlight {
     private data class Context(
         val songId: String,
+        val sourceText: String,
         val beginMs: Long,
         val endMs: Long,
         val translation: String,
@@ -37,19 +38,53 @@ internal class AppleNativeTranslationHighlight {
     )
     private val byHolder = WeakIdentityMap<Any, Context>()
     private val pulses = WeakHashMap<View, Pulse>()
+    private val bySource = LinkedHashMap<String, Context>()
+    private val ambiguousSources = HashSet<String>()
+    private var indexedSongId: String? = null
+    private var indexedRevision = -1L
+
+    private fun sourceKey(text: String): String =
+        AppleLineWidePronunciationRowPolicy.sourceKey(text)
+
+    private fun rememberSource(ctx: Context) {
+        synchronized(bySource) {
+            if (indexedSongId != ctx.songId || indexedRevision != ctx.revision ||
+                bySource.size > 512
+            ) {
+                bySource.clear()
+                ambiguousSources.clear()
+                indexedSongId = ctx.songId
+                indexedRevision = ctx.revision
+            }
+            val key = sourceKey(ctx.sourceText)
+            if (key.isBlank() || key in ambiguousSources) return
+            val previous = bySource[key]
+            // The same chorus may have multiple distinct timing windows:
+            // don't highlight an unrelated recycled holder by guessing.
+            if (previous != null && previous.beginMs != ctx.beginMs) {
+                bySource.remove(key)
+                ambiguousSources.add(key)
+            } else {
+                bySource[key] = ctx
+            }
+        }
+    }
 
     fun remember(
         holder: Any?,
         songId: String?,
+        sourceText: String?,
         beginMs: Long,
         endMs: Long,
         translation: String,
         revision: Long,
     ) {
-        if (holder == null || songId.isNullOrBlank() ||
+        if (songId.isNullOrBlank() || sourceText.isNullOrBlank() ||
             beginMs < 0L || endMs <= beginMs || translation.isBlank()
         ) return
-        byHolder[holder] = Context(songId, beginMs, endMs, translation, revision)
+        val ctx = Context(songId, sourceText, beginMs, endMs, translation, revision)
+        if (holder != null) byHolder[holder] = ctx
+        rememberSource(ctx)
     }
 
     fun clearHolder(holder: Any?, root: View?) {
@@ -64,10 +99,22 @@ internal class AppleNativeTranslationHighlight {
         revision: Long,
         enabled: Boolean,
         playbackPositionMs: () -> Long?,
+        observedSourceCells: List<String> = emptyList(),
     ): Boolean {
         root ?: return false
         pulses.remove(root)?.stop()
-        val ctx = holder?.let { byHolder.remove(it) } ?: return false
+        val holderCtx = holder?.let { byHolder.remove(it) }
+        val fallback = if (holderCtx == null && currentSongId != null &&
+            observedSourceCells.isNotEmpty()
+        ) synchronized(bySource) {
+            if (indexedSongId != currentSongId || indexedRevision != revision) null
+            else bySource.values.singleOrNull { candidate ->
+                AppleLineWidePronunciationRowPolicy.verifiedInsertionIndex(
+                    candidate.sourceText, observedSourceCells,
+                ) != null
+            }
+        } else null
+        val ctx = holderCtx ?: fallback ?: return false
         if (!enabled || ctx.songId != currentSongId || ctx.revision != revision) return false
         val texts = mutableListOf<TextView>()
         fun scan(view: View, depth: Int) {

@@ -97,11 +97,12 @@ internal fun AppleLyricsSupplementHooks.hookAppleLyricTextGetter(clazz: Class<*>
                     (lyricsNativeCall(chain.thisObject,
                         AppleMusicRuntimeMember.LYRICS_NATIVE_END_METHOD) as? Number)?.toLong()
                 }.getOrNull()
-                if (timedContext?.holder != null && lineBegin != null &&
+                if (lineBegin != null &&
                     lineEnd != null && lineEnd > lineBegin && result.isNotBlank()
                 ) translationLineHighlight.remember(
-                    holder = timedContext.holder,
+                    holder = timedContext?.holder,
                     songId = currentAppleLyricsSongId,
+                    sourceText = nativeOriginalLineText(chain.thisObject),
                     beginMs = lineBegin,
                     endMs = lineEnd,
                     translation = result,
@@ -332,6 +333,7 @@ internal fun AppleLyricsSupplementHooks.bindLineWidePronunciation(
         revision = revision,
         enabled = requestedAppleLyricsRowVisibility().translation,
         playbackPositionMs = { appleLyricsCurrentPlaybackPositionMs() },
+        observedSourceCells = observedCells,
     )
     val count = if (shown) lineWideShownDiagnosticCount.incrementAndGet()
         else lineWideMissingDiagnosticCount.incrementAndGet()

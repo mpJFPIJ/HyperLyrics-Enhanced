@@ -327,15 +327,21 @@ internal fun AppleLyricsSupplementHooks.bindLineWidePronunciation(
     // The built-in Apple pronunciation text is often much smaller than the
     // Japanese text. Keep its native position and timing, scale text only.
     lineWidePronunciationRow.fitNativeHangulSize(root)
-    translationLineHighlight.bind(
-        holder = context.holder,
-        root = root,
-        currentSongId = songId,
-        revision = revision,
-        enabled = requestedAppleLyricsRowVisibility().translation,
-        playbackPositionMs = { appleLyricsCurrentPlaybackPositionMs() },
-        observedSourceCells = observedCells,
-    )
+    if (retry == 0) {
+        translationLineHighlight.bind(
+            holder = context.holder,
+            root = root,
+            currentSongId = songId,
+            revision = revision,
+            enabled = requestedAppleLyricsRowVisibility().translation,
+            playbackPositionMs = { appleLyricsCurrentPlaybackPositionMs() },
+            observedSourceCells = observedCells,
+            isCurrent = {
+                currentAppleLyricsSongId == songId &&
+                    nativeOnlineTranslationStore.revision() == revision
+            },
+        )
+    }
     if (!shown && retry < 2 && root != null &&
         (nativeOnlineTranslationStore.hasHangulPronunciation(songId) ||
             nativeOnlineTranslationStore.hasAiHangulPronunciation(songId))

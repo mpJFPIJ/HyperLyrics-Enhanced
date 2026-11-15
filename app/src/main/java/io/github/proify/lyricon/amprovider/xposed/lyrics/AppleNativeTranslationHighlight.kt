@@ -1,7 +1,6 @@
 package io.github.proify.lyricon.amprovider.xposed
 
-import android.content.res.ColorStateList
-import android.graphics.Color
+ import android.graphics.Color
 import android.graphics.Rect
 import android.view.View
 import android.view.ViewGroup
@@ -105,8 +104,10 @@ internal class AppleNativeTranslationHighlight {
         playbackPositionMs: () -> Long?,
         observedSourceCells: List<String> = emptyList(),
         retry: Int = 0,
+        isCurrent: () -> Boolean = { true },
     ): Boolean {
         root ?: return false
+        if (!isCurrent()) return false
         if (retry == 0) pulses.remove(root)?.stop()
         val generation = bindingGenerations[root] ?: 0L
         fun retryAfterLayout(ctx: Context? = null) {
@@ -114,10 +115,10 @@ internal class AppleNativeTranslationHighlight {
             if (ctx != null && holder != null) byHolder[holder] = ctx
             root.postDelayed({
                 if (bindingGenerations[root] == generation &&
-                    root.isAttachedToWindow
+                    root.isAttachedToWindow && isCurrent()
                 ) bind(
                     holder, root, currentSongId, revision, enabled,
-                    playbackPositionMs, observedSourceCells, retry + 1,
+                    playbackPositionMs, observedSourceCells, retry + 1, isCurrent,
                 )
             }, when (retry) {
                 0 -> 24L

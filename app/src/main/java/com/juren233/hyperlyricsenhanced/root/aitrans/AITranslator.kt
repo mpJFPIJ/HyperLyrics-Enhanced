@@ -251,8 +251,13 @@ object AITranslator {
         if (!includePronunciation) return emptyList()
         val key = AITranslationKey.pronunciation(song, lines)
         val cached = (cache.getFromMemory(key) ?: cache.getFromDb(key)).orEmpty()
-        val knownIndices = cached.map(TranslationItem::index).toSet()
-        if (knownIndices.size == lines.count { it.any(Char::isLetter) }) return cached
+        val knownIndices = cached.filter { item ->
+            item.index in lines.indices &&
+                com.juren233.hyperlyricsenhanced.common.lyric.RomanizationPolicy
+                    .sanitizeHangulSupplement(lines[item.index], item.roma) != null
+        }.map(TranslationItem::index).toSet()
+        val eligibleCount = lines.count(AIPronunciationPolicy::eligibleForeignLine)
+        if (knownIndices.size >= eligibleCount) return cached
         val fresh = LocalJapanesePronunciation.generate(lines)
             .filterNot { it.index in knownIndices }
         if (fresh.isEmpty()) return cached

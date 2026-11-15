@@ -11,11 +11,35 @@ internal object LocalJapanesePronunciation {
         analyzer: (String) -> LineReadingResult = SudachiReadingEngine::analyzeLine,
     ): LineReadingResult {
         if (text.isBlank()) return LineReadingResult(null, emptyList(), LineReadingStatus.EMPTY)
-        if (text.any(::isJapanese)) return analyzer(text)
+        if (text.any(::isJapanese)) {
+            val result = analyzer(text)
+            if (result.status == LineReadingStatus.COMPLETE) return result
+            return kanaOnlyFallback(text) ?: result
+        }
         val latin = Regex("[A-Za-z]+").findAll(text).map { match ->
             RawReadingToken(match.range.first, match.range.last + 1, match.value)
         }.toList()
         return SourceReadingAssembler.assemble(text, latin)
+    }
+
+    /** Pure kana remains readable even if the Sudachi dictionary is unavailable. */
+    private fun kanaOnlyFallback(source: String): LineReadingResult? {
+        val segments = Regex("[\\u3040-\\u30FF\\u30FC]+")
+            .findAll(source).toList()
+        if (segments.isEmpty()) return null
+        val covered = BooleanArray(source.length)
+        segments.forEach { match ->
+            for (index in match.range) covered[index] = true
+        }
+        if (source.indices.any { !covered[it] && source[it].isLetterOrDigit() }) return null
+        val tokens = segments.map { match ->
+            RawReadingToken(
+                match.range.first, match.range.last + 1,
+                if (match.value == "こんにちは") "コンニチワ" else match.value,
+            )
+        }
+        return SourceReadingAssembler.assemble(source, tokens)
+            .takeIf { it.status == LineReadingStatus.COMPLETE }
     }
 
     fun generate(lines: List<String>): List<TranslationItem> = lines.mapIndexedNotNull { index, line ->

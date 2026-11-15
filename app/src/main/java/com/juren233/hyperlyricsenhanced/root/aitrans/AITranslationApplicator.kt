@@ -27,14 +27,18 @@ internal object AITranslationApplicator {
             )
             val preferredPronunciation = hangulPronunciation
                 ?: line.roma?.takeIf(String::isNotBlank)
+            val provenance = if (hangulPronunciation != null)
+                "AI_GENERATED_UNVERIFIED" else line.pronunciationStatus
             if (shouldReplaceTranslation ||
-                (preferredPronunciation != null && preferredPronunciation != line.roma)
+                (preferredPronunciation != null && preferredPronunciation != line.roma) ||
+                (hangulPronunciation != null && line.pronunciationStatus != provenance)
             ) {
                 if (shouldReplaceTranslation) appliedCount++
                 line.copy(
                     translation = if (shouldReplaceTranslation) transText else line.translation,
                     translationWords = if (shouldReplaceTranslation) null else line.translationWords,
                     roma = preferredPronunciation,
+                    pronunciationStatus = provenance,
                 )
             } else line
         }

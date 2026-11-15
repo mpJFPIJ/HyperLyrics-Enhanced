@@ -28,13 +28,19 @@ internal object AppleMusicSourcePhonetics {
             val previousReading = RomanizationPolicy.sanitizeHangulSupplement(
                 sourceText, line.roma,
             )?.takeIf { candidate ->
-                (englishOnly || kanaCount >= 1) &&
+                (englishOnly || kanaCount >= 1 ||
+                    line.pronunciationStatus == "AI_GENERATED_UNVERIFIED") &&
                     candidate.count { it in '가'..'힣' } >=
                         maxOf(1, kanaCount / 2)
             }
             return line.copy(
                 roma = previousReading,
-                pronunciationWords = null,
+                pronunciationWords = previousReading?.let { reading ->
+                    AppleNativeReadingProjection.projectApproximate(
+                        sourceText, line.words.orEmpty().map { it.text.orEmpty() },
+                        reading,
+                    )?.words
+                },
                 pronunciationSpans = null,
                 pronunciationStatus = if (previousReading != null) "AI_FALLBACK_UNVERIFIED"
                     else analyzed.status.name,

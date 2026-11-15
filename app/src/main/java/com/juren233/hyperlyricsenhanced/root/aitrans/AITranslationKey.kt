@@ -14,6 +14,7 @@ internal object AITranslationKey {
         calculate(configs, song, lines, includePronunciation = true),
         pronunciation(song, lines),
         pronunciation(song, lines, policyRevision = PREVIOUS_SOURCE_OFFSET_REVISION),
+        pronunciation(song, lines, policyRevision = "sudachi-v1-20260723-full-line-offsets-v3-native-anchors-retry"),
         pronunciation(song, lines, policyRevision = LEGACY_OFFLINE_READING_REVISION),
     )
 
@@ -44,7 +45,7 @@ internal object AITranslationKey {
     fun pronunciation(
         song: Song,
         lines: List<String>,
-        policyRevision: String = "sudachi-v1-20260723-full-line-offsets-v3-native-anchors-retry",
+        policyRevision: String = "sudachi-v2-kana-fallback-kanji-language-v4",
     ): String = buildString {
         appendLine(policyRevision)
         append("title=").appendLine(song.name.orEmpty())

@@ -1,6 +1,7 @@
 package com.juren233.hyperlyricsenhanced.root.aitrans
 
 import com.juren233.hyperlyricsenhanced.lyric.model.Song
+import com.juren233.hyperlyricsenhanced.common.lyric.LyricMetadataKeys
 
 /**
  * Narrow enrichment gate: phonetic supplements for Japanese and English only.
@@ -14,7 +15,14 @@ internal object AIPronunciationPolicy {
         val lines = song.lyrics.orEmpty()
             .mapNotNull { it.text?.trim() }
             .filter(String::isNotBlank)
-        return lines.any(::hasJapaneseKana) || (lines.isNotEmpty() &&
+        val appleJapaneseLanguage = song.metadata
+            ?.getString(LyricMetadataKeys.APPLE_PRONUNCIATION_LANGUAGES)
+            .orEmpty().split(Regex("[,;\\s]+"))
+            .any { it.equals("ja", true) || it.startsWith("ja-", true) }
+        // A Japanese song may contain entirely kanji-only lyric lines.
+        return lines.any(::hasJapaneseKana) ||
+            (appleJapaneseLanguage && lines.any(::hasHan)) ||
+            (lines.isNotEmpty() &&
             lines.count(::hasEnglishLetters) * 2 >= lines.size &&
             lines.none(::hasNonLatinLetters))
     }
@@ -50,6 +58,11 @@ internal object AIPronunciationPolicy {
             }
             .map { it.index }.toSet()
     }
+
+    private fun hasHan(text: String): Boolean =
+        text.codePoints().anyMatch { code ->
+            Character.UnicodeScript.of(code) == Character.UnicodeScript.HAN
+        }
 
     private fun hasJapaneseKana(text: String): Boolean =
         text.codePoints().anyMatch { code ->

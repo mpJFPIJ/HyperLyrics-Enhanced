@@ -75,6 +75,26 @@ class ApplePronunciationSourcePolicyTest {
     }
 
     @Test
+    fun `Hangul first uses real Apple Hangul when there is no AI supplement`() {
+        val official = ApplePronunciationSourcePolicy.select(
+            official = "키미노 나와",
+            supplement = null,
+            priority = RootConstants.APPLE_MUSIC_PRONUNCIATION_HANGUL_FIRST,
+            hangulOnly = true,
+        )
+        assertEquals("키미노 나와", official.text)
+        assertFalse(official.fromSupplement)
+        assertEquals(
+            "AI 발음", ApplePronunciationSourcePolicy.select(
+                official = "키미노 나와",
+                supplement = "AI 발음",
+                priority = RootConstants.APPLE_MUSIC_PRONUNCIATION_HANGUL_FIRST,
+                hangulOnly = true,
+            ).text,
+        )
+    }
+
+    @Test
     fun `Hangul-only selection never mixes official romaji or Latin supplements`() {
         assertEquals(
             ApplePronunciationSourcePolicy.Selection(null, false),

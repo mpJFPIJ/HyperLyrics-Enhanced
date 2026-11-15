@@ -90,7 +90,7 @@ internal fun AppleLyricsSupplementHooks.hookAppleLyricTextGetter(clazz: Class<*>
                         pronunciationSourcePriority(),
                     )
                 ) return@installResultOverrideHook ""
-                val officialText = RomanizationPolicy.sanitize(
+                val officialText = RomanizationPolicy.sanitizeSupplement(
                     originalText = nativeOriginalLineText(chain.thisObject),
                     pronunciation = originalText,
                 )
@@ -147,7 +147,7 @@ internal fun AppleLyricsSupplementHooks.hookAppleLyricTextGetter(clazz: Class<*>
                 ) {
                     return@installResultOverrideHook ""
                 }
-                val text = RomanizationPolicy.sanitize(
+                val text = RomanizationPolicy.sanitizeSupplement(
                     originalText = nativeOriginalBackgroundLineText(chain.thisObject),
                     pronunciation = originalText,
                 )
@@ -397,7 +397,7 @@ private fun AppleLyricsSupplementHooks.hookApplePronunciationWordsGetter(
             ) ?: original
         }
         val originalText = nativeRawLineText(line, originalTextGetter)
-        val officialPronunciation = RomanizationPolicy.sanitize(
+        val officialPronunciation = RomanizationPolicy.sanitizeSupplement(
             originalText = originalText,
             pronunciation = nativeRawLineText(line, pronunciationTextGetter),
         )
@@ -433,7 +433,7 @@ private fun AppleLyricsSupplementHooks.hookApplePronunciationWordsGetter(
         val hasValidOfficialWords = selectedPronunciation.text != null &&
             !selectedPronunciation.fromSupplement &&
             officialPronunciation != null &&
-            RomanizationPolicy.sanitize(
+            RomanizationPolicy.sanitizeSupplement(
                 originalText = originalText,
                 pronunciation = nativeRawWordVectorText(original),
             ) != null
@@ -1080,7 +1080,7 @@ internal fun AppleLyricsSupplementHooks.hasValidOfficialRomanization(songNative:
                     ) as? String
                 }.getOrNull()
             }
-            RomanizationPolicy.sanitize(
+            RomanizationPolicy.sanitizeSupplement(
                 originalText = nativeOriginalLineText(line),
                 pronunciation = pronunciation,
             ) != null

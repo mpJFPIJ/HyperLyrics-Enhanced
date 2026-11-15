@@ -35,7 +35,12 @@ internal object ApplePronunciationSourcePolicy {
             priority == RootConstants.APPLE_MUSIC_PRONUNCIATION_HANGUL_FIRST
         ) {
             val hangul = overlay?.takeIf(RomanizationPolicy::isHangulPronunciation)
-            return Selection(hangul, hangul != null)
+            // Apple now supplies native Japanese→Hangul on some songs.
+            // Prefer the user's Hangul overlay, then keep native Hangul
+            // rather than blanking a real Apple phonetic track.
+            if (hangul != null) return Selection(hangul, true)
+            val nativeHangul = native?.takeIf(RomanizationPolicy::isHangulPronunciation)
+            return Selection(nativeHangul, false)
         }
 
         val supplementFirst = when (priority) {

@@ -85,6 +85,28 @@ internal fun AppleLyricsSupplementHooks.hookAppleLyricTextGetter(clazz: Class<*>
                     ).text
                 }
                 val result = AppleLyricTextTransform.transform(text.orEmpty()) ?: text.orEmpty()
+                // Capture the native line clock in the same holder's render
+                // stack. The translation may wrap into multiple TextViews:
+                // all its fragments must share ONE active-line highlight.
+                val timedContext = diagnostics.currentBindingContext()
+                val lineBegin = runCatching {
+                    (lyricsNativeCall(chain.thisObject,
+                        AppleMusicRuntimeMember.LYRICS_NATIVE_BEGIN_METHOD) as? Number)?.toLong()
+                }.getOrNull()
+                val lineEnd = runCatching {
+                    (lyricsNativeCall(chain.thisObject,
+                        AppleMusicRuntimeMember.LYRICS_NATIVE_END_METHOD) as? Number)?.toLong()
+                }.getOrNull()
+                if (timedContext?.holder != null && lineBegin != null &&
+                    lineEnd != null && lineEnd > lineBegin && result.isNotBlank()
+                ) translationLineHighlight.remember(
+                    holder = timedContext.holder,
+                    songId = currentAppleLyricsSongId,
+                    beginMs = lineBegin,
+                    endMs = lineEnd,
+                    translation = result,
+                    revision = nativeOnlineTranslationStore.revision(),
+                )
                 if (BuildConfig.DEBUG) {
                     ProviderLogger.debug(
                         "[LyricsScrollDiag] getTranslationText: line=${System.identityHashCode(chain.thisObject)}, " +
@@ -303,6 +325,14 @@ internal fun AppleLyricsSupplementHooks.bindLineWidePronunciation(
     // The built-in Apple pronunciation text is often much smaller than the
     // Japanese text. Keep its native position and timing, scale text only.
     lineWidePronunciationRow.fitNativeHangulSize(root)
+    translationLineHighlight.bind(
+        holder = context.holder,
+        root = root,
+        currentSongId = songId,
+        revision = revision,
+        enabled = requestedAppleLyricsRowVisibility().translation,
+        playbackPositionMs = { appleLyricsCurrentPlaybackPositionMs() },
+    )
     val count = if (shown) lineWideShownDiagnosticCount.incrementAndGet()
         else lineWideMissingDiagnosticCount.incrementAndGet()
     if (count <= 24) {

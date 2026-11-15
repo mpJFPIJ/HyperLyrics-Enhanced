@@ -290,6 +290,7 @@ internal class AppleLyricsSupplementHooks(
             appleRecyclerViewPredicate = { isAppleRecyclerViewInstance(it) },
             holderBindingStart = { context, root ->
                 pronunciationState.beginHolderBinding(context.holder)
+                translationLineHighlight.clearHolder(context.holder, root)
                 lineWidePronunciationRow.clear(root)
             },
             holderBound = { context, root ->
@@ -298,6 +299,7 @@ internal class AppleLyricsSupplementHooks(
         )
     }
     internal val lineWidePronunciationRow = AppleLineWidePronunciationRow()
+    internal val translationLineHighlight = AppleNativeTranslationHighlight()
     internal val lineWideMissingDiagnosticCount = AtomicInteger()
     internal val lineWideShownDiagnosticCount = AtomicInteger()
     internal val lineWideRegisteredDiagnosticCount = AtomicInteger()

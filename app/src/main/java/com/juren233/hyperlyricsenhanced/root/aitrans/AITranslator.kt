@@ -281,11 +281,11 @@ object AITranslator {
         expectedEpoch: Long,
     ): List<TranslationItem> {
         if (!includePronunciation ||
-            GroqApiKeyPool.configured(configs).isEmpty() ||
             AIPronunciationPolicy.missingReadingIndices(
                 originalLines.mapIndexed { index, line -> TranslationRequestItem(index, line) },
                 cached,
-            ).isEmpty()
+            ).isEmpty() ||
+            (GroqApiKeyPool.configured(configs).isEmpty() && !configs.isUsable)
         ) return cached
         val now = System.nanoTime() / 1_000_000L
         val last = phoneticsRepairAttemptAt[key]
@@ -294,9 +294,15 @@ object AITranslator {
         val request = TranslationRequest(originalLines.mapIndexed { index, line ->
             TranslationRequestItem(index, line)
         })
-        val patched = GroqMultiModelClient.enrichMissingPronunciation(
-            configs, song, request, cached,
-        )
+        val groqPatched = if (GroqApiKeyPool.configured(configs).isNotEmpty()) {
+            GroqMultiModelClient.enrichMissingPronunciation(configs, song, request, cached)
+        } else cached
+        // A single primary-provider API key is enough for a phonetics-only
+        // recovery attempt. Cohere's translation-only model does not normally
+        // emit roma, so don't permanently strand a few unresolved lyric lines.
+        val patched = if (configs.isUsable) PrimaryPronunciationClient.recover(
+            configs, song, request, groqPatched,
+        ) else groqPatched
         if (patched != cached) {
             cache.saveToDb(key, patched, song, originalLines, expectedEpoch = expectedEpoch)
         }

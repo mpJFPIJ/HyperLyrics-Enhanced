@@ -11,11 +11,33 @@ import android.util.Log
 import com.juren233.hyperlyricsenhanced.BuildConfig
 import com.juren233.hyperlyricsenhanced.common.RootConstants
 import com.juren233.hyperlyricsenhanced.common.lyric.RomanizationPolicy
+import com.juren233.hyperlyricsenhanced.root.aitrans.JapaneseRomajiToHangul
 import com.juren233.hyperlyricsenhanced.root.aitrans.AppleNativeReadingProjection
 import com.juren233.hyperlyricsenhanced.root.aitrans.AppleWordReadingAlignment
 import com.juren233.hyperlyricsenhanced.root.aitrans.SourceReadingSpan
 import com.juren233.hyperlyricsenhanced.root.aitrans.WordAlignmentResult
 import kotlin.math.abs
+
+
+/** Respect Apple's own Japanese romanization when it has not yet shipped a
+ * Hangul version. Conversion changes text only; all karaoke clocks remain
+ * on Apple's original word objects. */
+private fun AppleLyricsSupplementHooks.chosenAppleJapaneseReading(
+    original: String?,
+    official: String?,
+): String? {
+    official ?: return null
+    if (RomanizationPolicy.isHangulPronunciation(official) ||
+        pronunciationSourcePriority() !=
+            RootConstants.APPLE_MUSIC_PRONUNCIATION_HANGUL_FIRST
+    ) return official
+    val isJapanese = original.orEmpty().any {
+        it in '\u3040'..'\u30FF' || it in '\uFF66'..'\uFF9F'
+    } || pronunciationState.languages(currentAppleLyricsSongId).orEmpty()
+        .any { it.startsWith("ja", ignoreCase = true) }
+    if (!isJapanese) return official
+    return JapaneseRomajiToHangul.convert(official) ?: official
+}
 
 internal fun AppleLyricsSupplementHooks.hookAppleLyricTextGetter(clazz: Class<*>, name: String) {
     val method = runCatching {
@@ -90,9 +112,10 @@ internal fun AppleLyricsSupplementHooks.hookAppleLyricTextGetter(clazz: Class<*>
                         pronunciationSourcePriority(),
                     )
                 ) return@installResultOverrideHook ""
-                val officialText = RomanizationPolicy.sanitizeSupplement(
-                    originalText = nativeOriginalLineText(chain.thisObject),
-                    pronunciation = originalText,
+                val originalSourceText = nativeOriginalLineText(chain.thisObject)
+                val officialText = chosenAppleJapaneseReading(
+                    originalSourceText,
+                    RomanizationPolicy.sanitizeSupplement(originalSourceText, originalText),
                 )
                 val userReading = RomanizationPolicy.sanitizeSupplement(
                     originalText = nativeOriginalLineText(chain.thisObject),
@@ -397,9 +420,12 @@ private fun AppleLyricsSupplementHooks.hookApplePronunciationWordsGetter(
             ) ?: original
         }
         val originalText = nativeRawLineText(line, originalTextGetter)
-        val officialPronunciation = RomanizationPolicy.sanitizeSupplement(
-            originalText = originalText,
-            pronunciation = nativeRawLineText(line, pronunciationTextGetter),
+        val officialPronunciation = chosenAppleJapaneseReading(
+            originalText,
+            RomanizationPolicy.sanitizeSupplement(
+                originalText = originalText,
+                pronunciation = nativeRawLineText(line, pronunciationTextGetter),
+            ),
         )
         val onlinePronunciation = if (onlineFallback) {
             onlinePronunciationForNativeLine(line)
@@ -430,13 +456,22 @@ private fun AppleLyricsSupplementHooks.hookApplePronunciationWordsGetter(
             allowAppleNative = showNativeApplePronunciation(),
             allowHangulSupplement = showHangulSupplementPronunciation(),
         )
+        val rawOfficialVector = RomanizationPolicy.sanitizeSupplement(
+            originalText = originalText,
+            pronunciation = nativeRawWordVectorText(original),
+        )
         val hasValidOfficialWords = selectedPronunciation.text != null &&
             !selectedPronunciation.fromSupplement &&
             officialPronunciation != null &&
-            RomanizationPolicy.sanitizeSupplement(
-                originalText = originalText,
-                pronunciation = nativeRawWordVectorText(original),
-            ) != null
+            rawOfficialVector != null &&
+            // Conversion of native ja-Latn to Hangul changes the displayed
+            // characters: don't accidentally render Apple's original Latin
+            // phonetic vector as though it already contained Hangul.
+            (!RomanizationPolicy.isHangulPronunciation(officialPronunciation) ||
+                (RomanizationPolicy.isHangulPronunciation(rawOfficialVector) &&
+                    RomanizationPolicy.sameHangulSounds(
+                        rawOfficialVector, officialPronunciation,
+                    )))
         val mainWords = runCatching {
             AppleReflection.call(
                 line,

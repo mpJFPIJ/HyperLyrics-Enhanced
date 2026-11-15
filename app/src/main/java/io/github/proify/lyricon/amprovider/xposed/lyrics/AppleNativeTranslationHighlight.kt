@@ -149,7 +149,10 @@ internal class AppleNativeTranslationHighlight {
         fun scan(view: View, depth: Int) {
             if (depth > 12) return
             if (view is TextView) {
-                if (AppleNativeTranslationHighlightPolicy.fragmentMatches(
+                // The injected Hangul ReadingView is not a Korean meaning
+                // line, even if its text happens to occur in the translation.
+                if (view.javaClass.simpleName != "ReadingView" &&
+                    AppleNativeTranslationHighlightPolicy.fragmentMatches(
                         ctx.translation, view.text.toString()
                     )
                 ) texts.add(view)
@@ -184,7 +187,12 @@ internal class AppleNativeTranslationHighlight {
             retryAfterLayout(ctx)
             return false
         }
-        val pulse = Pulse(root, ctx, translationView, playbackPositionMs)
+        val pulse = Pulse(
+            root, ctx, translationView, playbackPositionMs,
+            onDetach = { old, detached ->
+                if (pulses[detached] === old) pulses.remove(detached)
+            },
+        )
         pulses[root] = pulse
         pulse.start()
         return true
@@ -195,8 +203,16 @@ internal class AppleNativeTranslationHighlight {
         private val ctx: Context,
         views: List<TextView>,
         private val playbackPositionMs: () -> Long?,
+        private val onDetach: (Pulse, View) -> Unit,
     ) : Runnable, View.OnAttachStateChangeListener {
-        private val originals = views.map { it to it.textColors }
+        private data class SavedStyle(
+            val view: TextView,
+            val colors: android.content.res.ColorStateList,
+            val opacity: Float,
+        )
+        private val originals = views.map {
+            SavedStyle(it, it.textColors, it.alpha)
+        }
         private var running = false
         private var lastActive: Boolean? = null
         private val bounds = Rect()
@@ -213,7 +229,10 @@ internal class AppleNativeTranslationHighlight {
             running = false
             root.removeOnAttachStateChangeListener(this)
             root.removeCallbacks(this)
-            originals.forEach { (text, colors) -> text.setTextColor(colors) }
+            originals.forEach { saved ->
+                saved.view.setTextColor(saved.colors)
+                saved.view.alpha = saved.opacity
+            }
         }
 
         override fun onViewAttachedToWindow(v: View) {
@@ -221,8 +240,11 @@ internal class AppleNativeTranslationHighlight {
         }
 
         override fun onViewDetachedFromWindow(v: View) {
-            // A recycled row must not leave stale translated colors.
+            // Detach must remove the map entry: a WeakHashMap with a value
+            // pointing back to its View would otherwise retain the entire
+            // native karaoke row, its translation and attached TextViews.
             stop()
+            onDetach(this, v)
         }
 
         override fun run() {
@@ -234,16 +256,24 @@ internal class AppleNativeTranslationHighlight {
                     playbackPositionMs(), ctx.beginMs, ctx.endMs,
                 )
                 if (active) {
-                    originals.forEach { (view, _) ->
-                        // Native Apple periodically animates text colors. A
-                        // one-time white set is not enough: its next frame can
-                        // restore the faded upper half of a wrapped translation.
+                    originals.forEach { saved ->
+                        val view = saved.view
+                        // Apple's native animation can update both the word
+                        // color and TextView alpha while the line is active.
+                        // Reapply one consistent foreground/opacity for all
+                        // physical wrapped lines; leave source words intact.
                         if (view.currentTextColor != Color.WHITE) {
                             view.setTextColor(Color.WHITE)
                         }
+                        if (kotlin.math.abs(view.alpha - 1f) > 0.01f) {
+                            view.alpha = 1f
+                        }
                     }
                 } else if (lastActive == true) {
-                    originals.forEach { (view, colors) -> view.setTextColor(colors) }
+                    originals.forEach { saved ->
+                        saved.view.setTextColor(saved.colors)
+                        saved.view.alpha = saved.opacity
+                    }
                 }
                 lastActive = active
             }

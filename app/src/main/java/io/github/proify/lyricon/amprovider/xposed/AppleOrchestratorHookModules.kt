@@ -147,9 +147,12 @@ private fun logStartupHookCosts(costs: List<StartupHookModuleCost>) {
     )
 }
 
-internal fun AppleMusicProviderOrchestrator.hookModuleIdsForBuild(debug: Boolean): List<String> =
+internal fun AppleMusicProviderOrchestrator.hookModuleIdsForBuild(
+    debug: Boolean,
+    ciBuildRun: String = "local",
+): List<String> =
     hookModules()
-        .filter { hookModule -> !hookModule.debugOnly || debug }
+        .filter { hookModule -> !hookModule.debugOnly || (debug && ciBuildRun == "local") }
         .map { hookModule -> hookModule.id }
 
 internal fun AppleMusicProviderOrchestrator.hookModules() = listOf(

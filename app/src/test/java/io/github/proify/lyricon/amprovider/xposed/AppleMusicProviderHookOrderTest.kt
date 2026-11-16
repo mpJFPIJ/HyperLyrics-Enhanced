@@ -26,6 +26,18 @@ class AppleMusicProviderHookOrderTest {
     }
 
     @Test
+    fun `signed CI debug APK retains playback hooks but excludes expensive UI diagnostics`() {
+        val ids = AppleMusicProvider.hookModuleIdsForBuild(
+            debug = true, ciBuildRun = "43856218853",
+        )
+        assertTrue("Needed karaoke binder missing", "hookAppleLyricsBindingDiagnostics" in ids)
+        assertTrue("Native pronunciation renderer missing", "hookApplePronunciationWordRendering" in ids)
+        for (id in DEBUG_ONLY_HOOKS) {
+            org.junit.Assert.assertFalse("Unexpected expensive CI diagnostic hook: $id", id in ids)
+        }
+    }
+
+    @Test
     fun `production must install native lyric holder binding for Korean translation and Hangul rendering`() {
         val release = AppleMusicProvider.hookModuleIdsForBuild(debug = false)
         assertTrue("Release cannot render synced Korean translations without the holder hook",

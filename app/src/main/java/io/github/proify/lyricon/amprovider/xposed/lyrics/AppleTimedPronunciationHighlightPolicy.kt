@@ -175,6 +175,21 @@ internal object AppleTimedPronunciationHighlightPolicy {
             (unit.endMs - unit.beginMs).toFloat()
     }
 
+    /**
+     * A line must not be highlighted when no source lyric occurrence is
+     * currently playing. The old closestVariant() returned a previous or
+     * future chorus even HOURS outside its timestamps.
+     */
+    fun activeVariant(
+        positionMs: Long,
+        variants: List<List<AppleTimedReadingUnit>>,
+    ): Int? = variants.indices.firstOrNull { index ->
+        val timed = variants[index]
+        timed.isNotEmpty() &&
+            positionMs >= timed.minOf { it.beginMs } &&
+            positionMs < timed.maxOf { it.endMs }
+    }
+
     /** Two identical choruses have the same text but different native timecodes. */
     fun closestVariant(
         positionMs: Long,

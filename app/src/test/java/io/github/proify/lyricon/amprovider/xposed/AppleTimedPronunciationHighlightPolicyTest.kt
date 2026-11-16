@@ -24,6 +24,19 @@ class AppleTimedPronunciationHighlightPolicyTest {
     }
 
     @Test
+    fun `non-playing previous and future karaoke rows never remain highlighted`() {
+        val a = listOf(AppleTimedReadingUnit(0, 1, 1_000L, 1_500L))
+        val b = listOf(AppleTimedReadingUnit(0, 1, 7_000L, 7_500L))
+        val variants = listOf(a, b)
+        assertEquals(null, AppleTimedPronunciationHighlightPolicy.activeVariant(999L, variants))
+        assertEquals(0, AppleTimedPronunciationHighlightPolicy.activeVariant(1_100L, variants))
+        assertEquals(null, AppleTimedPronunciationHighlightPolicy.activeVariant(1_500L, variants))
+        assertEquals(null, AppleTimedPronunciationHighlightPolicy.activeVariant(5_000L, variants))
+        assertEquals(1, AppleTimedPronunciationHighlightPolicy.activeVariant(7_100L, variants))
+        assertEquals(null, AppleTimedPronunciationHighlightPolicy.activeVariant(10_000L, variants))
+    }
+
+    @Test
     fun `hangul syllables highlight individually using real native word timings`() {
         val segments = AppleTimedPronunciationHighlightPolicy.units(
             sourceText = "駄目脳",

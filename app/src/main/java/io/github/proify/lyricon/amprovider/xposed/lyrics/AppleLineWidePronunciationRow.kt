@@ -135,8 +135,16 @@ internal class AppleLineWidePronunciationRow {
                 if (onScreen) syncTimedHighlight()
                 // Apple's karaoke line may animate from its own RenderNode.
                 // Refresh the per-syllable paint from the actual playback clock.
-                postDelayed(this, if (onScreen) 33L else 250L)
+                // Never poll unrelated/off-screen lines at animation rate.
+                // Native word cells own fast karaoke animation; this fallback
+                // is only a last-resort line-wide display.
+                postDelayed(this, if (onScreen && lineActive()) 60L else 400L)
             }
+        }
+
+        private fun lineActive(): Boolean {
+            val position = playbackPositionMs?.invoke() ?: return false
+            return AppleTimedPronunciationHighlightPolicy.activeVariant(position, timedVariants) != null
         }
 
         fun setTimedText(value: String, variants: List<List<AppleTimedReadingUnit>>) {
@@ -194,9 +202,10 @@ internal class AppleLineWidePronunciationRow {
             // fades parts whose corresponding Japanese word is fully active.
             if (kotlin.math.abs(alpha - 1f) > 0.01f) alpha = 1f
             val position = playbackPositionMs?.invoke()
-            val activeVariant = position?.let {
-                AppleTimedPronunciationHighlightPolicy.closestVariant(it, timedVariants)
-            }?.let(timedVariantLookups::get)
+            val activeVariantIndex = position?.let {
+                AppleTimedPronunciationHighlightPolicy.activeVariant(it, timedVariants)
+            }
+            val activeVariant = activeVariantIndex?.let(timedVariantLookups::get)
             var changed = false
             timedStyles.forEach { (offset, style) ->
                 val nativeWord = activeVariant?.get(offset)
@@ -209,10 +218,13 @@ internal class AppleLineWidePronunciationRow {
                     style.progress = next
                     changed = true
                 }
-                val nativeBrightness = nativeWord?.sourceWordIndex
-                    ?.takeIf { it in nativeStates.indices }
-                    ?.let(nativeStates::get)
-                    ?.let { it.first * it.second } ?: defaultNativeBrightness
+                // Do not borrow white/bright source text from a non-playing
+                // line (the parent native view may still be fully opaque).
+                val nativeBrightness = if (activeVariantIndex == null) 0.52f else
+                    nativeWord?.sourceWordIndex
+                        ?.takeIf { it in nativeStates.indices }
+                        ?.let(nativeStates::get)
+                        ?.let { it.first * it.second } ?: defaultNativeBrightness
                 if (kotlin.math.abs(style.nativeBrightness - nativeBrightness) > 0.01f) {
                     style.nativeBrightness = nativeBrightness
                     changed = true

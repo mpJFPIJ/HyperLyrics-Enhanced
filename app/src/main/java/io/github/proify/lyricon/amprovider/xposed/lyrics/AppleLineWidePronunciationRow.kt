@@ -276,18 +276,13 @@ internal class AppleLineWidePronunciationRow {
                 adjusted++
             }
         }
-        if (adjusted > 0) {
-            // Text-size mutation after native bind must trigger layout
-            // measurement on the same visible frame. Do not wait for the
-            // next lyric RecyclerView bind to resolve cell widths.
-            parent.requestLayout()
-            parent.invalidate()
-            root?.let { view ->
-                view.postOnAnimation {
-                    if (view.isAttachedToWindow) view.requestLayout()
-                }
-            }
-        }
+        // setTextSize() already requests measurement from the native parent.
+        // Forcing an additional parent.requestLayout() and a second
+        // root.postOnAnimation(requestLayout) after bind created a two-frame
+        // native karaoke gradient reflow: the lower reading glyphs could
+        // catch up only when the next lyric RecyclerView item appeared.
+        // Keep the 90% source-relative text size; let Apple complete its own
+        // single layout pass without any forced follow-up reflow.
         return adjusted
     }
 

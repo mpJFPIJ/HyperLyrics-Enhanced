@@ -97,9 +97,10 @@ import kotlin.math.abs
 import kotlin.math.roundToInt
 
 internal fun AppleMusicProviderOrchestrator.startHooks() {
-    val costs = if (BuildConfig.DEBUG) mutableListOf<StartupHookModuleCost>() else null
+    val userDiagnostics = BuildConfig.DEBUG && BuildConfig.HLE_BUILD_RUN == "local"
+    val costs = if (userDiagnostics) mutableListOf<StartupHookModuleCost>() else null
     hookModules().asSequence()
-        .filter { hookModule -> !hookModule.debugOnly || BuildConfig.DEBUG }
+        .filter { hookModule -> !hookModule.debugOnly || userDiagnostics }
         .forEach { hookModule ->
             val startNs = if (costs != null) System.nanoTime() else 0L
             hookRegistrar.withModule(hookModule.id, hookModule::installHooks)

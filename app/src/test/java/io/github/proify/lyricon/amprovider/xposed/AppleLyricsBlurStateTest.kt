@@ -37,6 +37,22 @@ class AppleLyricsBlurStateTest {
     }
 
     @Test
+    fun `stable blur does not reallocate GPU render effects on every lyric frame`() {
+        assertTrue(AppleLyricsBlurApplicationPolicy.canReuseExistingEffect(
+            alreadyBlurred = true, currentMode = 1, requestedMode = 1,
+            currentRadius = 8f, targetRadius = 8f, animatorRunning = false))
+        assertFalse(AppleLyricsBlurApplicationPolicy.canReuseExistingEffect(
+            alreadyBlurred = false, currentMode = 1, requestedMode = 1,
+            currentRadius = 8f, targetRadius = 8f, animatorRunning = false))
+        assertFalse(AppleLyricsBlurApplicationPolicy.canReuseExistingEffect(
+            alreadyBlurred = true, currentMode = 1, requestedMode = 1,
+            currentRadius = 8f, targetRadius = 11f, animatorRunning = false))
+        assertFalse(AppleLyricsBlurApplicationPolicy.canReuseExistingEffect(
+            alreadyBlurred = true, currentMode = 1, requestedMode = 1,
+            currentRadius = 8f, targetRadius = 8f, animatorRunning = true))
+    }
+
+    @Test
     fun `hyper os methods are cached per view class`() {
         val state = AppleLyricsBlurState()
         var resolved = 0

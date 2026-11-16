@@ -111,7 +111,7 @@ internal fun AppleLyricsBlurHooks.appleLyricsHasNativeRenderEffect(view: View): 
     }.getOrDefault(false)
 
 internal fun AppleLyricsBlurHooks.applyAppleLyricsBlur(view: View, mode: Int, radiusPx: Int) {
-    if (BuildConfig.DEBUG) {
+    if (BuildConfig.DEBUG && BuildConfig.HLE_BUILD_RUN == "local") {
         ProviderLogger.debug(
             "[LyricsScrollDiag] applyBlur: " +
                 "view=${view.javaClass.simpleName}@${System.identityHashCode(view)}, " +
@@ -123,13 +123,22 @@ internal fun AppleLyricsBlurHooks.applyAppleLyricsBlur(view: View, mode: Int, ra
         return
     }
     val state = blurState.withRuntimeState(view) { it }
+    val targetRadius = radiusPx.coerceAtLeast(0).toFloat()
+    if (AppleLyricsBlurApplicationPolicy.canReuseExistingEffect(
+            alreadyBlurred = blurState.isBlurred(view),
+            currentMode = state.blurMode,
+            requestedMode = mode,
+            currentRadius = state.currentBlurRadius,
+            targetRadius = targetRadius,
+            animatorRunning = state.blurAnimator != null,
+        )
+    ) return
     blurState.markBlurred(view)
     if (state.blurMode != null && state.blurMode != mode) {
         cancelAppleLyricsBlurAnimation(view, state, clearEffect = true)
         state.blurMode = null
     }
     state.blurMode = mode
-    val targetRadius = radiusPx.coerceAtLeast(0).toFloat()
     if (!appleLyricsBlurAnimationEnabled()) {
         cancelAppleLyricsBlurAnimation(view, state, clearEffect = true)
         state.currentBlurRadius = targetRadius
@@ -258,7 +267,7 @@ internal fun AppleLyricsBlurHooks.applyAppleLyricsHyperOsBlur(view: View, radius
  * 从未模糊过的视图跳过 setMiSelfBlur(0) 的反射调用；setRenderEffect(null) 照常执行。
  */
 internal fun AppleLyricsBlurHooks.clearAppleLyricsBlur(view: View, knownBlurred: Boolean = false) {
-    if (BuildConfig.DEBUG) {
+    if (BuildConfig.DEBUG && BuildConfig.HLE_BUILD_RUN == "local") {
         ProviderLogger.debug(
             "[LyricsScrollDiag] clearBlur: " +
                 "view=${view.javaClass.simpleName}@${System.identityHashCode(view)}"

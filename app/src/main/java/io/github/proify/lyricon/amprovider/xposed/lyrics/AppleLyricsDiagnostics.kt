@@ -486,7 +486,8 @@ internal class AppleLyricsDiagnostics(
         hookResolver.resolveClasses(AppleMusicHookPoint.LYRICS_RECYCLER_ADAPTER)
             .forEach { resolvedClass ->
             val adapterClass = resolvedClass.clazz
-            if (BuildConfig.DEBUG) installAppleLyricsAdapterPerformanceHooks(adapterClass)
+            if (BuildConfig.DEBUG && BuildConfig.HLE_BUILD_RUN == "local")
+                installAppleLyricsAdapterPerformanceHooks(adapterClass)
             val translationFieldName = resolvedClass.target.runtimeMemberName(
                 AppleMusicRuntimeMember.LYRICS_ADAPTER_TRANSLATION_SELECTED_FIELD,
             )
@@ -529,7 +530,7 @@ internal class AppleLyricsDiagnostics(
                         runCatching {
                             holderBindingStart(context, appleLyricsHolderRoot(context.holder))
                         }.onFailure { ProviderLogger.error("Apple pronunciation holder clear failed", it) }
-                        if (BuildConfig.DEBUG) {
+                        if (BuildConfig.DEBUG && BuildConfig.HLE_BUILD_RUN == "local") {
                             val parentPerformanceContext =
                                 appleLyricsBindingPerformanceContexts.current
                             appleLyricsBindingPerformanceContexts.push(
@@ -551,7 +552,7 @@ internal class AppleLyricsDiagnostics(
                             performance.originalInclusiveNanos =
                                 SystemClock.elapsedRealtimeNanos() - performance.startedAtNanos
                         }
-                        if (!BuildConfig.DEBUG) {
+                        if (!BuildConfig.DEBUG || BuildConfig.HLE_BUILD_RUN != "local") {
                             // Production must still bind the two lyric
                             // overlays. Avoid expensive text tree dumps,
                             // performance samples and delayed log probes.
@@ -618,7 +619,7 @@ internal class AppleLyricsDiagnostics(
                         }
                     },
                     exit = {
-                        if (BuildConfig.DEBUG) {
+                        if (BuildConfig.DEBUG && BuildConfig.HLE_BUILD_RUN == "local") {
                             appleLyricsBindingPerformanceContexts.pop()?.let { performance ->
                                 val fullNanos =
                                     SystemClock.elapsedRealtimeNanos() - performance.startedAtNanos

@@ -335,8 +335,10 @@ internal fun AppleMusicProviderOrchestrator.hookModules() = listOf(
         installer = { lyricsPlayback.lyricsHooks.hookAppleLyricsUiDiagnostics() },
     ),
     FunctionalAppleMusicHookModule(
+        // Release also needs this holder lifecycle hook: it owns the
+        // Korean translation and line-wide Hangul highlight render path.
+        // Only its diagnostic probes may remain debug-only.
         "hookAppleLyricsBindingDiagnostics",
-        debugOnly = true,
         installer = { lyricsPlayback.lyricsHooks.hookAppleLyricsBindingDiagnostics() },
     ),
     FunctionalAppleMusicHookModule(

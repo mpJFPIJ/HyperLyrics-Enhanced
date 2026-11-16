@@ -26,6 +26,15 @@ class AppleMusicProviderHookOrderTest {
     }
 
     @Test
+    fun `production must install native lyric holder binding for Korean translation and Hangul rendering`() {
+        val release = AppleMusicProvider.hookModuleIdsForBuild(debug = false)
+        assertTrue("Release cannot render synced Korean translations without the holder hook",
+            "hookAppleLyricsBindingDiagnostics" in release)
+        assertTrue("Expensive native UI diagnostics should remain debug-only",
+            "hookAppleLyricsUiDiagnostics" !in release)
+    }
+
+    @Test
     fun `Apple Music remote preference listener keeps a strong owner reference`() {
         // R6 拆分后：强引用字段声明在目录/语言组装群，监听器接线代码位于内容语言偏好扩展文件。
         fun readSource(fileName: String): String {
@@ -130,7 +139,6 @@ class AppleMusicProviderHookOrderTest {
             "hookDebugListenNowArtworkLifecycle",
             "hookVisibleMetadataDiagnostics",
             "hookAppleLyricsUiDiagnostics",
-            "hookAppleLyricsBindingDiagnostics",
             "hookLyricsNetworkRequest",
             "hookLyricsCookies",
             "hookFinalLyricsHttp",

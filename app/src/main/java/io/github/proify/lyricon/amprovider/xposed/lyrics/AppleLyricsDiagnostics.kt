@@ -486,7 +486,7 @@ internal class AppleLyricsDiagnostics(
         hookResolver.resolveClasses(AppleMusicHookPoint.LYRICS_RECYCLER_ADAPTER)
             .forEach { resolvedClass ->
             val adapterClass = resolvedClass.clazz
-            installAppleLyricsAdapterPerformanceHooks(adapterClass)
+            if (BuildConfig.DEBUG) installAppleLyricsAdapterPerformanceHooks(adapterClass)
             val translationFieldName = resolvedClass.target.runtimeMemberName(
                 AppleMusicRuntimeMember.LYRICS_ADAPTER_TRANSLATION_SELECTED_FIELD,
             )
@@ -520,30 +520,28 @@ internal class AppleLyricsDiagnostics(
                             methodName = "${method.name}/${method.parameterCount}",
                             holder = chain.args.firstOrNull(),
                             position = (chain.args.getOrNull(1) as? Number)?.toInt(),
-                            translationEnabled = debugAppleBooleanField(
-                                adapter,
-                                translationFieldName,
-                            ),
-                            pronunciationEnabled = debugAppleBooleanField(
-                                adapter,
-                                pronunciationFieldName,
-                            ),
+                            translationEnabled = if (BuildConfig.DEBUG)
+                                debugAppleBooleanField(adapter, translationFieldName) else null,
+                            pronunciationEnabled = if (BuildConfig.DEBUG)
+                                debugAppleBooleanField(adapter, pronunciationFieldName) else null,
                         )
-                        val parentPerformanceContext =
-                            appleLyricsBindingPerformanceContexts.current
                         appleLyricsBindingDiagnosticContexts.push(context)
                         runCatching {
                             holderBindingStart(context, appleLyricsHolderRoot(context.holder))
                         }.onFailure { ProviderLogger.error("Apple pronunciation holder clear failed", it) }
-                        appleLyricsBindingPerformanceContexts.push(
-                            AppleLyricsBindingPerformanceContext(
-                                binding = context,
-                                startedAtNanos = SystemClock.elapsedRealtimeNanos(),
-                                depth = (parentPerformanceContext?.depth ?: 0) + 1,
-                                inLayout = appleLyricsRecyclerPerformanceContexts.current
-                                    ?.stage == "lyrics_recycler_layout",
+                        if (BuildConfig.DEBUG) {
+                            val parentPerformanceContext =
+                                appleLyricsBindingPerformanceContexts.current
+                            appleLyricsBindingPerformanceContexts.push(
+                                AppleLyricsBindingPerformanceContext(
+                                    binding = context,
+                                    startedAtNanos = SystemClock.elapsedRealtimeNanos(),
+                                    depth = (parentPerformanceContext?.depth ?: 0) + 1,
+                                    inLayout = appleLyricsRecyclerPerformanceContexts.current
+                                        ?.stage == "lyrics_recycler_layout",
+                                )
                             )
-                        )
+                        }
                         true
                     },
                     after = { _, _ ->
@@ -552,6 +550,15 @@ internal class AppleLyricsDiagnostics(
                         appleLyricsBindingPerformanceContexts.current?.let { performance ->
                             performance.originalInclusiveNanos =
                                 SystemClock.elapsedRealtimeNanos() - performance.startedAtNanos
+                        }
+                        if (!BuildConfig.DEBUG) {
+                            // Production must still bind the two lyric
+                            // overlays. Avoid expensive text tree dumps,
+                            // performance samples and delayed log probes.
+                            val root = appleLyricsHolderRoot(context.holder)
+                            runCatching { holderBound(context, root) }
+                                .onFailure { ProviderLogger.error("Apple pronunciation row bind failed", it) }
+                            return@installScopedHook
                         }
                         measureBindingDiagnosticPhase(context, "immediate") {
                             val root = appleLyricsHolderRoot(context.holder)
@@ -611,13 +618,15 @@ internal class AppleLyricsDiagnostics(
                         }
                     },
                     exit = {
-                        appleLyricsBindingPerformanceContexts.pop()?.let { performance ->
-                            val fullNanos =
-                                SystemClock.elapsedRealtimeNanos() - performance.startedAtNanos
-                            appleLyricsBindingPerformanceContexts.current
-                                ?.let { parent -> parent.childFullNanos += fullNanos }
-                            if (performance.originalInclusiveNanos > 0L) {
-                                recordBindingPerformance(performance, fullNanos)
+                        if (BuildConfig.DEBUG) {
+                            appleLyricsBindingPerformanceContexts.pop()?.let { performance ->
+                                val fullNanos =
+                                    SystemClock.elapsedRealtimeNanos() - performance.startedAtNanos
+                                appleLyricsBindingPerformanceContexts.current
+                                    ?.let { parent -> parent.childFullNanos += fullNanos }
+                                if (performance.originalInclusiveNanos > 0L) {
+                                    recordBindingPerformance(performance, fullNanos)
+                                }
                             }
                         }
                         appleLyricsBindingDiagnosticContexts.pop()

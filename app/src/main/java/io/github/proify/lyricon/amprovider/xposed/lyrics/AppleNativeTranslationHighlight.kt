@@ -1,6 +1,11 @@
 package io.github.proify.lyricon.amprovider.xposed
 
- import android.graphics.Color
+import android.graphics.Color
+import android.text.Spanned
+import android.text.SpannableStringBuilder
+import android.text.style.ForegroundColorSpan
+import android.text.style.BackgroundColorSpan
+import android.text.style.CharacterStyle
 import android.graphics.Rect
 import android.view.View
 import android.view.ViewGroup
@@ -16,6 +21,25 @@ internal object AppleNativeTranslationHighlightPolicy {
 
     fun compact(text: String): String =
         text.filter(Char::isLetterOrDigit).lowercase(java.util.Locale.ROOT)
+
+    /**
+     * The original implementation scanned every TextView in the entire native
+     * row, then recolored arbitrary matching fragments. That could affect a
+     * reading or a future source lyric. Only the 6.5.3 translation TextView is
+     * safe to modify; accept an exact-text match when its ID is unavailable.
+     */
+    fun shouldRenderTranslationCell(
+        viewId: String?,
+        translation: String,
+        candidate: String,
+    ): Boolean {
+        val normalizedId = viewId.orEmpty()
+        if (normalizedId == "lyrics_translation_line")
+            return fragmentMatches(translation, candidate)
+        return normalizedId.isEmpty() &&
+            compact(candidate).length >= 2 &&
+            compact(candidate) == compact(translation)
+    }
 
     fun fragmentMatches(translation: String, candidate: String): Boolean {
         val expected = compact(translation)
@@ -151,9 +175,12 @@ internal class AppleNativeTranslationHighlight {
             if (view is TextView) {
                 // The injected Hangul ReadingView is not a Korean meaning
                 // line, even if its text happens to occur in the translation.
+                val entry = runCatching {
+                    view.resources.getResourceEntryName(view.id)
+                }.getOrNull()
                 if (view.javaClass.simpleName != "ReadingView" &&
-                    AppleNativeTranslationHighlightPolicy.fragmentMatches(
-                        ctx.translation, view.text.toString()
+                    AppleNativeTranslationHighlightPolicy.shouldRenderTranslationCell(
+                        entry, ctx.translation, view.text.toString(),
                     )
                 ) texts.add(view)
             } else if (view is ViewGroup) {
@@ -209,18 +236,34 @@ internal class AppleNativeTranslationHighlight {
             val view: TextView,
             val colors: android.content.res.ColorStateList,
             val opacity: Float,
-            val currentColor: Int,
+            val originalText: CharSequence,
         )
         private val originals = views.map {
-            SavedStyle(it, it.textColors, it.alpha, it.currentTextColor)
+            SavedStyle(it, it.textColors, it.alpha, it.text)
         }
-        private val inactiveColor: Int = originals.minByOrNull {
-            val c = it.currentColor
-            Color.red(c) + Color.green(c) + Color.blue(c)
-        }?.currentColor ?: Color.GRAY
-        private val inactiveOpacity: Float = originals.minOfOrNull {
-            it.opacity
-        } ?: 1f
+        private val inactiveColor = Color.rgb(145, 145, 145)
+
+        /**
+         * Apple draws Korean meaning through a colored Spanned CharSequence.
+         * TextView.setTextColor() cannot override spans, so the upper half of
+         * wrapped lyrics kept the native gradient even when the line was
+         * active. Strip only color spans once on bind; preserve typeface,
+         * layout, size and all non-color spans.
+         */
+        private fun removeConflictingColorSpans(view: TextView) {
+            val source = view.text as? Spanned ?: return
+            val copy = SpannableStringBuilder(source)
+            val conflicting = copy.getSpans(
+                0, copy.length, CharacterStyle::class.java,
+            ).filter { span ->
+                span is ForegroundColorSpan || span is BackgroundColorSpan ||
+                    span.javaClass.simpleName.contains("gradient", ignoreCase = true) ||
+                    span.javaClass.simpleName.contains("karaoke", ignoreCase = true)
+            }
+            if (conflicting.isEmpty()) return
+            conflicting.forEach(copy::removeSpan)
+            view.setText(copy, TextView.BufferType.SPANNABLE)
+        }
         private var running = false
         private var lastActive: Boolean? = null
         private val bounds = Rect()
@@ -229,6 +272,7 @@ internal class AppleNativeTranslationHighlight {
             if (running) return
             running = true
             root.addOnAttachStateChangeListener(this)
+            originals.forEach { removeConflictingColorSpans(it.view) }
             root.post(this)
         }
 
@@ -238,6 +282,7 @@ internal class AppleNativeTranslationHighlight {
             root.removeOnAttachStateChangeListener(this)
             root.removeCallbacks(this)
             originals.forEach { saved ->
+                saved.view.setText(saved.originalText)
                 saved.view.setTextColor(saved.colors)
                 saved.view.alpha = saved.opacity
             }
@@ -287,13 +332,22 @@ internal class AppleNativeTranslationHighlight {
                         val view = saved.view
                         if (view.currentTextColor != inactiveColor)
                             view.setTextColor(inactiveColor)
-                        if (kotlin.math.abs(view.alpha - inactiveOpacity) > 0.01f)
-                            view.alpha = inactiveOpacity
+                        // A stable uniform alpha avoids splitting one wrapped
+                        // sentence into Apple-native per-fragment fade phases.
+                        if (kotlin.math.abs(view.alpha - 1f) > 0.01f)
+                            view.alpha = 1f
                     }
                 }
                 lastActive = active
             }
-            root.postDelayed(this, if (visible) 50L else 250L)
+            // ~35 main-thread pulse callbacks per second were observed in
+            // NPatch logs. Native source word animation stays untouched;
+            // translation itself only changes between active and inactive.
+            root.postDelayed(this, when {
+                !visible -> 750L
+                lastActive == true -> 100L
+                else -> 360L
+            })
         }
     }
 }

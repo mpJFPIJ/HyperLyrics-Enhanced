@@ -5,6 +5,18 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AppleNativeTranslationHighlightPolicyTest {
+    @Test fun noSourceWordOrReadingViewMayBeMistakenForTranslatedMeaning() {
+        val meaning = "머릿속에서 그만둬 라고 외치는 도덕성이"
+        assertTrue(AppleNativeTranslationHighlightPolicy.shouldRenderTranslationCell(
+            "lyrics_translation_line", meaning, meaning))
+        assertFalse(AppleNativeTranslationHighlightPolicy.shouldRenderTranslationCell(
+            "song_lyrics_word", meaning, meaning))
+        assertFalse(AppleNativeTranslationHighlightPolicy.shouldRenderTranslationCell(
+            "lyrics_pronunciation_vertical_container", meaning, meaning))
+        assertTrue(AppleNativeTranslationHighlightPolicy.shouldRenderTranslationCell(
+            null, meaning, meaning))
+    }
+
     @Test fun wrappedKoreanTranslationMustHaveOneNativeLineActiveWindow() {
         assertFalse(AppleNativeTranslationHighlightPolicy.lineActive(999L, 1000L, 2000L))
         assertTrue(AppleNativeTranslationHighlightPolicy.lineActive(1000L, 1000L, 2000L))

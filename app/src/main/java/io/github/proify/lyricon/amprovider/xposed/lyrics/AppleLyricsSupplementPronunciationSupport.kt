@@ -357,6 +357,14 @@ internal fun AppleLyricsSupplementHooks.bindLineWidePronunciation(
             }
         }, if (retry == 0) 36L else 120L)
     }
+    AppleLyricUiRuntimeProbe.record(
+        "native_lyric_holder",
+        "lineWide=${if (shown) 1 else 0} " +
+            "candidate=${if (payload != null) 1 else 0} " +
+            "sourceCells=${observedCells.size} " +
+            "translationEnabled=${if (requestedAppleLyricsRowVisibility().translation) 1 else 0}",
+        root,
+    )
     val count = if (shown) lineWideShownDiagnosticCount.incrementAndGet()
         else lineWideMissingDiagnosticCount.incrementAndGet()
     if (count <= 24) {
@@ -735,6 +743,13 @@ private fun AppleLyricsSupplementHooks.hookApplePronunciationWordsGetter(
                 ) ?: original
             }
         }
+        AppleLyricUiRuntimeProbe.record(
+            "pronunciation_word_track",
+            "track=$wordTrack officialWords=${if (hasCompatibleOfficialWords) 1 else 0} " +
+                "mainWords=${nativeVectorSize(mainWords)} " +
+                "readingChars=${selectedPronunciation.text?.length ?: 0} " +
+                "online=${if (selectedPronunciation.fromSupplement) 1 else 0}",
+        )
         logApplePronunciationWordBinding(
             line = line,
             methodName = methodName,

@@ -165,6 +165,12 @@ internal class AppleNativeTranslationHighlight {
         } else null
         val ctx = holderCtx ?: fallback
         if (ctx == null) {
+            AppleLyricUiRuntimeProbe.record(
+                "translation_context_missing",
+                "holderPresent=${if (holder != null) 1 else 0} " +
+                    "sourceCellCount=${observedSourceCells.size} retry=$retry",
+                root,
+            )
             retryAfterLayout()
             return false
         }
@@ -189,6 +195,11 @@ internal class AppleNativeTranslationHighlight {
         }
         scan(root, 0)
         if (texts.isEmpty()) {
+            AppleLyricUiRuntimeProbe.record(
+                "translation_cell_missing",
+                "candidateTextLen=${ctx.translation.length} retry=$retry",
+                root,
+            )
             retryAfterLayout(ctx)
             return false
         }
@@ -214,6 +225,12 @@ internal class AppleNativeTranslationHighlight {
             retryAfterLayout(ctx)
             return false
         }
+        AppleLyricUiRuntimeProbe.record(
+            "translation_cells_bound",
+            "matchedCells=${translationView.size} " +
+                "lineDurationMs=${ctx.endMs - ctx.beginMs} retry=$retry",
+            root,
+        )
         val pulse = Pulse(
             root, ctx, translationView, playbackPositionMs,
             onDetach = { old, detached ->

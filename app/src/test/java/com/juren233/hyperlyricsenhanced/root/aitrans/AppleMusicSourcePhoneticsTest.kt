@@ -19,7 +19,9 @@ class AppleMusicSourcePhoneticsTest {
             LineReadingResult(null, emptyList(), LineReadingStatus.MISSING_UNSUPPORTED))
         assertEquals("미치고", result.roma)
         assertEquals("AI_FALLBACK_UNVERIFIED", result.pronunciationStatus)
-        assertEquals(3, result.pronunciationWords?.size)
+        // Unverified AI reading has no trustworthy mapping to the three
+        // native Japanese cells. Preserve the entire sound for one lyric row.
+        assertNull(result.pronunciationWords)
     }
 
     @Test fun unsupportedEnglishSourceKeepsValidAiHangulFallback() {
@@ -109,8 +111,26 @@ class AppleMusicSourcePhoneticsTest {
         val result = AppleMusicSourcePhonetics.attach(line, source, incomplete)
         assertEquals("PARTIAL_SOURCE_ANCHORED", result.pronunciationStatus)
         assertEquals(2, result.pronunciationSpans?.size)
-        assertEquals(listOf("키미", "노", "나와"),
-            result.pronunciationWords?.map { it.hangul })
+        // The last token is unknown: its inferred word split must not be
+        // rendered as though it had verified native karaoke timing.
+        assertNull(result.pronunciationWords)
+        assertEquals("키미노나와", result.roma)
+    }
+
+    @Test fun unknownKanjiInRepeatedWordsKeepsTheAiReadingAsOneNaturalLine() {
+        val source = "駄目駄目駄目 脳"
+        val line = RichLyricLine(
+            text = source, roma = "다메 다메 다메 노",
+            pronunciationStatus = "AI_GENERATED_UNVERIFIED",
+            words = listOf("駄", "目", "駄", "目", "駄", "目", "脳")
+                .map { LyricWord(text = it) },
+        )
+        val unavailable = LineReadingResult(
+            null, emptyList(), LineReadingStatus.MISSING_UNSUPPORTED,
+        )
+        val result = AppleMusicSourcePhonetics.attach(line, source, unavailable)
+        assertEquals("다메 다메 다메 노", result.roma)
+        assertNull(result.pronunciationWords)
     }
 
     @Test fun oneKanaAndUnsupportedKanjiCanPreserveAnExistingAiPronunciation() {

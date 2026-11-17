@@ -2,9 +2,31 @@ package io.github.proify.lyricon.amprovider.xposed
 
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertSame
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 class AppleNativeTranslationHighlightPolicyTest {
+    @Test fun repeatedViewBindingRetainsTheSameTranslationClockUntilHolderRecycles() {
+        val holder = Any()
+        val context = AppleTranslationLineContext("song", "駄目", 1000, 1900, "안 돼", 2)
+        val store = AppleTranslationLineContextStore()
+        store.remember(holder, context)
+        assertSame(context, store.forHolder(holder))
+        assertSame(context, store.forHolder(holder))
+        store.clear(holder)
+        assertNull(store.forHolder(holder))
+    }
+
+    @Test fun recycledTranslationViewCannotRestoreOrRecolorAnUnrelatedLyric() {
+        val controlledText: CharSequence = StringBuilder("안 돼")
+        assertTrue(AppleNativeTranslationHighlightPolicy.isStillBound(
+            controlledText, controlledText,
+        ))
+        assertFalse(AppleNativeTranslationHighlightPolicy.isStillBound(
+            controlledText, StringBuilder("다음 가사"),
+        ))
+    }
     @Test fun noSourceWordOrReadingViewMayBeMistakenForTranslatedMeaning() {
         val meaning = "머릿속에서 그만둬 라고 외치는 도덕성이"
         assertTrue(AppleNativeTranslationHighlightPolicy.shouldRenderTranslationCell(

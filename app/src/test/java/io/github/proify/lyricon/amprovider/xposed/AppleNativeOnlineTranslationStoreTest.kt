@@ -75,10 +75,19 @@ class AppleNativeOnlineTranslationStoreTest {
         ))), preserveExistingPronunciation = true)
         assertEquals("MISSING_UNSUPPORTED", store.aiHangulPronunciationStatus("100", 3_000, 4_000, "未知語"))
         assertNull(store.aiHangulPronunciation("100", 3_000, 4_000, "未知語"))
-        // A unique timing key deliberately supports alternate native text;
-        // a different time must still never inherit the unsupported marker.
-        assertEquals("MISSING_UNSUPPORTED", store.aiHangulPronunciationStatus("100", 3_000, 4_000, "別の歌詞"))
+        // A reused timing key must never attach an unrelated lyric's reading.
+        assertNull(store.aiHangulPronunciationStatus("100", 3_000, 4_000, "別の歌詞"))
         assertNull(store.aiHangulPronunciationStatus("100", 4_000, 5_000, "未知語"))
+    }
+
+    @Test fun identicalTimestampWithUnrelatedSourceDoesNotStealKoreanMeaning() {
+        val store = AppleNativeOnlineTranslationStore()
+        store.receive(Song(id = "iris", lyrics = listOf(
+            RichLyricLine(begin = 1_000, end = 2_000,
+                text = "駄目駄目", translation = "안 돼 안 돼"),
+        )))
+        assertNull(store.translation("iris", 1_000, 2_000, "モラリティ"))
+        assertEquals("안 돼 안 돼", store.translation("iris", 1_000, 2_000, "駄目 駄目"))
     }
 
     @Test fun `line wide status remains addressable without exposing stale foreign song`() {
@@ -227,7 +236,7 @@ class AppleNativeOnlineTranslationStoreTest {
     }
 
     @Test
-    fun `uses timing fallback only when timing is unambiguous`() {
+    fun `uses timing fallback only when both time and lyric identity agree`() {
         val store = AppleNativeOnlineTranslationStore()
         store.update(
             song(
@@ -241,10 +250,7 @@ class AppleNativeOnlineTranslationStoreTest {
             )
         )
 
-        assertEquals(
-            "唯一翻译",
-            store.translation("100", 1_000, 2_000, "Different wrapper text"),
-        )
+        assertNull(store.translation("100", 1_000, 2_000, "Different wrapper text"))
 
         store.update(
             song(

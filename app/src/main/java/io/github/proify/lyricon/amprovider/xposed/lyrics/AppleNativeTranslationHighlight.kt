@@ -10,11 +10,14 @@ import android.graphics.Rect
 import android.view.View
 import android.view.ViewGroup
 import android.widget.TextView
-import io.github.proify.lyricon.amprovider.xposed.internal.WeakIdentityMap
 import java.util.WeakHashMap
 
 /** Keep all wrapped Korean translation text on the SAME Apple source-line clock. */
 internal object AppleNativeTranslationHighlightPolicy {
+    /** Never restore the old lyric into a TextView already rebound to another row. */
+    fun isStillBound(controlledText: CharSequence, currentText: CharSequence): Boolean =
+        controlledText === currentText
+
     fun lineActive(positionMs: Long?, beginMs: Long, endMs: Long): Boolean =
         positionMs != null && beginMs >= 0 && endMs > beginMs &&
             positionMs >= beginMs && positionMs < endMs
@@ -51,18 +54,10 @@ internal object AppleNativeTranslationHighlightPolicy {
 }
 
 internal class AppleNativeTranslationHighlight {
-    private data class Context(
-        val songId: String,
-        val sourceText: String,
-        val beginMs: Long,
-        val endMs: Long,
-        val translation: String,
-        val revision: Long,
-    )
-    private val byHolder = WeakIdentityMap<Any, Context>()
+    private val byHolder = AppleTranslationLineContextStore()
     private val pulses = WeakHashMap<View, Pulse>()
     private val bindingGenerations = WeakHashMap<View, Long>()
-    private val bySource = LinkedHashMap<String, Context>()
+    private val bySource = LinkedHashMap<String, AppleTranslationLineContext>()
     private val ambiguousSources = HashSet<String>()
     private var indexedSongId: String? = null
     private var indexedRevision = -1L
@@ -70,7 +65,7 @@ internal class AppleNativeTranslationHighlight {
     private fun sourceKey(text: String): String =
         AppleLineWidePronunciationRowPolicy.sourceKey(text)
 
-    private fun rememberSource(ctx: Context) {
+    private fun rememberSource(ctx: AppleTranslationLineContext) {
         synchronized(bySource) {
             if (indexedSongId != ctx.songId || indexedRevision != ctx.revision ||
                 bySource.size > 512
@@ -106,13 +101,15 @@ internal class AppleNativeTranslationHighlight {
         if (songId.isNullOrBlank() || sourceText.isNullOrBlank() ||
             beginMs < 0L || endMs <= beginMs || translation.isBlank()
         ) return
-        val ctx = Context(songId, sourceText, beginMs, endMs, translation, revision)
-        if (holder != null) byHolder[holder] = ctx
+        val ctx = AppleTranslationLineContext(
+            songId, sourceText, beginMs, endMs, translation, revision,
+        )
+        byHolder.remember(holder, ctx)
         rememberSource(ctx)
     }
 
     fun clearHolder(holder: Any?, root: View?) {
-        holder?.let(byHolder::remove)
+        byHolder.clear(holder)
         root?.let { view ->
             pulses.remove(view)?.stop()
             bindingGenerations[view] = (bindingGenerations[view] ?: 0L) + 1L
@@ -134,9 +131,9 @@ internal class AppleNativeTranslationHighlight {
         if (!isCurrent()) return false
         if (retry == 0) pulses.remove(root)?.stop()
         val generation = bindingGenerations[root] ?: 0L
-        fun retryAfterLayout(ctx: Context? = null) {
+        fun retryAfterLayout(ctx: AppleTranslationLineContext? = null) {
             if (retry >= 3 || !enabled) return
-            if (ctx != null && holder != null) byHolder[holder] = ctx
+            if (ctx != null) byHolder.remember(holder, ctx)
             root.postDelayed({
                 if (bindingGenerations[root] == generation &&
                     root.isAttachedToWindow && isCurrent()
@@ -150,9 +147,10 @@ internal class AppleNativeTranslationHighlight {
                 else -> 220L
             })
         }
-        val holderCtx: Context? = holder?.let { key ->
-            byHolder[key].also { byHolder.remove(key) }
-        }
+        // A holder may be bound repeatedly while its lyric line is visible;
+        // consuming this context on the first pass made subsequent calls lose
+        // their source clock and log translation_context_missing.
+        val holderCtx = byHolder.forHolder(holder)
         val fallback = if (holderCtx == null && currentSongId != null &&
             observedSourceCells.isNotEmpty()
         ) synchronized(bySource) {
@@ -244,7 +242,7 @@ internal class AppleNativeTranslationHighlight {
 
     private class Pulse(
         private val root: View,
-        private val ctx: Context,
+        private val ctx: AppleTranslationLineContext,
         views: List<TextView>,
         private val playbackPositionMs: () -> Long?,
         private val onDetach: (Pulse, View) -> Unit,
@@ -254,9 +252,10 @@ internal class AppleNativeTranslationHighlight {
             val colors: android.content.res.ColorStateList,
             val opacity: Float,
             val originalText: CharSequence,
+            var controlledText: CharSequence,
         )
         private val originals = views.map {
-            SavedStyle(it, it.textColors, it.alpha, it.text)
+            SavedStyle(it, it.textColors, it.alpha, it.text, it.text)
         }
         private val inactiveColor = Color.rgb(145, 145, 145)
 
@@ -315,7 +314,10 @@ internal class AppleNativeTranslationHighlight {
             if (running) return
             running = true
             root.addOnAttachStateChangeListener(this)
-            originals.forEach { removeConflictingColorSpans(it.view) }
+            originals.forEach { saved ->
+                removeConflictingColorSpans(saved.view)
+                saved.controlledText = saved.view.text
+            }
             root.post(this)
         }
 
@@ -326,6 +328,9 @@ internal class AppleNativeTranslationHighlight {
             root.removeCallbacks(this)
             detachForeground()
             originals.forEach { saved ->
+                if (!AppleNativeTranslationHighlightPolicy.isStillBound(
+                        saved.controlledText, saved.view.text,
+                    )) return@forEach
                 saved.view.setText(saved.originalText)
                 saved.view.setTextColor(saved.colors)
                 saved.view.alpha = saved.opacity
@@ -347,6 +352,18 @@ internal class AppleNativeTranslationHighlight {
         override fun run() {
             if (!running) return
             if (!root.isAttachedToWindow) return
+            if (originals.any { saved ->
+                    !AppleNativeTranslationHighlightPolicy.isStillBound(
+                        saved.controlledText, saved.view.text,
+                    )
+                }
+            ) {
+                // Apple's RecyclerView reused these TextViews for a new lyric.
+                // An old pulse must never recolor or restore that new content.
+                stop()
+                onDetach(this, root)
+                return
+            }
             val visible = root.isShown && root.getGlobalVisibleRect(bounds)
             if (visible) {
                 val active = AppleNativeTranslationHighlightPolicy.lineActive(
@@ -354,7 +371,11 @@ internal class AppleNativeTranslationHighlight {
                 )
                 if (active) {
                     attachForeground()
-                    originals.forEach { saved ->
+                    originals.filter { saved ->
+                        AppleNativeTranslationHighlightPolicy.isStillBound(
+                            saved.controlledText, saved.view.text,
+                        )
+                    }.forEach { saved ->
                         val view = saved.view
                         // Apple's native animation can update both the word
                         // color and TextView alpha while the line is active.
@@ -374,7 +395,11 @@ internal class AppleNativeTranslationHighlight {
                     // fragment and dim top fragment even after the line ends.
                     // Keep the entire inactive translation in one neutral
                     // state instead of restoring its per-fragment mismatch.
-                    originals.forEach { saved ->
+                    originals.filter { saved ->
+                        AppleNativeTranslationHighlightPolicy.isStillBound(
+                            saved.controlledText, saved.view.text,
+                        )
+                    }.forEach { saved ->
                         val view = saved.view
                         if (view.currentTextColor != inactiveColor)
                             view.setTextColor(inactiveColor)

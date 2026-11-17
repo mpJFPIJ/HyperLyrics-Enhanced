@@ -12,18 +12,48 @@ internal object AITranslationKey {
     fun deletionKeys(configs: AiTranslationConfigs, song: Song, lines: List<String>): Set<String> = setOf(
         calculate(configs, song, lines, includePronunciation = false),
         calculate(configs, song, lines, includePronunciation = true),
+        // Delete caches created before sampling parameters became part of
+        // the key. Changing those settings must not silently reuse old text.
+        calculateInternal(configs, song, lines, false, includeSampling = false),
+        calculateInternal(configs, song, lines, true, includeSampling = false),
         pronunciation(song, lines),
         pronunciation(song, lines, policyRevision = PREVIOUS_SOURCE_OFFSET_REVISION),
         pronunciation(song, lines, policyRevision = "sudachi-v1-20260723-full-line-offsets-v3-native-anchors-retry"),
         pronunciation(song, lines, policyRevision = LEGACY_OFFLINE_READING_REVISION),
     )
 
-    fun calculate(configs: AiTranslationConfigs, song: Song, lines: List<String>, includePronunciation: Boolean = false): String {
+    fun calculate(configs: AiTranslationConfigs, song: Song, lines: List<String>, includePronunciation: Boolean = false): String =
+        calculateInternal(configs, song, lines, includePronunciation, includeSampling = true)
+
+    private fun calculateInternal(
+        configs: AiTranslationConfigs,
+        song: Song,
+        lines: List<String>,
+        includePronunciation: Boolean,
+        includeSampling: Boolean,
+    ): String {
         return buildString {
             append("target=").appendLine(configs.targetLanguage.orEmpty())
             append("provider=").appendLine(configs.baseUrl.orEmpty().trim().trimEnd('/').lowercase())
             append("model=").appendLine(configs.model.orEmpty().trim().lowercase())
             append("prompt=").appendLine(configs.prompt)
+            // The default recipe keeps its existing cache identity: one
+            // translation per song. Only a changed sampling recipe needs a
+            // distinct key, so existing good translations are not re-billed.
+            if (includeSampling && (
+                    configs.temperature != AiTranslationConfigs.DEFAULT_TEMPERATURE ||
+                    configs.topP != AiTranslationConfigs.DEFAULT_TOP_P ||
+                    configs.maxTokens != AiTranslationConfigs.DEFAULT_MAX_TOKENS ||
+                    configs.presencePenalty != AiTranslationConfigs.DEFAULT_PRESENCE_PENALTY ||
+                    configs.frequencyPenalty != AiTranslationConfigs.DEFAULT_FREQUENCY_PENALTY
+                )
+            ) {
+                append("temperature=").appendLine(configs.temperature)
+                append("topP=").appendLine(configs.topP)
+                append("maxTokens=").appendLine(configs.maxTokens)
+                append("presencePenalty=").appendLine(configs.presencePenalty)
+                append("frequencyPenalty=").appendLine(configs.frequencyPenalty)
+            }
             // Prevent old low-quality Chinese-biased prompts from poisoning the new translation.
             appendLine("translation=ko-native-editor-v4-original-language-guard")
             // Invalidate older unreviewed phonetic results without deleting user data.

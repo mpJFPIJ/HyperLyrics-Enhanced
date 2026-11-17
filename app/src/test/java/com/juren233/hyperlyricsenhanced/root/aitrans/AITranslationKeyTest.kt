@@ -56,6 +56,28 @@ class AITranslationKeyTest {
             AITranslationKey.calculate(cohere.copy(prompt = "literary tone"), song, lines))
     }
 
+    @Test fun modelSamplingChangesMustNotReuseAnOlderTranslation() {
+        val song = Song(name = "IRIS OUT")
+        val lines = listOf("駄目")
+        val base = AiTranslationConfigs(model = "gemini", targetLanguage = "한국어")
+        val original = AITranslationKey.calculate(base, song, lines)
+        assertNotEquals(original, AITranslationKey.calculate(
+            base.copy(temperature = 0.2f), song, lines,
+        ))
+        assertNotEquals(original, AITranslationKey.calculate(
+            base.copy(topP = 0.7f), song, lines,
+        ))
+        assertNotEquals(original, AITranslationKey.calculate(
+            base.copy(maxTokens = 2048), song, lines,
+        ))
+        assertNotEquals(original, AITranslationKey.calculate(
+            base.copy(presencePenalty = 0f), song, lines,
+        ))
+        assertNotEquals(original, AITranslationKey.calculate(
+            base.copy(frequencyPenalty = 0f), song, lines,
+        ))
+    }
+
     @Test fun phoneticCacheDoesNotDependOnTranslationProvider() {
         val song = Song(name = "IRIS OUT", artist = "Kenshi Yonezu")
         val lines = listOf("駄目 駄目", "脳みそ")

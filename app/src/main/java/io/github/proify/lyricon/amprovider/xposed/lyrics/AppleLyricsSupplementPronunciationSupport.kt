@@ -650,30 +650,17 @@ private fun AppleLyricsSupplementHooks.hookApplePronunciationWordsGetter(
                     }
                     projected?.words ?: when (fromSource) {
                         is WordAlignmentResult.Verified -> fromSource.words
-                        is WordAlignmentResult.Grouped -> fromSource.words
-                        else -> nativeOnlineTranslationStore.aiHangulPronunciationWords(
-                            currentAppleLyricsSongId, begin!!, end!!, originalText,
-                        )
+                        // Grouped readings have no independent timestamp for
+                        // the continuation cells. Do not revive cached,
+                        // proportionally divided phonetics as "verified".
+                        else -> null
                     }
                 } else null
                 val safeWordReadings = alignedWords?.takeIf { words ->
                     ApplePronunciationPolicy.verifiedNativeSegments(
                         pronunciation, nativeTexts, words,
                     ) != null
-                } ?: sourceSpans?.let { anchors ->
-                    AppleNativeReadingProjection.projectAnchored(
-                        original = originalText.orEmpty(),
-                        appleWords = nativeTexts,
-                        spans = anchors.map {
-                            SourceReadingSpan(it.start, it.end, it.source, "", it.hangul)
-                        },
-                        pronunciation = pronunciation,
-                    )?.words
-                } ?: AppleNativeReadingProjection.projectApproximate(
-                    original = originalText.orEmpty(),
-                    appleWords = nativeTexts,
-                    pronunciation = pronunciation,
-                )?.words
+                }
                 // Reuse Apple's own native pronunciation-cell renderer whenever
                 // every original word has a verified Hangul counterpart. This
                 // inherits Apple's real word clock, font layout and highlight.

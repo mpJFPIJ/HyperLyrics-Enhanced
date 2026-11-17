@@ -39,17 +39,13 @@ internal object AppleMusicSourcePhonetics {
                         span.sourceEnd > span.sourceStart &&
                         sourceText.substring(span.sourceStart, span.sourceEnd) == span.sourceText
                 } else emptyList()
-            val nativeTexts = line.words.orEmpty().map { it.text.orEmpty() }
-            val projected = previousReading?.let { reading ->
-                AppleNativeReadingProjection.projectAnchored(
-                    sourceText, nativeTexts, partialSpans, reading,
-                ) ?: AppleNativeReadingProjection.projectApproximate(
-                    sourceText, nativeTexts, reading,
-                )
-            }
+            // Partial dictionary anchors can improve line-wide timing, but
+            // the unreadable gap cannot be divided into native lyric words
+            // without inventing syllable boundaries. The previous path did
+            // exactly that and displayed e.g. "다 메" for one "駄目".
             return line.copy(
                 roma = previousReading,
-                pronunciationWords = projected?.words,
+                pronunciationWords = null,
                 // Keep verified local anchors even when another token was
                 // unreadable. The Apple Music process has the *actual* native
                 // word clock and can use these spans for a better projection.
@@ -61,7 +57,7 @@ internal object AppleMusicSourcePhonetics {
                 },
                 pronunciationStatus = when {
                     previousReading == null -> analyzed.status.name
-                    projected != null && partialSpans.isNotEmpty() -> "PARTIAL_SOURCE_ANCHORED"
+                    partialSpans.isNotEmpty() -> "PARTIAL_SOURCE_ANCHORED"
                     else -> "AI_FALLBACK_UNVERIFIED"
                 },
             )
@@ -88,11 +84,10 @@ internal object AppleMusicSourcePhonetics {
             spans = analyzed.spans,
             expectedHangul = reading,
         )
-        val renderable = projected ?: AppleNativeReadingProjection.projectApproximate(
-            original = sourceText,
-            appleWords = line.words.orEmpty().map { it.text.orEmpty() },
-            pronunciation = reading,
-        )
+        // Complete, validated source spans may cross Apple's cell boundaries.
+        // They are the minimum evidence for word-level projection. Without
+        // them, retain the natural Korean sentence for a line-wide reading.
+        val renderable = projected
         return line.copy(
             roma = reading,
             pronunciationWords = renderable?.words,

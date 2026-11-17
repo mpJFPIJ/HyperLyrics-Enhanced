@@ -321,16 +321,21 @@ internal class AppleNativeOnlineTranslationStore {
 
         val timing = TimingKey(begin, end)
         current.exactContent[LineKey(timing, normalizeText(text))]?.let { return it }
-        current.translationsByTiming[timing]?.singleOrNull()?.content
-            ?.let { return it }
+        // A shared timestamp is not proof that two lines have the same text.
+        // Apple sometimes exposes different line subdivisions at one clock;
+        // attaching the other line's meaning here put Korean sentences under
+        // unrelated Japanese text. Match identity even on exact time.
+        val identity = normalizedSourceIdentity(text)
+        if (identity.isEmpty()) return null
+        current.translationsByTiming[timing]?.singleOrNull()
+            ?.takeIf { normalizedSourceIdentity(it.text) == identity }
+            ?.content?.let { return it }
 
         // Native Apple timed lines occasionally differ slightly from the
         // standalone fetched lyric's begin/end, or punctuation/whitespace.
         // Never use a global text-only match: repeated choruses could receive
         // the wrong occurrence's Korean reading.
         if (begin < 0 || end <= begin) return null
-        val identity = normalizedSourceIdentity(text)
-        if (identity.isEmpty()) return null
         val candidates = current.exactContent.asSequence().mapNotNull { (key, value) ->
             if (normalizedSourceIdentity(key.text) != identity) return@mapNotNull null
             val beginDiff = kotlin.math.abs(key.timing.begin - begin)

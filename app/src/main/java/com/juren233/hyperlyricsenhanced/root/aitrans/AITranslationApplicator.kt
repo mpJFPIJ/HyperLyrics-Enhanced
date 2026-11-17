@@ -29,8 +29,10 @@ internal object AITranslationApplicator {
                 ?: line.roma?.takeIf(String::isNotBlank)
             val provenance = if (hangulPronunciation != null)
                 "AI_GENERATED_UNVERIFIED" else line.pronunciationStatus
+            val readingChanged = preferredPronunciation != null &&
+                preferredPronunciation != line.roma
             if (shouldReplaceTranslation ||
-                (preferredPronunciation != null && preferredPronunciation != line.roma) ||
+                readingChanged ||
                 (hangulPronunciation != null && line.pronunciationStatus != provenance)
             ) {
                 if (shouldReplaceTranslation) appliedCount++
@@ -38,6 +40,11 @@ internal object AITranslationApplicator {
                     translation = if (shouldReplaceTranslation) transText else line.translation,
                     translationWords = if (shouldReplaceTranslation) null else line.translationWords,
                     roma = preferredPronunciation,
+                    // A corrected reading invalidates any prior per-word and
+                    // source-span projection. Otherwise an older karaoke map
+                    // survives alongside the newly generated Hangul text.
+                    pronunciationWords = if (readingChanged) null else line.pronunciationWords,
+                    pronunciationSpans = if (readingChanged) null else line.pronunciationSpans,
                     pronunciationStatus = provenance,
                 )
             } else line

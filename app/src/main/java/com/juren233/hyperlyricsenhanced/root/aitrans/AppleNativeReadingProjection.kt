@@ -61,6 +61,104 @@ internal object AppleNativeReadingProjection {
         return Result(words, approximate = true)
     }
 
+    /**
+     * Use verified Sudachi fragments as anchors inside a complete AI phonetic
+     * line. The old incomplete-analyzer path discarded those anchors, then
+     * divided every Hangul syllable by Japanese character counts. That can
+     * delay a complete word until the following Apple karaoke cell.
+     *
+     * Source anchors are never guessed: an anchor's actual source substring
+     * and Hangul reading must both match in order. Only the unresolved gaps
+     * are proportional, and every original native cell keeps its own timing.
+     * An unavailable or inconsistent anchor fails closed to the existing
+     * approximate fallback.
+     */
+    fun projectAnchored(
+        original: String,
+        appleWords: List<String>,
+        spans: List<SourceReadingSpan>,
+        pronunciation: String,
+    ): Result? {
+        if (spans.isEmpty() || appleWords.isEmpty()) return null
+        val baseline = projectApproximate(original, appleWords, pronunciation)
+            ?: return null
+        val full = pronunciation.filter { it in '가'..'힣' }
+        val ranges = mutableListOf<IntRange>()
+        var sourceCursor = 0
+        for (word in appleWords) {
+            val token = word.trim()
+            if (token.isEmpty()) return null
+            val start = original.indexOf(token, sourceCursor)
+            if (start < sourceCursor || start < 0 ||
+                original.substring(sourceCursor, start).any(Char::isLetterOrDigit)
+            ) return null
+            ranges += start until start + token.length
+            sourceCursor = start + token.length
+        }
+        data class Piece(val start: Int, val end: Int, val reading: String)
+        val pieces = mutableListOf<Piece>()
+        var sourceOffset = 0
+        var soundOffset = 0
+        for (span in spans.sortedBy { it.sourceStart }) {
+            if (span.sourceStart < sourceOffset || span.sourceEnd > original.length ||
+                span.sourceEnd <= span.sourceStart ||
+                original.substring(span.sourceStart, span.sourceEnd) != span.sourceText
+            ) return null
+            val anchor = span.hangul.filter { it in '가'..'힣' }
+            if (anchor.isEmpty()) return null
+            val soundStart = full.indexOf(anchor, soundOffset)
+            if (soundStart < 0) return null
+            if (soundStart > soundOffset) {
+                if (span.sourceStart <= sourceOffset) return null
+                pieces += Piece(
+                    sourceOffset, span.sourceStart,
+                    full.substring(soundOffset, soundStart),
+                )
+            }
+            pieces += Piece(span.sourceStart, span.sourceEnd, anchor)
+            sourceOffset = span.sourceEnd
+            soundOffset = soundStart + anchor.length
+        }
+        if (soundOffset < full.length) {
+            if (sourceOffset >= original.length) return null
+            pieces += Piece(sourceOffset, original.length, full.substring(soundOffset))
+        }
+
+        val readings = List(appleWords.size) { StringBuilder() }
+        for (piece in pieces) {
+            val overlaps = ranges.mapIndexedNotNull { index, range ->
+                val width = (minOf(range.last + 1, piece.end) -
+                    maxOf(range.first, piece.start)).coerceAtLeast(0)
+                if (width > 0) index to width else null
+            }
+            if (overlaps.isEmpty()) return null
+            val units = piece.reading.length
+            val weight = overlaps.sumOf { it.second }
+            var consumed = 0
+            var weighted = 0
+            overlaps.forEachIndexed { order, (index, width) ->
+                weighted += width
+                val next = if (order == overlaps.lastIndex) units
+                    else weighted * units / weight
+                if (next < consumed) return null
+                readings[index].append(piece.reading.substring(consumed, next))
+                consumed = next
+            }
+            if (consumed != units) return null
+        }
+        val aligned = appleWords.mapIndexed { index, word ->
+            LyricWordPronunciation(
+                word, readings[index].toString().ifEmpty { EMPTY_PRONUNCIATION_CELL },
+            )
+        }
+        if (aligned.joinToString("") { it.hangul }.filter { it in '가'..'힣' } != full) {
+            return null
+        }
+        // A partial dictionary analysis cannot prove the gap's phonetic
+        // boundaries. Be explicit; source words still have authentic clocks.
+        return Result(aligned, approximate = baseline.approximate)
+    }
+
     fun project(
         original: String,
         appleWords: List<String>,

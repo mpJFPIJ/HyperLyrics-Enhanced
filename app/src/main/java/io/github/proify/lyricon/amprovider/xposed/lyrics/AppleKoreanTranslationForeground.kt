@@ -2,11 +2,11 @@ package io.github.proify.lyricon.amprovider.xposed
 
 import android.graphics.Canvas
 import android.graphics.ColorFilter
-import android.graphics.Paint
 import android.graphics.PixelFormat
 import android.graphics.Rect
 import android.graphics.drawable.Drawable
 import android.view.View
+import android.view.ViewGroup
 import android.widget.TextView
 
 /**
@@ -31,8 +31,9 @@ internal class AppleKoreanTranslationForeground(
             val layout = text.layout ?: continue
             if (text.width <= 0 || text.height <= 0) continue
             val local = Rect(0, 0, text.width, text.height)
+            val parent = holderRoot as? ViewGroup ?: continue
             if (!runCatching {
-                    holderRoot.offsetDescendantRectToMyCoords(text, local)
+                    parent.offsetDescendantRectToMyCoords(text, local)
                 }.isSuccess
             ) continue
             val save = canvas.save()

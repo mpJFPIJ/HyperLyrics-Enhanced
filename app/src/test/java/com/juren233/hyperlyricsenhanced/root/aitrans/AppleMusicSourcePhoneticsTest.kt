@@ -101,13 +101,14 @@ class AppleMusicSourcePhoneticsTest {
         val incomplete = SourceReadingAssembler.assemble(
             source, listOf(
                 RawReadingToken(0, 1, "キミ"),
-                RawReadingToken(1, 2, "*"),
-                RawReadingToken(2, 4, "ナワ"),
+                RawReadingToken(1, 2, "ノ"),
+                RawReadingToken(2, 3, "*"),
+                RawReadingToken(3, 4, "ワ"),
             ),
         )
         val result = AppleMusicSourcePhonetics.attach(line, source, incomplete)
         assertEquals("PARTIAL_SOURCE_ANCHORED", result.pronunciationStatus)
-        assertEquals(1, result.pronunciationSpans?.size)
+        assertEquals(2, result.pronunciationSpans?.size)
         assertEquals(listOf("키미", "노", "나와"),
             result.pronunciationWords?.map { it.hangul })
     }

@@ -42,4 +42,24 @@ class AppleLyricsAdapterRefreshPolicyTest {
             AppleLyricsAdapterRefreshPolicy.notifyRange(Any(), 1..2, null)
         }
     }
+
+    @Test fun knownObfuscatedRecyclerBaseCanNotifyEvenWithoutAnExactVersionProfile() {
+        val adapter = HostObfuscatedAdapter()
+        assertEquals(2, AppleLyricsAdapterRefreshPolicy.notifyRange(
+            adapter, 7..8, null,
+            obfuscatedRecyclerBaseClassName = HostBaseAdapter::class.java.name,
+        ))
+        assertEquals(listOf(7, 8), adapter.notified)
+    }
+
+    @Test fun unrelatedObfuscatedMethodMustNotBeInvoked() {
+        val adapter = HostObfuscatedAdapter()
+        assertThrows(NoSuchMethodException::class.java) {
+            AppleLyricsAdapterRefreshPolicy.notifyRange(
+                adapter, 1..1, null,
+                obfuscatedRecyclerBaseClassName = "not.a.real.RecyclerViewAdapter",
+            )
+        }
+        assertEquals(emptyList<Int>(), adapter.notified)
+    }
 }

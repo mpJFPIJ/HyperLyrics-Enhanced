@@ -284,6 +284,32 @@ internal class AppleNativeTranslationHighlight {
         private var running = false
         private var lastActive: Boolean? = null
         private val bounds = Rect()
+        private var aboveNativeGradient: AppleKoreanTranslationForeground? = null
+
+        private fun attachForeground() {
+            if (aboveNativeGradient == null) {
+                // FullWidthAlphaGradientFlexboxLayout masks the child even
+                // after TextView.setTextColor(WHITE). A ViewOverlay on the
+                // *outer lyric holder* draws this one Korean meaning on top
+                // of that nested native gradient without changing Japanese
+                // source words, the pronunciation vector or their clocks.
+                aboveNativeGradient = AppleKoreanTranslationForeground(
+                    root, originals.map { it.view }, Color.WHITE,
+                ).also { drawable ->
+                    drawable.setBounds(0, 0, root.width, root.height)
+                    root.overlay.add(drawable)
+                }
+            }
+            aboveNativeGradient?.let { drawable ->
+                drawable.setBounds(0, 0, root.width, root.height)
+                drawable.invalidateSelf()
+            }
+        }
+
+        private fun detachForeground() {
+            aboveNativeGradient?.let(root.overlay::remove)
+            aboveNativeGradient = null
+        }
 
         fun start() {
             if (running) return
@@ -298,6 +324,7 @@ internal class AppleNativeTranslationHighlight {
             running = false
             root.removeOnAttachStateChangeListener(this)
             root.removeCallbacks(this)
+            detachForeground()
             originals.forEach { saved ->
                 saved.view.setText(saved.originalText)
                 saved.view.setTextColor(saved.colors)
@@ -326,6 +353,7 @@ internal class AppleNativeTranslationHighlight {
                     playbackPositionMs(), ctx.beginMs, ctx.endMs,
                 )
                 if (active) {
+                    attachForeground()
                     originals.forEach { saved ->
                         val view = saved.view
                         // Apple's native animation can update both the word
@@ -340,6 +368,7 @@ internal class AppleNativeTranslationHighlight {
                         }
                     }
                 } else {
+                    detachForeground()
                     // A wrapped translation is ONE logical lyric sentence.
                     // Apple's old word animation can leave a bright bottom
                     // fragment and dim top fragment even after the line ends.

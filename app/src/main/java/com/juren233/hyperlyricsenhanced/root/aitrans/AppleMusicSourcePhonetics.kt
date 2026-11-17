@@ -57,7 +57,8 @@ internal object AppleMusicSourcePhonetics {
                 },
                 pronunciationStatus = when {
                     previousReading == null -> analyzed.status.name
-                    partialSpans.isNotEmpty() -> "PARTIAL_SOURCE_ANCHORED"
+                    partialSpans.isNotEmpty() && !line.words.isNullOrEmpty() ->
+                        "PARTIAL_SOURCE_ANCHORED"
                     else -> "AI_FALLBACK_UNVERIFIED"
                 },
             )

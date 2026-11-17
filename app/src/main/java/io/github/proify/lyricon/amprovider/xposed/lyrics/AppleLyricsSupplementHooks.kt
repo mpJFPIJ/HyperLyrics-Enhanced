@@ -304,6 +304,11 @@ internal class AppleLyricsSupplementHooks(
     }
     internal val lineWidePronunciationRow = AppleLineWidePronunciationRow()
     internal val translationLineHighlight = AppleNativeTranslationHighlight()
+    private val profiledNativeItemChanged by lazy {
+        val point = AppleMusicHookPoint.RECYCLER_NOTIFY_ITEM_CHANGED
+        if (AppleMusicHookProfiles.exactTargets(hookResolver.version, point).isEmpty()) null
+        else runCatching { hookResolver.resolveMethodOrNull(point)?.method }.getOrNull()
+    }
     internal val lineWideBindingGeneration =
         java.util.WeakHashMap<android.view.View, Long>()
     internal val lineWideMissingDiagnosticCount = AtomicInteger()
@@ -895,11 +900,9 @@ internal class AppleLyricsSupplementHooks(
             ?: return
         val count = range.last - range.first + 1
         runCatching {
-            AppleReflection.call(adapter, "notifyItemRangeChanged", range.first, count)
-        }.recoverCatching {
-            range.forEach { position ->
-                AppleReflection.call(adapter, "notifyItemChanged", position)
-            }
+            AppleLyricsAdapterRefreshPolicy.notifyRange(
+                adapter, range, profiledNativeItemChanged,
+            )
         }.onFailure {
             ProviderLogger.error(
                 "Apple Music 补充歌词翻译可见行重绑失败: id=$songId, range=$range",

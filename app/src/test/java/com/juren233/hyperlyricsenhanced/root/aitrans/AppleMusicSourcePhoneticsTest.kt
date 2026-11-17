@@ -87,6 +87,31 @@ class AppleMusicSourcePhoneticsTest {
         assertEquals("모르는 말", result.translation)
     }
 
+    @Test fun partialSudachiSpansSurviveWhenAnotherJapaneseTokenIsUnknown() {
+        val source = "君の名は"
+        val reading = "키미노나와"
+        val line = RichLyricLine(
+            text = source, roma = reading,
+            pronunciationStatus = "AI_GENERATED_UNVERIFIED",
+            words = listOf(
+                LyricWord(text = "君"), LyricWord(text = "の"),
+                LyricWord(text = "名は"),
+            ),
+        )
+        val incomplete = SourceReadingAssembler.assemble(
+            source, listOf(
+                RawReadingToken(0, 1, "キミ"),
+                RawReadingToken(1, 2, "*"),
+                RawReadingToken(2, 4, "ナワ"),
+            ),
+        )
+        val result = AppleMusicSourcePhonetics.attach(line, source, incomplete)
+        assertEquals("PARTIAL_SOURCE_ANCHORED", result.pronunciationStatus)
+        assertEquals(1, result.pronunciationSpans?.size)
+        assertEquals(listOf("키미", "노", "나와"),
+            result.pronunciationWords?.map { it.hangul })
+    }
+
     @Test fun oneKanaAndUnsupportedKanjiCanPreserveAnExistingAiPronunciation() {
         val source = "が悪"
         val line = RichLyricLine(text = source, roma = "가 와루", translation = "나쁜")

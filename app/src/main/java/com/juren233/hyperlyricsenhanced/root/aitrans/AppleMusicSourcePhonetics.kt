@@ -33,17 +33,37 @@ internal object AppleMusicSourcePhonetics {
                     candidate.count { it in '가'..'힣' } >=
                         maxOf(1, kanaCount / 2)
             }
+            val partialSpans = if (previousReading != null) analyzed.spans
+                .filter { span ->
+                    span.sourceStart >= 0 && span.sourceEnd <= sourceText.length &&
+                        span.sourceEnd > span.sourceStart &&
+                        sourceText.substring(span.sourceStart, span.sourceEnd) == span.sourceText
+                } else emptyList()
+            val nativeTexts = line.words.orEmpty().map { it.text.orEmpty() }
+            val projected = previousReading?.let { reading ->
+                AppleNativeReadingProjection.projectAnchored(
+                    sourceText, nativeTexts, partialSpans, reading,
+                ) ?: AppleNativeReadingProjection.projectApproximate(
+                    sourceText, nativeTexts, reading,
+                )
+            }
             return line.copy(
                 roma = previousReading,
-                pronunciationWords = previousReading?.let { reading ->
-                    AppleNativeReadingProjection.projectApproximate(
-                        sourceText, line.words.orEmpty().map { it.text.orEmpty() },
-                        reading,
-                    )?.words
+                pronunciationWords = projected?.words,
+                // Keep verified local anchors even when another token was
+                // unreadable. The Apple Music process has the *actual* native
+                // word clock and can use these spans for a better projection.
+                pronunciationSpans = partialSpans.map { span ->
+                    LyricPronunciationSpan(
+                        start = span.sourceStart, end = span.sourceEnd,
+                        source = span.sourceText, hangul = span.hangul,
+                    )
                 },
-                pronunciationSpans = null,
-                pronunciationStatus = if (previousReading != null) "AI_FALLBACK_UNVERIFIED"
-                    else analyzed.status.name,
+                pronunciationStatus = when {
+                    previousReading == null -> analyzed.status.name
+                    projected != null && partialSpans.isNotEmpty() -> "PARTIAL_SOURCE_ANCHORED"
+                    else -> "AI_FALLBACK_UNVERIFIED"
+                },
             )
         }
 

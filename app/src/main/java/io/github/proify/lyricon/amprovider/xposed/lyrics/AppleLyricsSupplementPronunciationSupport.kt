@@ -660,6 +660,15 @@ private fun AppleLyricsSupplementHooks.hookApplePronunciationWordsGetter(
                     ApplePronunciationPolicy.verifiedNativeSegments(
                         pronunciation, nativeTexts, words,
                     ) != null
+                } ?: sourceSpans?.let { anchors ->
+                    AppleNativeReadingProjection.projectAnchored(
+                        original = originalText.orEmpty(),
+                        appleWords = nativeTexts,
+                        spans = anchors.map {
+                            SourceReadingSpan(it.start, it.end, it.source, "", it.hangul)
+                        },
+                        pronunciation = pronunciation,
+                    )?.words
                 } ?: AppleNativeReadingProjection.projectApproximate(
                     original = originalText.orEmpty(),
                     appleWords = nativeTexts,

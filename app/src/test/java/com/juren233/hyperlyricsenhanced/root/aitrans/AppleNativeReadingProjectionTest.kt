@@ -7,6 +7,33 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AppleNativeReadingProjectionTest {
+    @Test fun partialSudachiAnchorsKeepTheirEntireSoundOnTheCorrectAppleWord() {
+        val original = "君の名は"
+        val wordCells = listOf("君", "の", "名は")
+        val sound = "키미노나와"
+        val blind = AppleNativeReadingProjection.projectApproximate(
+            original, wordCells, sound,
+        )
+        // Blind length-proportional splitting is wrong for the kanji 君:
+        // two Hangul syllables belong to its single Japanese glyph.
+        assertEquals("키", blind?.words?.first()?.hangul)
+        val anchored = AppleNativeReadingProjection.projectAnchored(
+            original, wordCells,
+            listOf(SourceReadingSpan(0, 1, "君", "キミ", "키미")),
+            sound,
+        )
+        assertEquals(listOf("키미", "노", "나와"), anchored?.words?.map { it.hangul })
+        assertEquals(sound, anchored?.words?.joinToString("") { it.hangul })
+    }
+
+    @Test fun conflictingSourceAnchorCannotReassignUnrelatedSound() {
+        assertNull(AppleNativeReadingProjection.projectAnchored(
+            "君の名は", listOf("君", "の", "名は"),
+            listOf(SourceReadingSpan(0, 1, "君", "キミ", "미소")),
+            "키미노나와",
+        ))
+    }
+
     @Test fun aCompleteAIReadingWithoutSpansStillUsesNativeCells() {
         val result = AppleNativeReadingProjection.projectApproximate(
             original = "君の名は",

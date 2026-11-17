@@ -7,8 +7,12 @@
 package io.github.proify.extensions
 
 import java.io.ByteArrayOutputStream
+import java.util.zip.DataFormatException
 import java.util.zip.Deflater
 import java.util.zip.Inflater
+
+/** Higher than any normal song payload; bounds decompression of untrusted IPC bytes. */
+private const val MAX_INFLATED_LYRIC_BYTES = 16 * 1024 * 1024
 
 /**
  * ZLIB压缩字节数组
@@ -36,17 +40,29 @@ fun ByteArray.deflate(): ByteArray {
 fun ByteArray.inflate(): ByteArray {
     if (isEmpty()) return byteArrayOf()
 
-    return Inflater().run {
+    val inflater = Inflater().apply {
         setInput(this@inflate)
-
+    }
+    return try {
         ByteArrayOutputStream().use { output ->
             val buffer = ByteArray(4096)
-            while (!finished()) {
-                val count = inflate(buffer)
-                if (count == 0 && needsInput()) break
+            while (!inflater.finished()) {
+                val count = inflater.inflate(buffer)
+                if (count == 0) {
+                    if (inflater.finished()) break
+                    if (inflater.needsInput() || inflater.needsDictionary()) {
+                        throw DataFormatException("Incomplete or dictionary-compressed lyrics")
+                    }
+                    throw DataFormatException("ZLIB decompressor made no progress")
+                }
+                if (output.size() > MAX_INFLATED_LYRIC_BYTES - count) {
+                    throw IllegalArgumentException("Decompressed lyric payload is too large")
+                }
                 output.write(buffer, 0, count)
             }
             output.toByteArray()
-        }.also { end() }
+        }
+    } finally {
+        inflater.end()
     }
 }

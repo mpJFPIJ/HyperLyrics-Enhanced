@@ -49,7 +49,10 @@ object RomanizationPolicy {
                     Character.UnicodeScript.HAN,
                     Character.UnicodeScript.HIRAGANA,
                     Character.UnicodeScript.KATAKANA -> hasForeignLetter = true
-                    else -> return null // never annotate original Korean lines
+                    // U+30FC (ー) is a Japanese long-vowel sign, classified as
+                    // UnicodeScript.COMMON despite being a letter. It may
+                    // appear inside otherwise valid Katakana lyrics.
+                    else -> if (code != 0x30FC) return null // never annotate Korean lines
                 }
             }
             index += Character.charCount(code)
@@ -73,6 +76,12 @@ object RomanizationPolicy {
         }
         return hasHangul
     }
+
+    /** Compare all sounds, including Hangul jamo; only presentation spaces may differ. */
+    fun sameHangulSounds(first: String?, second: String?): Boolean =
+        isHangulPronunciation(first) && isHangulPronunciation(second) &&
+            first.orEmpty().filterNot(Char::isWhitespace) ==
+                second.orEmpty().filterNot(Char::isWhitespace)
 
     fun isLatinLanguageTag(language: String?): Boolean =
         language

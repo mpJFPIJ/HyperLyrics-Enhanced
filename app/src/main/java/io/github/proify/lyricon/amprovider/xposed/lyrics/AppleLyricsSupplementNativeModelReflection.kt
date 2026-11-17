@@ -12,6 +12,16 @@ import com.juren233.hyperlyricsenhanced.common.lyric.RomanizationPolicy
 internal fun AppleLyricsSupplementHooks.appleLyricsCurrentPlaybackPositionMs(): Long? =
     playbackHooks().currentPositionMs()
 
+/** Only module-rendered active lines consume the song-specific time projection. */
+internal fun AppleLyricsSupplementHooks.appleLyricsSupplementPlaybackPositionMs(): Long? =
+    playbackHooks().currentPositionMs()?.let { rawPosition ->
+        AppleLyricsSyncOffset.positionForSurface(
+            playbackPositionMs = rawPosition,
+            offsetMs = lyricSyncOffsetForSong(currentAppleLyricsSongId),
+            isSupplement = true,
+        )
+    }
+
 internal fun AppleLyricsSupplementHooks.isAppleLyricsRecyclerView(recyclerView: Any): Boolean =
     blurHooks.isAppleLyricsRecyclerView(recyclerView)
 
@@ -33,7 +43,60 @@ internal fun AppleLyricsSupplementHooks.appleRecyclerAdapterItemCount(adapter: A
 internal fun AppleLyricsSupplementHooks.appleRecyclerNotifyDataSetChanged(adapter: Any) =
     blurHooks.appleRecyclerNotifyDataSetChanged(adapter)
 
-internal fun AppleLyricsSupplementHooks.onlineTranslationForNativeLine(line: Any?): String? {
+internal data class AppleLyricsEditableLine(
+    val songId: String,
+    val line: AppleLyricsActiveLineEditPolicy.Line,
+    val userTranslation: String?,
+    val userPronunciation: String?,
+)
+
+/** Resolve the current timed row from the visible song, never from a stale playback callback. */
+internal fun AppleLyricsSupplementHooks.currentEditableNativeLine(songId: String): AppleLyricsEditableLine? {
+    if (songId != currentAppleLyricsSongId) return null
+    val position = appleLyricsCurrentPlaybackPositionMs() ?: return null
+    val pointer = presentationBinding.pointer() ?: return null
+    val nativeSong = runCatching {
+        lyricsNativeCall(pointer, AppleMusicRuntimeMember.LYRICS_NATIVE_POINTER_GET_METHOD)
+    }.getOrNull() ?: return null
+    if (nativeSongId(nativeSong) != songId) return null
+    val sections = runCatching {
+        lyricsNativeCall(nativeSong, AppleMusicRuntimeMember.LYRICS_NATIVE_SONG_SECTIONS_METHOD)
+    }.getOrNull() ?: return null
+    val lines = nativeVectorItems(sections, limit = 64).flatMap { section ->
+        val vector = runCatching {
+            lyricsNativeCall(section, AppleMusicRuntimeMember.LYRICS_NATIVE_SECTION_LINES_METHOD)
+        }.getOrNull()
+        nativeVectorItems(vector, limit = 256).mapNotNull { lyricLine ->
+            val begin = runCatching {
+                lyricsNativeCall(lyricLine, AppleMusicRuntimeMember.LYRICS_NATIVE_BEGIN_METHOD)
+                    as? Number
+            }.getOrNull()?.toLong() ?: return@mapNotNull null
+            val end = runCatching {
+                lyricsNativeCall(lyricLine, AppleMusicRuntimeMember.LYRICS_NATIVE_END_METHOD)
+                    as? Number
+            }.getOrNull()?.toLong() ?: return@mapNotNull null
+            val text = AppleLyricTextTransform.withRawReads {
+                runCatching {
+                    lyricsNativeCall(lyricLine, AppleMusicRuntimeMember.LYRICS_NATIVE_LINE_TEXT_METHOD)
+                        as? String
+                }.getOrNull()
+            } ?: return@mapNotNull null
+            AppleLyricsActiveLineEditPolicy.Line(begin, end, text)
+        }
+    }
+    val line = AppleLyricsActiveLineEditPolicy.current(lines, position) ?: return null
+    val saved = lyricsLineCorrections.correction(songId, line.begin, line.end, line.text)
+    return AppleLyricsEditableLine(
+        songId = songId,
+        line = line,
+        userTranslation = saved?.translation,
+        userPronunciation = saved?.pronunciation,
+    )
+}
+
+internal fun AppleLyricsSupplementHooks.userCorrectionForNativeLine(
+    line: Any?,
+): AppleLyricsLineCorrectionStore.Correction? {
     if (line == null) return null
     val begin = (
         lyricsNativeCall(line, AppleMusicRuntimeMember.LYRICS_NATIVE_BEGIN_METHOD) as? Number
@@ -47,8 +110,35 @@ internal fun AppleLyricsSupplementHooks.onlineTranslationForNativeLine(line: Any
         lyricsNativeCall(line, AppleMusicRuntimeMember.LYRICS_NATIVE_LINE_TEXT_METHOD)
             as? String
     }
-    return nativeOnlineTranslationStore.translation(
+    return lyricsLineCorrections.correction(
         songId = currentAppleLyricsSongId,
+        begin = begin,
+        end = end,
+        sourceText = text,
+    )
+}
+
+internal fun AppleLyricsSupplementHooks.onlineTranslationForNativeLine(line: Any?): String? {
+    if (line == null) return null
+    val begin = (
+        lyricsNativeCall(line, AppleMusicRuntimeMember.LYRICS_NATIVE_BEGIN_METHOD) as? Number
+        )?.toLong() ?: return null
+    val end = (
+        lyricsNativeCall(line, AppleMusicRuntimeMember.LYRICS_NATIVE_END_METHOD) as? Number
+        )?.toLong() ?: return null
+    val text = AppleLyricTextTransform.withRawReads {
+        lyricsNativeCall(line, AppleMusicRuntimeMember.LYRICS_NATIVE_LINE_TEXT_METHOD) as? String
+    }
+    val songId = currentAppleLyricsSongId
+    val aiTranslation = nativeOnlineTranslationStore.aiTranslation(
+        songId = songId, begin = begin, end = end, text = text,
+    )
+    if (koreanTranslationTargetSelected() &&
+        aiTranslation != null &&
+        KoreanLyricsDisplayPolicy.isKoreanDisplayLine(aiTranslation)
+    ) return aiTranslation
+    return nativeOnlineTranslationStore.translation(
+        songId = songId,
         begin = begin,
         end = end,
         text = text,
@@ -61,7 +151,11 @@ internal fun AppleLyricsSupplementHooks.onlineTranslationForNativeLine(line: Any
 }
 
 internal fun AppleLyricsSupplementHooks.hasAnyOnlineTranslation(songId: String?): Boolean =
-    (isNativeOnlineTranslationEnabled() && nativeOnlineTranslationStore.hasTranslation(songId)) ||
+    hasUserTranslationCorrection(songId) ||
+        (isNativeOnlineTranslationEnabled() && (
+            nativeOnlineTranslationStore.hasTranslation(songId) ||
+                nativeOnlineTranslationStore.hasAiTranslation(songId)
+        )) ||
         missingLyricsSupplement().hasTranslation(songId)
 // 注意：这里刻意不计入 hasLunaBeatSource。LB 来源的歌曲靠
 // ensureMissingLyricsTranslationButtonVisible（hasSupplementContent）强制保留
@@ -69,7 +163,7 @@ internal fun AppleLyricsSupplementHooks.hasAnyOnlineTranslation(songId: String?)
 // 翻译可用性，Apple 会在无翻译的 LB 歌曲菜单里渲染无效的「隐藏翻译」项。
 
 internal fun AppleLyricsSupplementHooks.onlinePronunciationForNativeLine(line: Any?): String? {
-    if (line == null || !isNativeOnlineTranslationEnabled()) return null
+    if (line == null) return null
     if (shouldHideMandarinPronunciation()) return null
     val begin = (
         lyricsNativeCall(line, AppleMusicRuntimeMember.LYRICS_NATIVE_BEGIN_METHOD) as? Number
@@ -83,14 +177,23 @@ internal fun AppleLyricsSupplementHooks.onlinePronunciationForNativeLine(line: A
         lyricsNativeCall(line, AppleMusicRuntimeMember.LYRICS_NATIVE_LINE_TEXT_METHOD)
             as? String
     }
+    val reading = if (
+        pronunciationSourcePriority() ==
+        com.juren233.hyperlyricsenhanced.common.RootConstants.APPLE_MUSIC_PRONUNCIATION_HANGUL_FIRST
+    ) {
+        // Suppress quick, often inaccurate provider Hangul before Gemini/Groq
+        // finishes. Other source priorities keep the user's legacy choices.
+        nativeOnlineTranslationStore.aiHangulPronunciation(
+            songId = currentAppleLyricsSongId, begin = begin, end = end, text = text,
+        )
+    } else {
+        nativeOnlineTranslationStore.pronunciation(
+            songId = currentAppleLyricsSongId, begin = begin, end = end, text = text,
+        )
+    }
     return RomanizationPolicy.sanitizeSupplement(
         originalText = text,
-        pronunciation = nativeOnlineTranslationStore.pronunciation(
-            songId = currentAppleLyricsSongId,
-            begin = begin,
-            end = end,
-            text = text,
-        ),
+        pronunciation = reading.takeIf { isNativeOnlineTranslationEnabled() },
     )
 }
 

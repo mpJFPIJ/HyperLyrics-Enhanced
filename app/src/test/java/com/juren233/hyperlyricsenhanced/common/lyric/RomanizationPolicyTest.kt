@@ -89,4 +89,16 @@ class RomanizationPolicyTest {
         assertTrue(RomanizationPolicy.isHangulPronunciation("키미노 나와"))
         assertFalse(RomanizationPolicy.isHangulPronunciation("kimi no na wa"))
     }
+
+    @Test
+    fun `Japanese prolonged vowel mark does not invalidate a Hangul pronunciation`() {
+        assertEquals(
+            "다링 한파나쿠 라부 토 키라메키 우키아시다츠 피로소피",
+            RomanizationPolicy.sanitizeHangulSupplement(
+                "ダーリン半端なくラブ！ときらめき浮き足立つフィロソフィ",
+                "다링 한파나쿠 라부 토 키라메키 우키아시다츠 피로소피",
+            ),
+        )
+        assertNull(RomanizationPolicy.sanitizeHangulSupplement("한국어ー", "한국어"))
+    }
 }

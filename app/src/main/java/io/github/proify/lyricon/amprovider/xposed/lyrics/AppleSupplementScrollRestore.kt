@@ -472,7 +472,7 @@ internal fun AppleLyricsSupplementHooks.updateSupplementActiveLine() {
         stopSupplementActiveLineUpdate()
         return
     }
-    val position = appleLyricsCurrentPlaybackPositionMs()
+    val position = appleLyricsSupplementPlaybackPositionMs()
         ?: return scheduleSupplementActiveLineUpdate()
     val lines = missingLyricsSupplement().store.lines(songId)
     if (lines.isEmpty()) {

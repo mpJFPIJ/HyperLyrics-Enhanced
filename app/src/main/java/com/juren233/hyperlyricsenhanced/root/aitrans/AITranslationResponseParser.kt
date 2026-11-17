@@ -5,7 +5,6 @@ import com.juren233.hyperlyricsenhanced.common.extensions.json
 
 internal object AITranslationResponseParser {
     private const val TAG = "AITranslationResponseParser"
-    private const val MAX_LOG_BODY_LENGTH = 1000
 
     fun parse(content: String, requestIndices: Set<Int>): List<TranslationItem> {
         val jsonPayload = extractJsonFromLlmContent(content) ?: return emptyList()
@@ -38,7 +37,7 @@ internal object AITranslationResponseParser {
 
         HookLogger.w(
             "AITranslationResponseParser",
-            "翻译响应缺少 JSON: body=${trimForLog(trimmed)}"
+            "翻译响应缺少 JSON: chars=${trimmed.length}"
         )
         return null
     }
@@ -81,7 +80,5 @@ internal object AITranslationResponseParser {
         return accepted.values.toList()
     }
 
-    private fun trimForLog(value: String): String =
-        if (value.length <= MAX_LOG_BODY_LENGTH) value else value.take(MAX_LOG_BODY_LENGTH) + "..."
 }
 

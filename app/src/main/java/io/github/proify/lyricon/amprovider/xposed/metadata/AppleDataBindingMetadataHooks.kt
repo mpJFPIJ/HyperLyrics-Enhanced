@@ -674,12 +674,9 @@ internal class AppleDataBindingMetadataHooks(
                     )
                 ) {
                     runCatching {
-                        val notifyMethod = profiledNotifyItemChanged
-                        if (notifyMethod != null) {
-                            notifyMethod.invoke(adapter, ref.position)
-                        } else {
-                            AppleReflection.call(adapter, "notifyItemChanged", ref.position)
-                        }
+                        AppleLyricsAdapterRefreshPolicy.notifyRange(
+                            adapter, ref.position..ref.position, profiledNotifyItemChanged,
+                        )
                     }
                         .onFailure {
                             ProviderLogger.error(

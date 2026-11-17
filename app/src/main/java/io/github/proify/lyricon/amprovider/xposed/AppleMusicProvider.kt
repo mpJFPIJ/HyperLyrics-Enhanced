@@ -14,6 +14,9 @@ object AppleMusicProvider {
         AppleMusicProviderOrchestrator.install(module, classLoader)
     }
 
-    internal fun hookModuleIdsForBuild(debug: Boolean): List<String> =
-        AppleMusicProviderOrchestrator.hookModuleIdsForBuild(debug)
+    internal fun hookModuleIdsForBuild(
+        debug: Boolean,
+        ciBuildRun: String = "local",
+    ): List<String> =
+        AppleMusicProviderOrchestrator.hookModuleIdsForBuild(debug, ciBuildRun)
 }

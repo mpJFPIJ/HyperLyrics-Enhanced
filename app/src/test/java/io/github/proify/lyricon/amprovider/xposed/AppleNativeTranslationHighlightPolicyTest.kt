@@ -7,6 +7,33 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 
 class AppleNativeTranslationHighlightPolicyTest {
+    @Test fun activeKoreanTranslationHasExactlyOneVisiblePaintOwner() {
+        val owners = AppleNativeTranslationHighlightPolicy.paintOwners(
+            lineActive = true,
+            foregroundReady = true,
+        )
+        assertFalse(owners.nativeVisible)
+        assertTrue(owners.foregroundVisible)
+    }
+
+    @Test fun unavailableForegroundNeverHidesNativeMeaning() {
+        val owners = AppleNativeTranslationHighlightPolicy.paintOwners(
+            lineActive = true,
+            foregroundReady = false,
+        )
+        assertTrue(owners.nativeVisible)
+        assertFalse(owners.foregroundVisible)
+    }
+
+    @Test fun inactiveKoreanTranslationRestoresNativePainterOnly() {
+        val owners = AppleNativeTranslationHighlightPolicy.paintOwners(
+            lineActive = false,
+            foregroundReady = true,
+        )
+        assertTrue(owners.nativeVisible)
+        assertFalse(owners.foregroundVisible)
+    }
+
     @Test fun repeatedViewBindingRetainsTheSameTranslationClockUntilHolderRecycles() {
         val holder = Any()
         val context = AppleTranslationLineContext("song", "駄目", 1000, 1900, "안 돼", 2)

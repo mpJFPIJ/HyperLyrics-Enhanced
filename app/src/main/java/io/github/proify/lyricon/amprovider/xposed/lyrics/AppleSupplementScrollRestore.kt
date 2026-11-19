@@ -249,6 +249,7 @@ internal fun AppleLyricsSupplementHooks.restoreAppleLyricsScrollSnapshot(fragmen
     var playbackMappedAdapter: Any? = null
     var playbackMappedPositionResolved = false
     var cachedPlaybackMappedPosition: Int? = null
+    val attemptGate = AppleLyricsRestoreAttemptGate()
     lateinit var listener: ViewTreeObserver.OnPreDrawListener
 
     fun resolveRestoreTarget(): AppleLyricsScrollPresentationState.ResolvedRestoreTarget? {
@@ -332,11 +333,19 @@ internal fun AppleLyricsSupplementHooks.restoreAppleLyricsScrollSnapshot(fragmen
     // Seed the host LayoutManager's pending target immediately so that first layout is
     // built at the preserved lyric position instead of drawing a transient top frame.
     resolveRestoreTarget()?.let { target ->
-        val resolvedMethod = blurHooks.appleLyricsScrollToPositionWithOffset(
+        val firstChild = recycler.getChildAt(0)
+        val resolvedMethod = if (attemptGate.shouldDispatch(
+                target.anchor.position,
+                target.anchor.offset,
+                firstChild?.let { blurHooks.appleLyricsChildAdapterPosition(recycler, it) }
+                    ?.takeIf { it >= 0 },
+                firstChild?.top,
+            )
+        ) blurHooks.appleLyricsScrollToPositionWithOffset(
             layoutManager = target.layoutManager,
             position = target.anchor.position,
             offset = target.anchor.offset,
-        )
+        ) else null
         if (BuildConfig.DEBUG) {
             ProviderLogger.diagnostic(
                 "Apple Music 歌词滚动预定位: id=$songId, " +
@@ -400,6 +409,21 @@ internal fun AppleLyricsSupplementHooks.restoreAppleLyricsScrollSnapshot(fragmen
             abs(currentOffset - targetOffset) <= 2
         ) {
             finishRestore(success = true)
+            return@OnPreDrawListener true
+        }
+        if (!attemptGate.shouldDispatch(
+                targetPosition, targetOffset, currentPosition, currentOffset,
+            )
+        ) {
+            if (attempts == 2) {
+                AppleLyricUiRuntimeProbe.record(
+                    "scroll_restore_duplicate_suppressed",
+                    "attempt=$attempts target=$targetPosition " +
+                        "observed=${currentPosition ?: -1} " +
+                        "itemCount=$itemCount",
+                )
+            }
+            if (attempts >= 8) finishRestore()
             return@OnPreDrawListener true
         }
         val resolvedMethod = blurHooks.appleLyricsScrollToPositionWithOffset(

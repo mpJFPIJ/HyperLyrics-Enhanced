@@ -12,21 +12,32 @@ import android.view.ViewGroup
 import android.widget.TextView
 import java.util.WeakHashMap
 
+internal enum class AppleTranslationTone { ACTIVE, MUTED }
+
 internal data class AppleTranslationPaintOwners(
     val nativeVisible: Boolean,
     val foregroundVisible: Boolean,
+    val tone: AppleTranslationTone,
 )
 
 /** Keep all wrapped Korean translation text on the SAME Apple source-line clock. */
 internal object AppleNativeTranslationHighlightPolicy {
-    /** A translated line must never be painted by both Apple and our overlay. */
+    /** Keep one foreground painter through active/inactive color changes. */
     fun paintOwners(lineActive: Boolean, foregroundReady: Boolean): AppleTranslationPaintOwners {
-        val useForeground = lineActive && foregroundReady
         return AppleTranslationPaintOwners(
-            nativeVisible = !useForeground,
-            foregroundVisible = useForeground,
+            nativeVisible = !foregroundReady,
+            foregroundVisible = foregroundReady,
+            tone = if (lineActive) AppleTranslationTone.ACTIVE else AppleTranslationTone.MUTED,
         )
     }
+
+    /** Exact repeated binds must not briefly restore the old native painter. */
+    fun canReusePulse(
+        existingContext: AppleTranslationLineContext,
+        requestedContext: AppleTranslationLineContext,
+        sameViews: Boolean,
+        controlledTextsIntact: Boolean,
+    ): Boolean = existingContext == requestedContext && sameViews && controlledTextsIntact
 
     /** Never restore the old lyric into a TextView already rebound to another row. */
     fun isStillBound(controlledText: CharSequence, currentText: CharSequence): Boolean =
@@ -143,7 +154,12 @@ internal class AppleNativeTranslationHighlight {
     ): Boolean {
         root ?: return false
         if (!isCurrent()) return false
-        if (retry == 0) pulses.remove(root)?.stop()
+        // Keep an identical live row's foreground across repeated native
+        // onBind callbacks. Restoring its old text and alpha on every bind
+        // caused a one-frame white flash at the translation boundary.
+        fun stopOldPulse() {
+            if (retry == 0) pulses.remove(root)?.stop()
+        }
         val generation = bindingGenerations[root] ?: 0L
         fun retryAfterLayout(ctx: AppleTranslationLineContext? = null) {
             if (retry >= 3 || !enabled) return
@@ -177,6 +193,7 @@ internal class AppleNativeTranslationHighlight {
         } else null
         val ctx = holderCtx ?: fallback
         if (ctx == null) {
+            stopOldPulse()
             AppleLyricUiRuntimeProbe.record(
                 "translation_context_missing",
                 "holderPresent=${if (holder != null) 1 else 0} " +
@@ -186,7 +203,10 @@ internal class AppleNativeTranslationHighlight {
             retryAfterLayout()
             return false
         }
-        if (!enabled || ctx.songId != currentSongId || ctx.revision != revision) return false
+        if (!enabled || ctx.songId != currentSongId || ctx.revision != revision) {
+            stopOldPulse()
+            return false
+        }
         val texts = mutableListOf<TextView>()
         fun scan(view: View, depth: Int) {
             if (depth > 12) return
@@ -207,6 +227,7 @@ internal class AppleNativeTranslationHighlight {
         }
         scan(root, 0)
         if (texts.isEmpty()) {
+            stopOldPulse()
             AppleLyricUiRuntimeProbe.record(
                 "translation_cell_missing",
                 "candidateTextLen=${ctx.translation.length} retry=$retry",
@@ -234,9 +255,16 @@ internal class AppleNativeTranslationHighlight {
             !readingContainer
         }
         if (translationView.isEmpty()) {
+            stopOldPulse()
             retryAfterLayout(ctx)
             return false
         }
+        val existing = pulses[root]
+        if (existing?.matches(ctx, translationView) == true) {
+            existing.updatePlaybackPosition(playbackPositionMs)
+            return true
+        }
+        pulses.remove(root)?.stop()
         AppleLyricUiRuntimeProbe.record(
             "translation_cells_bound",
             "matchedCells=${translationView.size} " +
@@ -258,7 +286,7 @@ internal class AppleNativeTranslationHighlight {
         private val root: View,
         private val ctx: AppleTranslationLineContext,
         views: List<TextView>,
-        private val playbackPositionMs: () -> Long?,
+        private var playbackPositionMs: () -> Long?,
         private val onDetach: (Pulse, View) -> Unit,
     ) : Runnable, View.OnAttachStateChangeListener {
         private data class SavedStyle(
@@ -301,7 +329,24 @@ internal class AppleNativeTranslationHighlight {
         private val bounds = Rect()
         private var aboveNativeGradient: AppleKoreanTranslationForeground? = null
 
-        private fun attachForeground(): Boolean {
+        fun matches(candidate: AppleTranslationLineContext, cells: List<TextView>): Boolean {
+            val sameViews = originals.size == cells.size &&
+                originals.indices.all { index -> originals[index].view === cells[index] }
+            val intact = originals.all { saved ->
+                AppleNativeTranslationHighlightPolicy.isStillBound(
+                    saved.controlledText, saved.view.text,
+                )
+            }
+            return running && AppleNativeTranslationHighlightPolicy.canReusePulse(
+                ctx, candidate, sameViews, intact,
+            )
+        }
+
+        fun updatePlaybackPosition(next: () -> Long?) {
+            playbackPositionMs = next
+        }
+
+        private fun attachForeground(color: Int): Boolean {
             // If any wrapped cell has no measurable layout yet, keep Apple's
             // original meaning fully visible until the overlay can draw all
             // cells. Never hide the native fallback on a partial bind.
@@ -320,7 +365,7 @@ internal class AppleNativeTranslationHighlight {
                 // of that nested native gradient without changing Japanese
                 // source words, the pronunciation vector or their clocks.
                 val drawable = AppleKoreanTranslationForeground(
-                    root, originals.map { it.view }, Color.WHITE,
+                    root, originals.map { it.view }, color,
                 )
                 drawable.setBounds(0, 0, root.width, root.height)
                 if (runCatching { root.overlay.add(drawable) }.isFailure) return false
@@ -328,7 +373,7 @@ internal class AppleNativeTranslationHighlight {
             }
             aboveNativeGradient?.let { drawable ->
                 drawable.setBounds(0, 0, root.width, root.height)
-                drawable.invalidateSelf()
+                drawable.setForegroundColor(color)
             }
             return aboveNativeGradient != null
         }
@@ -404,55 +449,29 @@ internal class AppleNativeTranslationHighlight {
                 val active = AppleNativeTranslationHighlightPolicy.lineActive(
                     playbackPositionMs(), ctx.beginMs, ctx.endMs,
                 )
-                val foregroundReady = if (active) attachForeground() else {
-                    detachForeground()
-                    false
-                }
+                // Both states keep the same drawable, changing its color
+                // only. Switching between native and overlay at the line
+                // boundary previously caused a visible one-frame flash.
+                val nativeColor = if (active) Color.WHITE else inactiveColor
+                val foregroundReady = attachForeground(nativeColor)
                 val owners = AppleNativeTranslationHighlightPolicy.paintOwners(
                     lineActive = active, foregroundReady = foregroundReady,
                 )
-                if (active) {
-                    originals.filter { saved ->
-                        AppleNativeTranslationHighlightPolicy.isStillBound(
-                            saved.controlledText, saved.view.text,
-                        )
-                    }.forEach { saved ->
-                        val view = saved.view
-                        // Apple's native animation can update both the word
-                        // color and TextView alpha while the line is active.
-                        // Our outer overlay is the sole visible painter when
-                        // ready. Alpha zero hides Apple's gradient-masked
-                        // duplicate without removing its layout or timing.
-                        if (view.currentTextColor != Color.WHITE) {
-                            view.setTextColor(Color.WHITE)
-                        }
-                        val nativeAlpha = if (owners.nativeVisible) 1f else 0f
-                        if (kotlin.math.abs(view.alpha - nativeAlpha) > 0.01f) {
-                            view.alpha = nativeAlpha
-                        }
-                        saved.hiddenByPulse = !owners.nativeVisible
-                    }
-                } else {
-                    detachForeground()
-                    // A wrapped translation is ONE logical lyric sentence.
-                    // Apple's old word animation can leave a bright bottom
-                    // fragment and dim top fragment even after the line ends.
-                    // Keep the entire inactive translation in one neutral
-                    // state instead of restoring its per-fragment mismatch.
-                    originals.filter { saved ->
-                        AppleNativeTranslationHighlightPolicy.isStillBound(
-                            saved.controlledText, saved.view.text,
-                        )
-                    }.forEach { saved ->
-                        val view = saved.view
-                        if (view.currentTextColor != inactiveColor)
-                            view.setTextColor(inactiveColor)
-                        // A stable uniform alpha avoids splitting one wrapped
-                        // sentence into Apple-native per-fragment fade phases.
-                        if (kotlin.math.abs(view.alpha - 1f) > 0.01f)
-                            view.alpha = 1f
-                        saved.hiddenByPulse = false
-                    }
+                originals.filter { saved ->
+                    AppleNativeTranslationHighlightPolicy.isStillBound(
+                        saved.controlledText, saved.view.text,
+                    )
+                }.forEach { saved ->
+                    val view = saved.view
+                    // The native host can repaint its word gradient after we
+                    // set the text color. Keep it hidden while the stable
+                    // outer foreground paints white (active) or grey (other).
+                    if (view.currentTextColor != nativeColor)
+                        view.setTextColor(nativeColor)
+                    val nativeAlpha = if (owners.nativeVisible) 1f else 0f
+                    if (kotlin.math.abs(view.alpha - nativeAlpha) > 0.01f)
+                        view.alpha = nativeAlpha
+                    saved.hiddenByPulse = !owners.nativeVisible
                 }
                 if (lastActive != active || lastForegroundReady != foregroundReady) {
                     AppleLyricUiRuntimeProbe.record(
@@ -460,6 +479,7 @@ internal class AppleNativeTranslationHighlight {
                         "foregroundReady=${if (foregroundReady) 1 else 0} " +
                             "nativeVisible=${if (owners.nativeVisible) 1 else 0} " +
                             "foregroundVisible=${if (owners.foregroundVisible) 1 else 0} " +
+                            "tone=${owners.tone} " +
                             "cells=${originals.size}",
                     )
                 }

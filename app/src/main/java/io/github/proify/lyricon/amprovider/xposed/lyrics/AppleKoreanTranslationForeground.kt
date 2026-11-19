@@ -21,9 +21,17 @@ import android.widget.TextView
 internal class AppleKoreanTranslationForeground(
     private val holderRoot: View,
     private val translatedViews: List<TextView>,
-    private val foregroundColor: Int,
+    initialForegroundColor: Int,
 ) : Drawable() {
     private var opacity: Int = 255
+    private var foregroundColor: Int = initialForegroundColor
+
+    /** Change only the color; never remove and recreate this visible painter. */
+    fun setForegroundColor(color: Int) {
+        if (foregroundColor == color) return
+        foregroundColor = color
+        invalidateSelf()
+    }
 
     override fun draw(canvas: Canvas) {
         for (text in translatedViews) {

@@ -163,3 +163,43 @@ internal class AppleLyricsActiveLineUpdateController(
         lastAppliedIndex = -1
     }
 }
+
+/**
+ * Native RecyclerView may report the same unfinished layout for eight
+ * consecutive PreDraw callbacks. Do not issue eight identical scroll commands:
+ * allow the first, one delayed retry, and any command whose target or observed
+ * native layout genuinely changed. Each restore owns a fresh instance.
+ */
+internal class AppleLyricsRestoreAttemptGate {
+    private data class Observation(
+        val targetPosition: Int,
+        val targetOffset: Int,
+        val observedPosition: Int?,
+        val observedOffset: Int?,
+    )
+
+    private var last: Observation? = null
+    private var unchangedSamples = 0
+    private var identicalDispatches = 0
+
+    fun shouldDispatch(
+        targetPosition: Int,
+        targetOffset: Int,
+        observedPosition: Int?,
+        observedOffset: Int?,
+    ): Boolean {
+        val current = Observation(
+            targetPosition, targetOffset, observedPosition, observedOffset,
+        )
+        if (last != current) {
+            last = current
+            unchangedSamples = 0
+            identicalDispatches = 1
+            return true
+        }
+        unchangedSamples++
+        if (identicalDispatches >= 2 || unchangedSamples < 4) return false
+        identicalDispatches++
+        return true
+    }
+}

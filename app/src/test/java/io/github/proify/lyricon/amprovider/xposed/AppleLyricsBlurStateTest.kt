@@ -22,6 +22,37 @@ import java.lang.reflect.Method
  */
 class AppleLyricsBlurStateTest {
 
+    @Test fun `native blur never clamps bright glyph pixels onto row edges`() {
+        assertTrue(source("AppleLyricsBlurEngine.kt").contains("Shader.TileMode.DECAL"))
+    }
+
+    @Test fun `do not clear host render effects on rows we never blurred`() {
+        assertFalse(AppleLyricsBlurOwnershipPolicy.shouldClearNativeEffect(
+            knownBlurred = false, stateExists = false, trackedBlurred = false,
+        ))
+        assertTrue(AppleLyricsBlurOwnershipPolicy.shouldClearNativeEffect(
+            knownBlurred = true, stateExists = false, trackedBlurred = false,
+        ))
+        assertTrue(AppleLyricsBlurOwnershipPolicy.shouldClearNativeEffect(
+            knownBlurred = false, stateExists = true, trackedBlurred = false,
+        ))
+    }
+
+    @Test fun `dual active native transition has one stable sharp lyric row`() {
+        assertEquals(5, AppleLyricsBlurTransitionPolicy.singleActiveFocus(
+            nativeActive = setOf(5, 6), previousFocus = 5,
+        ))
+        assertEquals(6, AppleLyricsBlurTransitionPolicy.singleActiveFocus(
+            nativeActive = setOf(6), previousFocus = 5,
+        ))
+        assertEquals(5, AppleLyricsBlurTransitionPolicy.singleActiveFocus(
+            nativeActive = setOf(5, 6), previousFocus = null,
+        ))
+        assertNull(AppleLyricsBlurTransitionPolicy.singleActiveFocus(
+            nativeActive = emptySet(), previousFocus = 5,
+        ))
+    }
+
     private fun mainSourceDir(): File =
         listOf(
             File("app/src/main/java/io/github/proify/lyricon/amprovider/xposed/lyrics"),

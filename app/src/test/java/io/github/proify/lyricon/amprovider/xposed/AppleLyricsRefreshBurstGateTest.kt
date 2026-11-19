@@ -1,6 +1,8 @@
 package io.github.proify.lyricon.amprovider.xposed
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -45,5 +47,27 @@ class AppleLyricsRefreshBurstGateTest {
         assertTrue(gate.begin(next))
         gate.end(first)
         assertFalse(gate.begin(next))
+    }
+
+    @Test fun differentRevisionRequestsInSameFrameProduceOneLatestRefresh() {
+        val queue = AppleLyricsFrameRefreshQueue()
+        assertTrue(queue.offer(first.copy(revision = null)))
+        assertFalse(queue.offer(first.copy(revision = 13L)))
+        assertFalse(queue.offer(first.copy(syncDisplayFlags = true)))
+        assertEquals(
+            first.copy(revision = 13L, syncDisplayFlags = true),
+            queue.consume(first),
+        )
+        assertNull(queue.consume(first))
+        assertTrue(queue.offer(first))
+    }
+
+    @Test fun newPresentationGenerationSchedulesItsOwnRefresh() {
+        val queue = AppleLyricsFrameRefreshQueue()
+        val nextGeneration = first.copy(presentationGeneration = first.presentationGeneration + 1L)
+        assertTrue(queue.offer(first))
+        assertTrue(queue.offer(nextGeneration))
+        assertEquals(nextGeneration, queue.consume(nextGeneration))
+        assertEquals(first, queue.consume(first))
     }
 }

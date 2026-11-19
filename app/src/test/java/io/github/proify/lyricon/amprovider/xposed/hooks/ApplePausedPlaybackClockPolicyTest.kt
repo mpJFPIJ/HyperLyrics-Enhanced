@@ -5,6 +5,23 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 
 class ApplePausedPlaybackClockPolicyTest {
+    @Test fun advancingLyricClockDoesNotFreezeOnAnOldPlayerSample() {
+        assertEquals(21_620L, ApplePausedPlaybackClockPolicy.select(
+            currentMs = null, lastValidMs = 21_370L,
+            timelineAdvancing = true, explicitSeekToZero = false,
+            lastValidAgeMs = 250L,
+        ))
+        assertNull(ApplePausedPlaybackClockPolicy.select(
+            currentMs = null, lastValidMs = 21_370L,
+            timelineAdvancing = true, explicitSeekToZero = false,
+            lastValidAgeMs = 2_000L,
+        ))
+        assertEquals(21_370L, ApplePausedPlaybackClockPolicy.select(
+            currentMs = null, lastValidMs = 21_370L,
+            timelineAdvancing = false, explicitSeekToZero = false,
+            lastValidAgeMs = 2_000L,
+        ))
+    }
     @Test fun releaseBuildPreservesLastPositionAfterPlayerTemporarilyStopsReporting() {
         assertEquals(21_370L, ApplePausedPlaybackClockPolicy.select(
             currentMs = null, lastValidMs = 21_370L,

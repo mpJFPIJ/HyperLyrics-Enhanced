@@ -7,6 +7,53 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AppleLineWidePronunciationRowPolicyTest {
+    @Test fun unchangedReadingAndNativeWordViewIdentitiesAreReusable() {
+        val payload = AppleLineWidePronunciationPayload(
+            songId = "s", lineKey = "1", sourceText = "君の名は",
+            pronunciation = "키미노 나와", revision = 1L,
+        )
+        val source = listOf(Any(), Any())
+        assertTrue(AppleLineWidePronunciationRowPolicy.canReuseReading(
+            boundPayload = payload, requestedPayload = payload.copy(),
+            oldWords = source, newWords = source,
+            currentIndex = 3, insertionIndex = 3,
+        ))
+        assertFalse(AppleLineWidePronunciationRowPolicy.canReuseReading(
+            boundPayload = payload, requestedPayload = payload.copy(revision = 2),
+            oldWords = source, newWords = source,
+            currentIndex = 3, insertionIndex = 3,
+        ))
+        assertFalse(AppleLineWidePronunciationRowPolicy.canReuseReading(
+            boundPayload = payload, requestedPayload = payload,
+            oldWords = source, newWords = listOf(Any(), Any()),
+            currentIndex = 3, insertionIndex = 3,
+        ))
+        assertFalse(AppleLineWidePronunciationRowPolicy.canReuseReading(
+            boundPayload = payload, requestedPayload = payload,
+            oldWords = source, newWords = source,
+            currentIndex = 4, insertionIndex = 3,
+        ))
+    }
+
+    @Test fun nearFutureReadingWakesBeforeLineBegins() {
+        assertEquals(400L, AppleReadingPulsePolicy.nextDelayMs(
+            onScreen = true, positionMs = 10_000, nextBeginMs = 12_000,
+            active = false,
+        ))
+        assertEquals(60L, AppleReadingPulsePolicy.nextDelayMs(
+            onScreen = true, positionMs = 11_700, nextBeginMs = 12_000,
+            active = false,
+        ))
+        assertEquals(60L, AppleReadingPulsePolicy.nextDelayMs(
+            onScreen = true, positionMs = 12_020, nextBeginMs = 12_000,
+            active = true,
+        ))
+        assertEquals(400L, AppleReadingPulsePolicy.nextDelayMs(
+            onScreen = false, positionMs = 11_950, nextBeginMs = 12_000,
+            active = false,
+        ))
+    }
+
     @Test
     fun `verified native source can have Japanese translation following it`() {
         val cells = listOf("君", "の", "名は", "あなたの名前は")

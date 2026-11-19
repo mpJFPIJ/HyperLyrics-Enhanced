@@ -143,6 +143,7 @@ internal fun AppleLyricsSupplementHooks.hookAppleLyricTextGetter(clazz: Class<*>
                         originalSource,
                         nativeOnlineTranslationStore.revision(),
                         pronunciationSourcePriority(),
+                        holder = diagnostics.currentBindingContext()?.holder,
                     )
                 ) return@installResultOverrideHook ""
                 val originalSourceText = nativeOriginalLineText(chain.thisObject)

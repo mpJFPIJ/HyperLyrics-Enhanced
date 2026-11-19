@@ -180,13 +180,21 @@ internal class AppleLyricsPronunciationState {
     /** Used only to suppress Apple-native duplicate reading cells during line-wide presentation. */
     fun hasLineWide(
         songId: String?, sourceText: String?, revision: Long, sourcePriority: Int = 0,
+        holder: Any? = null,
     ): Boolean {
         if (songId.isNullOrBlank() || sourceText.isNullOrBlank()) return false
+        val sourceKey = AppleLineWidePronunciationRowPolicy.sourceKey(sourceText)
+        val exactHolder = holder?.let { lineWideByHolder[it] }
+        if (exactHolder != null && exactHolder.songId == songId &&
+            exactHolder.revision == revision && exactHolder.sourcePriority == sourcePriority &&
+            AppleLineWidePronunciationRowPolicy.sourceKey(exactHolder.sourceText) == sourceKey
+        ) return true
         synchronized(lineWideBySource) {
             if (lineWideSongId != songId || lineWideRevision != revision) return false
-            return lineWideBySource[
-                AppleLineWidePronunciationRowPolicy.sourceKey(sourceText)
-            ]?.sourcePriority == sourcePriority
+            return lineWideBySource[sourceKey]?.let { candidate ->
+                candidate.sourcePriority == sourcePriority &&
+                    AppleLineWidePronunciationRowPolicy.safeSourceFallback(candidate)
+            } == true
         }
     }
 

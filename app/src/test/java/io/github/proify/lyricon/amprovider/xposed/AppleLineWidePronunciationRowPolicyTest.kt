@@ -312,6 +312,8 @@ class AppleLineWidePronunciationRowPolicyTest {
     @Test
     fun `repeated chorus remembers both native timestamp windows`() {
         val state = AppleLyricsPronunciationState()
+        val firstHolder = Any()
+        val secondHolder = Any()
         val first = AppleLineWidePronunciationPayload(
             "song", "a", "ダーリン", "다아린", 2L,
             timedWords = listOf(AppleTimedSourceWord("ダーリン", 1_000, 2_000)),
@@ -319,12 +321,21 @@ class AppleLineWidePronunciationRowPolicyTest {
         val repeated = first.copy(
             lineKey = "b", timedWords = listOf(AppleTimedSourceWord("ダーリン", 8_000, 9_000)),
         )
-        state.rememberLineWide(first, null)
-        state.rememberLineWide(repeated, null)
-        assertTrue(state.hasLineWide("song", "ダーリン", 2L))
+        state.rememberLineWide(first, firstHolder)
+        state.rememberLineWide(repeated, secondHolder)
+        // Different occurrences share source text; that does not verify
+        // which native holder owns which source timeline.
+        assertFalse(state.hasLineWide("song", "ダーリン", 2L))
+        assertTrue(state.hasLineWide("song", "ダーリン", 2L, holder = firstHolder))
+        assertTrue(state.hasLineWide("song", "ダーリン", 2L, holder = secondHolder))
+        assertEquals(first.timedWords, state.lineWideForHolder(
+            firstHolder, "song", null, 2L,
+        )?.timedWords)
+        assertEquals(repeated.timedWords, state.lineWideForHolder(
+            secondHolder, "song", null, 2L,
+        )?.timedWords)
         val recovered = state.lineWideForHolder(null, "song", "ダーリン", 2L)
-        assertEquals(repeated.timedWords, recovered?.timedWords)
-        assertTrue(recovered?.repeatTimings.orEmpty().contains(first.timedWords))
+        assertNull(recovered)
         state.forgetLineWide("song", "ダーリン")
         assertFalse(state.hasLineWide("song", "ダーリン", 2L))
     }

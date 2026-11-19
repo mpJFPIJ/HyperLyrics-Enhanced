@@ -196,6 +196,16 @@ class AppleLyricsProviderPolicyTest {
                 currentZoneTopY = 220f,
             )
         )
+        // Once the playing row is positively known, the departing row must
+        // not remain just as sharp as that one even during a slow scroll.
+        assertFalse(
+            shouldDeferAppleLyricsOutgoingBlur(
+                isPendingOutgoing = true,
+                rowBottomY = 321f,
+                currentZoneTopY = 220f,
+                currentFocusResolved = true,
+            )
+        )
     }
 
     @Test

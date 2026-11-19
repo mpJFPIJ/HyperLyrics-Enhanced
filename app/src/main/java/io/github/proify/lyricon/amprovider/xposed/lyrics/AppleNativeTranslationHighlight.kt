@@ -13,6 +13,7 @@ import android.os.SystemClock
 import android.view.View
 import android.view.ViewGroup
 import android.widget.TextView
+import java.lang.ref.WeakReference
 import java.util.WeakHashMap
 
 internal enum class AppleTranslationTone { ACTIVE, MUTED }
@@ -194,7 +195,12 @@ internal class AppleNativeTranslationHighlight(
     private val nativeActivePositions: (View) -> Set<Int>? = { null },
 ) {
     private val byHolder = AppleTranslationLineContextStore()
-    private val pulses = WeakHashMap<View, Pulse>()
+    // A strong Pulse value owns its root and child TextViews; that defeats a
+    // WeakHashMap key and leaks native prefetched holders that never attach.
+    // Attached roots keep their Pulse alive through the attach listener.
+    private val pulses = WeakHashMap<View, WeakReference<Pulse>>()
+    private fun pulseAt(root: View): Pulse? = pulses[root]?.get()
+    private fun livePulses(): List<Pulse> = pulses.values.mapNotNull { it.get() }
     private val bindingGenerations = WeakHashMap<View, Long>()
     private val bindingLifecycle = WeakHashMap<View, AppleTranslationBindingLifecycle>()
     private val bySource = LinkedHashMap<String, AppleTranslationLineContext>()
@@ -216,7 +222,7 @@ internal class AppleNativeTranslationHighlight(
     private fun scheduleRefresh(delayMs: Long = 0L) {
         // A RecyclerView can bind an offscreen holder that never attaches.
         // Such a pending bind must not keep a 400-ms UI timer alive forever.
-        if (pulses.values.none { it.isRunning && it.root.isAttachedToWindow }) return
+        if (livePulses().none { it.isRunning && it.root.isAttachedToWindow }) return
         val deadline = SystemClock.uptimeMillis() + delayMs
         if (refreshScheduled && deadline >= refreshDeadlineMs) return
         if (refreshScheduled) mainHandler.removeCallbacks(sharedRefresh)
@@ -226,7 +232,7 @@ internal class AppleNativeTranslationHighlight(
     }
 
     private fun stopRefreshIfIdle() {
-        if (pulses.values.any { it.isRunning && it.root.isAttachedToWindow }) return
+        if (livePulses().any { it.isRunning && it.root.isAttachedToWindow }) return
         mainHandler.removeCallbacks(sharedRefresh)
         refreshScheduled = false
         refreshDeadlineMs = Long.MAX_VALUE
@@ -308,7 +314,7 @@ internal class AppleNativeTranslationHighlight(
         // caused a one-frame white flash at the translation boundary.
         fun stopOldPulse() {
             if (retry == 0) {
-                pulses.remove(root)?.stop()
+                pulses.remove(root)?.get()?.stop()
                 bindingLifecycle[root]?.painterStopped()
             }
         }
@@ -348,7 +354,7 @@ internal class AppleNativeTranslationHighlight(
         if (ctx == null) {
             // Apple may invoke a redundant bind before its translation getter.
             // Keep the existing painter only while the same host text is intact.
-            val pending = pulses[root]
+            val pending = pulseAt(root)
             val keepPending = enabled &&
                 pending?.isSafeFor(currentSongId, revision) == true
             if (!keepPending) stopOldPulse()
@@ -417,7 +423,7 @@ internal class AppleNativeTranslationHighlight(
             retryAfterLayout(ctx)
             return false
         }
-        val existing = pulses[root]
+        val existing = pulseAt(root)
         val lifecycle = bindingLifecycle.getOrPut(root) { AppleTranslationBindingLifecycle() }
         val canReuse = existing?.matches(ctx, translationView, holderAdapterPosition) == true
         val lifecycleResult = lifecycle.completeHolderBind(
@@ -430,7 +436,7 @@ internal class AppleNativeTranslationHighlight(
             scheduleRefresh()
             return true
         }
-        pulses.remove(root)?.stop()
+        pulses.remove(root)?.get()?.stop()
         lifecycle.painterStopped()
         AppleLyricUiRuntimeProbe.record(
             "translation_cells_bound",
@@ -442,12 +448,12 @@ internal class AppleNativeTranslationHighlight(
             root, ctx, holderAdapterPosition, translationView, playbackPositionMs,
             onScheduleRefresh = { scheduleRefresh() },
             onDetach = { old, detached ->
-                if (pulses[detached] === old) pulses.remove(detached)
+                if (pulseAt(detached) === old) pulses.remove(detached)
                 bindingLifecycle[detached]?.painterStopped()
                 stopRefreshIfIdle()
             },
         )
-        pulses[root] = pulse
+        pulses[root] = WeakReference(pulse)
         lifecycle.painterInstalled(ctx)
         pulse.start()
         scheduleRefresh()
@@ -467,10 +473,10 @@ internal class AppleNativeTranslationHighlight(
      * The old per-holder timers each walked all pulses, making the amount of
      * UI work grow quadratically with visible lyric row count. */
     private fun refreshVisibleGroups(): Boolean {
-        val snapshot = pulses.values.toList()
+        val snapshot = livePulses()
         snapshot.filterNot(Pulse::textsIntact).forEach { stale ->
             stale.stop()
-            if (pulses[stale.root] === stale) {
+            if (pulseAt(stale.root) === stale) {
                 pulses.remove(stale.root)
                 bindingLifecycle[stale.root]?.painterStopped()
             }

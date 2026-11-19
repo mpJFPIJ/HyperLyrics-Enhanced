@@ -30,6 +30,7 @@ verification item, **not a proven fixed bug**.
 - Korean meaning is active only for the one native-active corresponding row (clock breaks ties), otherwise muted; missing timing/position must not promote an unrelated row. Wrapped meaning has one paint owner.
 - Native RecyclerView recognition must be based on superclass names, not `is RecyclerView` from another classloader. Cross-revision rows share **one** active meaning selection, and unbound prefetched rows must not keep background UI timers alive.
 - Overlapping native blur focus uses adapter-position ↔ source time windows observed in the **same holder binding**, not logical song line indexes (Apple inserts non-lyric adapter rows).
+- When the native current row is resolved, an outgoing row immediately loses its "stay sharp until above the viewport" exemption. The previous spatial grace can make two already-separated source lines look simultaneously active.
 - Translation scheduler updates each visible presentation group once per tick; no redundant per-holder `rows x rows` rescans or unnecessary native text writes.
 - Preserve NPatch, Apple Music 6.5.3, blur settings, word timings, font preferences and signed update APK compatibility.
 - No main merge. Keep #227 available as the known-good build baseline.

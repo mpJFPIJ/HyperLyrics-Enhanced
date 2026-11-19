@@ -820,6 +820,9 @@ internal class AppleLyricsBlurHooks(
                 isPendingOutgoing = isPendingOutgoing,
                 rowBottomY = rowBottomY,
                 currentZoneTopY = currentZoneTopY,
+                // The old spatial grace kept non-playing lyrics fully sharp
+                // after the next row started. Honor the verified current row.
+                currentFocusResolved = singleActiveFocus != null,
             )
             if (deferBlur) deferredBlurPositions += childPosition
             val radiusPx = if (deferBlur) {

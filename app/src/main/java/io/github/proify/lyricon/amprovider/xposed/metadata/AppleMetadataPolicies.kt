@@ -646,8 +646,9 @@ internal fun shouldDeferAppleLyricsOutgoingBlur(
     isPendingOutgoing: Boolean,
     rowBottomY: Float?,
     currentZoneTopY: Float?,
+    currentFocusResolved: Boolean = false,
 ): Boolean =
-    isPendingOutgoing &&
+    isPendingOutgoing && !currentFocusResolved &&
         (rowBottomY == null || currentZoneTopY == null || rowBottomY > currentZoneTopY)
 
 internal fun resolvePlaybackPositionSource(

@@ -119,6 +119,24 @@ internal class AppleLyricsBlurHooks(
             songId, revision, adapterPosition, beginMs, endMs,
         )
     }
+
+    /** Adapter positions are sourced from Apple's host classloader. When two
+     * outgoing/incoming rows are both marked active, use the genuine holder
+     * binding windows; unknown focus never promotes a native reading. */
+    internal fun currentNativeFocusedAdapterPosition(adapter: Any): Int? {
+        val active = appleLyricsActiveAdapterPositions(adapter)
+        return when (active.size) {
+            1 -> active.first().takeUnless { row ->
+                verifiedNativeWindows.matchesKnownWindow(
+                    currentSongId(), row, appleLyricsCurrentPlaybackPositionMs(),
+                ) == false
+            }
+            0 -> null
+            else -> verifiedNativeWindows.focus(
+                currentSongId(), active, appleLyricsCurrentPlaybackPositionMs(),
+            )
+        }
+    }
     internal companion object {
         const val APPLE_MUSIC_PACKAGE = "com.apple.android.music"
         const val APPLE_LYRICS_INITIAL_ANCHOR_Y_FRACTION = 0.22f

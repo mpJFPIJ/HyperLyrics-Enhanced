@@ -8,6 +8,7 @@ package io.github.proify.lyricon.amprovider.xposed
 
 import android.net.Uri
 import android.util.Log
+import android.view.View
 import com.juren233.hyperlyricsenhanced.BuildConfig
 import com.juren233.hyperlyricsenhanced.common.RootConstants
 import com.juren233.hyperlyricsenhanced.common.lyric.RomanizationPolicy
@@ -337,7 +338,24 @@ internal fun AppleLyricsSupplementHooks.bindLineWidePronunciation(
     )
     // The built-in Apple pronunciation text is often much smaller than the
     // Japanese text. Keep its native position and timing, scale text only.
-    lineWidePronunciationRow.fitNativeHangulSize(root)
+    val holderPosition = context.position
+    lineWidePronunciationRow.fitNativeHangulSize(root) {
+        if (shown || currentAppleLyricsSongId != songId ||
+            nativeOnlineTranslationStore.revision() != revision ||
+            !requestedAppleLyricsRowVisibility().pronunciation ||
+            !showHangulSupplementPronunciation() || shouldHideMandarinPronunciation()
+        ) false else {
+            val nativeRecycler = generateSequence(root) { view -> view.parent as? View }
+                .firstOrNull(AppleTranslationRecyclerOwnerPolicy::isNativeRecyclerView)
+            val adapter = nativeRecycler?.let { appleRecyclerAdapter(it) }
+            AppleNativeHangulWordPaintPolicy.focusedRow(
+                playbackAdapterPosition = adapter?.let {
+                    blurHooks.currentNativeFocusedAdapterPosition(it)
+                },
+                holderAdapterPosition = holderPosition,
+            )
+        }
+    }
     if (retry == 0) {
         translationLineHighlight.bind(
             holder = context.holder,

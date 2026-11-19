@@ -7,6 +7,19 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AppleLineWidePronunciationRowPolicyTest {
+    @Test fun repeatedChorusRequiresAnExactHolderNotASourceTextGuess() {
+        val repeated = AppleLineWidePronunciationPayload(
+            songId = "s", lineKey = "repeat", sourceText = "好き", pronunciation = "스키",
+            revision = 3L,
+            timedWords = listOf(AppleTimedSourceWord("好き", 1_000L, 1_900L)),
+            repeatTimings = listOf(listOf(AppleTimedSourceWord("好き", 9_000L, 9_900L))),
+        )
+        assertFalse(AppleLineWidePronunciationRowPolicy.safeSourceFallback(repeated))
+        assertTrue(AppleLineWidePronunciationRowPolicy.safeSourceFallback(
+            repeated.copy(repeatTimings = emptyList()),
+        ))
+    }
+
     @Test fun `reading uses exactly one outer paint owner after layout`() {
         val ready = AppleHangulReadingPaintPolicy.owners(
             rootAttached = true, rootWidth = 720, rootHeight = 800,

@@ -160,7 +160,8 @@ internal class AppleLyricsPronunciationState {
                 val exact = lineWideBySource[
                     AppleLineWidePronunciationRowPolicy.sourceKey(observedSourceText)
                 ]
-                if (exact != null) return exact
+                if (exact != null && AppleLineWidePronunciationRowPolicy.safeSourceFallback(exact))
+                    return exact
             }
             // An English/Chinese translation can follow Japanese cells, so the
             // rendered text as a whole is not the original lyric's identity.
@@ -168,7 +169,8 @@ internal class AppleLyricsPronunciationState {
             // when two registered lines could both match the same holder.
             if (observedSourceCells.isEmpty()) return null
             return lineWideBySource.values.singleOrNull { candidate ->
-                AppleLineWidePronunciationRowPolicy.verifiedInsertionIndex(
+                AppleLineWidePronunciationRowPolicy.safeSourceFallback(candidate) &&
+                    AppleLineWidePronunciationRowPolicy.verifiedInsertionIndex(
                     candidate.sourceText, observedSourceCells,
                 ) != null
             }

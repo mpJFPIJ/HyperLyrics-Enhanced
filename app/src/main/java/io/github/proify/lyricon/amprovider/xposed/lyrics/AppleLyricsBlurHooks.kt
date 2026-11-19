@@ -108,7 +108,17 @@ internal class AppleLyricsBlurHooks(
     private val preferences: () -> android.content.SharedPreferences?,
     internal val playbackHooks: () -> ApplePlaybackHooks,
     private val currentFragment: () -> Any?,
+    private val currentSongId: () -> String?,
 ) {
+    private val verifiedNativeWindows = AppleLyricsTimedAdapterWindowIndex()
+
+    internal fun rememberVerifiedNativeWindow(
+        songId: String?, revision: Long, adapterPosition: Int?, beginMs: Long, endMs: Long,
+    ) {
+        if (adapterPosition != null) verifiedNativeWindows.remember(
+            songId, revision, adapterPosition, beginMs, endMs,
+        )
+    }
     internal companion object {
         const val APPLE_MUSIC_PACKAGE = "com.apple.android.music"
         const val APPLE_LYRICS_INITIAL_ANCHOR_Y_FRACTION = 0.22f
@@ -619,7 +629,7 @@ internal class AppleLyricsBlurHooks(
         updateAppleLyricsActivePositions(state, activePositions)
         val currentPositionMs = appleLyricsCurrentPlaybackPositionMs()
         val playbackActivePosition = if (activePositions.size > 1)
-            currentPositionMs?.let { appleLyricsAdapterPositionForPlayback(adapter, it) }
+            verifiedNativeWindows.focus(currentSongId(), activePositions, currentPositionMs)
         else null
         val singleActiveFocus = AppleLyricsBlurTransitionPolicy.clockAwareFocus(
             nativeActive = activePositions,

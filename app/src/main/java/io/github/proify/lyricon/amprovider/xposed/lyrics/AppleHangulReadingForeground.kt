@@ -5,7 +5,6 @@ import android.graphics.ColorFilter
 import android.graphics.PixelFormat
 import android.graphics.Rect
 import android.graphics.drawable.Drawable
-import android.view.View
 import android.view.ViewGroup
 import android.widget.TextView
 
@@ -53,8 +52,8 @@ internal class AppleHangulReadingForeground(
     }
 
     override fun draw(canvas: Canvas) {
-        if (!holderRoot.isAttachedToWindow || !reading.isAttachedToWindow ||
-            reading.visibility != View.VISIBLE || reading.width <= 0 || reading.height <= 0
+        if (!holderRoot.isAttachedToWindow || !reading.isShown ||
+            reading.width <= 0 || reading.height <= 0
         ) return
         val layout = reading.layout ?: return
         localRect.set(0, 0, reading.width, reading.height)

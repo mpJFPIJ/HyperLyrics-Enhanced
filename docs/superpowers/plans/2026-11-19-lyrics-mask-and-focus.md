@@ -6,6 +6,13 @@
 
 **Architecture:** A layout-only reading TextView owns the vertical space but a single outer-holder drawable paints its existing timed syllables above the native gradient. A group-level native-activity resolver chooses translation focus; one manager ticker repaints each visible group once.
 
+**Review amendment:** The overlay affects injected fallback ReadingView only;
+verified native Hangul word cells use Apple's timing renderer. Diagnose and
+protect that second route without hiding or replacing its karaoke spans. Native
+host RecyclerViews have a different AndroidX classloader. The blur clock mapper
+must use holder-observed native times rather than equating logical song indexes
+with adapter positions. Keep the shared ticker dormant without attached rows.
+
 **Tech Stack:** Kotlin Android Views, LibXposed, JUnit, GitHub Actions.
 
 **Spec:** `docs/superpowers/specs/2026-11-19-lyrics-mask-and-focus-design.md`

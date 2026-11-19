@@ -8,6 +8,16 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 
 class AppleNativeTranslationHighlightPolicyTest {
+    @Test fun recyclerOwnerRecognizedAcrossHostModuleClassLoaders() {
+        assertTrue(AppleTranslationRecyclerOwnerPolicy.isRecyclerViewHierarchy(
+            listOf("com.apple.music.lyrics.NativeRecycler", "androidx.recyclerview.widget.RecyclerView",
+                "android.view.ViewGroup"),
+        ))
+        assertFalse(AppleTranslationRecyclerOwnerPolicy.isRecyclerViewHierarchy(
+            listOf("com.apple.music.lyrics.LineHolder", "android.widget.FrameLayout"),
+        ))
+    }
+
     @Test fun nativeActiveRowWinsWhenClockIsStaleOrMissing() {
         val rows = listOf(
             AppleTranslationFocusCandidate(4, 1_000L, 2_100L),

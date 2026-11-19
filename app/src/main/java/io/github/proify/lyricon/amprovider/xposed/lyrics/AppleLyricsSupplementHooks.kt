@@ -275,6 +275,7 @@ internal class AppleLyricsSupplementHooks(
             preferences = preferences,
             playbackHooks = playbackHooks,
             currentFragment = { presentationBinding.fragment() },
+            currentSongId = ::currentSongId,
         )
     }
     internal val diagnostics by lazy {
@@ -295,7 +296,9 @@ internal class AppleLyricsSupplementHooks(
                     lineWideBindingGeneration[view] =
                         (lineWideBindingGeneration[view] ?: 0L) + 1L
                 }
-                lineWidePronunciationRow.clear(root)
+                // A confirmed holderBound call decides reuse/replacement.
+                // Clearing here recreated the same measured reading on every
+                // native rebind and flickered its mask bypass foreground.
             },
             holderBound = { context, root ->
                 bindLineWidePronunciation(context, root)

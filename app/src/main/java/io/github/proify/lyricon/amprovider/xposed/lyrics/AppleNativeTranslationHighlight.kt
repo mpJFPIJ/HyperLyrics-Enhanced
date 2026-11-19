@@ -9,10 +9,10 @@ import android.text.style.CharacterStyle
 import android.graphics.Rect
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.view.View
 import android.view.ViewGroup
 import android.widget.TextView
-import androidx.recyclerview.widget.RecyclerView
 import java.util.WeakHashMap
 
 internal enum class AppleTranslationTone { ACTIVE, MUTED }
@@ -30,6 +30,20 @@ internal data class AppleTranslationFocusCandidate(
     val beginMs: Long,
     val endMs: Long,
 )
+
+/** NPatch loads Apple's AndroidX RecyclerView from the host classloader;
+ * `view is RecyclerView` with the module class identity is always false. */
+internal object AppleTranslationRecyclerOwnerPolicy {
+    fun isRecyclerViewHierarchy(classNames: Iterable<String>): Boolean =
+        classNames.any { it == "androidx.recyclerview.widget.RecyclerView" }
+
+    fun isNativeRecyclerView(view: View): Boolean {
+        val type: Class<*> = view.javaClass
+        return isRecyclerViewHierarchy(
+            generateSequence(type) { it.superclass }.map { it.name }.asIterable(),
+        )
+    }
+}
 
 /** The host adapter owns active lyric rows. The playback clock resolves its
  * overlapping outgoing/incoming rows; a timestamp alone must never highlight
@@ -189,18 +203,33 @@ internal class AppleNativeTranslationHighlight(
     private var indexedRevision = -1L
     private val mainHandler = Handler(Looper.getMainLooper())
     private var refreshScheduled = false
+    private var refreshDeadlineMs = Long.MAX_VALUE
     private val sharedRefresh = object : Runnable {
         override fun run() {
             refreshScheduled = false
+            refreshDeadlineMs = Long.MAX_VALUE
             val visible = refreshVisibleGroups()
-            if (pulses.isNotEmpty()) scheduleRefresh(if (visible) 100L else 400L)
+            scheduleRefresh(if (visible) 100L else 400L)
         }
     }
 
     private fun scheduleRefresh(delayMs: Long = 0L) {
-        if (refreshScheduled || pulses.isEmpty()) return
+        // A RecyclerView can bind an offscreen holder that never attaches.
+        // Such a pending bind must not keep a 400-ms UI timer alive forever.
+        if (pulses.values.none { it.isRunning && it.root.isAttachedToWindow }) return
+        val deadline = SystemClock.uptimeMillis() + delayMs
+        if (refreshScheduled && deadline >= refreshDeadlineMs) return
+        if (refreshScheduled) mainHandler.removeCallbacks(sharedRefresh)
         refreshScheduled = true
+        refreshDeadlineMs = deadline
         mainHandler.postDelayed(sharedRefresh, delayMs)
+    }
+
+    private fun stopRefreshIfIdle() {
+        if (pulses.values.any { it.isRunning && it.root.isAttachedToWindow }) return
+        mainHandler.removeCallbacks(sharedRefresh)
+        refreshScheduled = false
+        refreshDeadlineMs = Long.MAX_VALUE
     }
 
     private fun sourceKey(text: String): String =
@@ -415,6 +444,7 @@ internal class AppleNativeTranslationHighlight(
             onDetach = { old, detached ->
                 if (pulses[detached] === old) pulses.remove(detached)
                 bindingLifecycle[detached]?.painterStopped()
+                stopRefreshIfIdle()
             },
         )
         pulses[root] = pulse
@@ -427,7 +457,7 @@ internal class AppleNativeTranslationHighlight(
     private fun groupOwner(root: View): View {
         var ancestor: View? = root
         while (ancestor != null) {
-            if (ancestor is RecyclerView) return ancestor
+            if (AppleTranslationRecyclerOwnerPolicy.isNativeRecyclerView(ancestor)) return ancestor
             ancestor = ancestor.parent as? View
         }
         return root.rootView
@@ -448,22 +478,27 @@ internal class AppleNativeTranslationHighlight(
         val attached = snapshot.filter { pulse ->
             pulse.isRunning && pulse.root.isAttachedToWindow && pulse.textsIntact()
         }
+        if (attached.isEmpty()) return false
         attached.groupBy(::groupOwnerOfPulse).forEach { (owner, rows) ->
-            // A single RecyclerView can contain multiple song revisions for
-            // one layout frame. Never lend a previous song's active state.
-            rows.groupBy { it.ctx.songId to it.ctx.revision }.values.forEach { songRows ->
-                val nativeActive = if (owner is RecyclerView)
-                    nativeActivePositions(owner) else null
-                val selected = AppleTranslationFocusPolicy.select(
-                    rows = songRows.map { pulse ->
-                        AppleTranslationFocusCandidate(
-                            pulse.adapterPosition, pulse.ctx.beginMs, pulse.ctx.endMs,
-                        )
-                    },
-                    nativeActive = nativeActive,
-                    positionMs = songRows.first().currentPlaybackPosition(),
-                )
-                songRows.forEachIndexed { index, pulse -> pulse.render(index == selected) }
+            // A recycled native holder can temporarily coexist with its
+            // previous revision. There must be just one focused meaning for
+            // this entire RecyclerView, never one per revision group.
+            val songRows = rows.filter { pulse ->
+                pulse.ctx.songId == indexedSongId && pulse.ctx.revision == indexedRevision
+            }
+            val nativeActive = if (AppleTranslationRecyclerOwnerPolicy.isNativeRecyclerView(owner))
+                nativeActivePositions(owner) else null
+            val selected = AppleTranslationFocusPolicy.select(
+                rows = songRows.map { pulse ->
+                    AppleTranslationFocusCandidate(
+                        pulse.adapterPosition, pulse.ctx.beginMs, pulse.ctx.endMs,
+                    )
+                },
+                nativeActive = nativeActive,
+                positionMs = songRows.firstOrNull()?.currentPlaybackPosition(),
+            )
+            rows.forEach { pulse ->
+                pulse.render(selected != null && songRows.getOrNull(selected) === pulse)
             }
         }
         return attached.any { it.root.isShown }

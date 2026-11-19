@@ -568,6 +568,49 @@ internal object AppleLyricsBlurTransitionPolicy {
         ?: singleActiveFocus(nativeActive, previousFocus)
 }
 
+/** Adapter row positions are NOT logical lyric indexes: Apple inserts
+ * instrumental/header/credits rows. Only a line observed in the native
+ * holder's own binding stack is a safe position↔clock mapping. */
+internal class AppleLyricsTimedAdapterWindowIndex {
+    private data class Window(val beginMs: Long, val endMs: Long)
+    private var songId: String? = null
+    private var revision = -1L
+    private val windows = LinkedHashMap<Int, Window>()
+
+    @Synchronized
+    fun remember(
+        currentSongId: String?,
+        currentRevision: Long,
+        adapterPosition: Int,
+        beginMs: Long,
+        endMs: Long,
+    ) {
+        if (currentSongId.isNullOrBlank() || adapterPosition < 0 || beginMs < 0L ||
+            endMs <= beginMs
+        ) return
+        if (songId != currentSongId || revision != currentRevision || windows.size > 512) {
+            songId = currentSongId
+            revision = currentRevision
+            windows.clear()
+        }
+        windows[adapterPosition] = Window(beginMs, endMs)
+    }
+
+    @Synchronized
+    fun focus(
+        currentSongId: String?,
+        nativeActive: Set<Int>,
+        playbackPositionMs: Long?,
+    ): Int? {
+        if (currentSongId != songId || playbackPositionMs == null) return null
+        return nativeActive.filter { position ->
+            windows[position]?.let { window ->
+                playbackPositionMs >= window.beginMs && playbackPositionMs < window.endMs
+            } == true
+        }.maxWithOrNull(compareBy<Int> { windows[it]?.beginMs ?: -1L }.thenBy { it })
+    }
+}
+
 internal object AppleLyricsBlurOwnershipPolicy {
     fun shouldSkipZeroRadiusRequest(
         radiusPx: Int,

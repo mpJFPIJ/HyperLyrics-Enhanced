@@ -33,6 +33,11 @@ internal data class AppleLineWidePronunciationPayload(
 )
 
 internal object AppleLineWidePronunciationRowPolicy {
+    /** A source key alone cannot identify which repeated chorus row owns a
+     * timing window; only the native holder-bound plan may render that case. */
+    fun safeSourceFallback(payload: AppleLineWidePronunciationPayload): Boolean =
+        payload.repeatTimings.isEmpty()
+
     fun canReuseReading(
         boundPayload: AppleLineWidePronunciationPayload?,
         requestedPayload: AppleLineWidePronunciationPayload,
@@ -222,8 +227,9 @@ internal class AppleLineWidePronunciationRow {
 
         private fun syncPaintLayer() {
             val root = paintRoot ?: return
-            val measured = isAttachedToWindow && root.isAttachedToWindow &&
-                width > 0 && height > 0 && root.width > 0 && root.height > 0
+            val measured = isAttachedToWindow && isShown && root.isAttachedToWindow &&
+                layout != null && width > 0 && height > 0 &&
+                root.width > 0 && root.height > 0
             if (!measured && outerForeground != null) detachOuterForeground()
             var newForeground = false
             if (measured && outerForeground == null) {
@@ -367,15 +373,38 @@ internal class AppleLineWidePronunciationRow {
         val targetSize = AppleLineWidePronunciationRowPolicy.readingTextPx(sourceSize)
         if (targetSize <= 0f) return 0
         var adjusted = 0
+        var nativeHangulCount = 0
+        var nativeFontPaddingAdded = 0
+        var nativeShaderCells = 0
+        var nativeUnmeasuredCells = 0
         for (view in views) {
             if (!isUnder(view, "pronunciation") || isUnder(view, "translation") ||
                 !view.text.any { it in '가'..'힣' }
             ) continue
+            nativeHangulCount++
+            if (view.paint.shader != null) nativeShaderCells++
+            if (view.layout == null || view.height <= 0) nativeUnmeasuredCells++
+            if (!view.includeFontPadding) {
+                // The verified native word renderer stays in charge of
+                // per-word karaoke timing; only reserve its full glyph ascent
+                // and descent, without adding or recoloring another word.
+                view.includeFontPadding = true
+                nativeFontPaddingAdded++
+            }
             if (kotlin.math.abs(view.textSize - targetSize) > 0.8f) {
                 view.setTextSize(TypedValue.COMPLEX_UNIT_PX, targetSize)
                 adjusted++
             }
         }
+        if (nativeHangulCount > 0) AppleLyricUiRuntimeProbe.record(
+            "native_reading_paint_path",
+            "nativeCells=$nativeHangulCount fontPaddingAdded=$nativeFontPaddingAdded " +
+                "shaders=$nativeShaderCells unmeasured=$nativeUnmeasuredCells " +
+                "lineWide=${if ((0 until parent.childCount).any {
+                    parent.getChildAt(it) is ReadingView
+                }) 1 else 0}",
+            root,
+        )
         // setTextSize() already requests measurement from the native parent.
         // Forcing an additional parent.requestLayout() and a second
         // root.postOnAnimation(requestLayout) after bind created a two-frame

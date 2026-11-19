@@ -99,15 +99,25 @@ internal fun AppleLyricsSupplementHooks.hookAppleLyricTextGetter(clazz: Class<*>
                 }.getOrNull()
                 if (lineBegin != null &&
                     lineEnd != null && lineEnd > lineBegin && result.isNotBlank()
-                ) translationLineHighlight.remember(
-                    holder = timedContext?.holder,
-                    songId = currentAppleLyricsSongId,
-                    sourceText = nativeOriginalLineText(chain.thisObject),
-                    beginMs = lineBegin,
-                    endMs = lineEnd,
-                    translation = result,
-                    revision = nativeOnlineTranslationStore.revision(),
-                )
+                ) {
+                    val revision = nativeOnlineTranslationStore.revision()
+                    translationLineHighlight.remember(
+                        holder = timedContext?.holder,
+                        songId = currentAppleLyricsSongId,
+                        sourceText = nativeOriginalLineText(chain.thisObject),
+                        beginMs = lineBegin,
+                        endMs = lineEnd,
+                        translation = result,
+                        revision = revision,
+                    )
+                    // This exact native getter executes inside its holder bind,
+                    // so this is a verified adapter-row↔native-line time axis.
+                    // A logical lyrics index is not interchangeable with it.
+                    blurHooks.rememberVerifiedNativeWindow(
+                        currentAppleLyricsSongId, revision, timedContext?.position,
+                        lineBegin, lineEnd,
+                    )
+                }
                 if (BuildConfig.DEBUG) {
                     ProviderLogger.debug(
                         "[LyricsScrollDiag] getTranslationText: line=${System.identityHashCode(chain.thisObject)}, " +

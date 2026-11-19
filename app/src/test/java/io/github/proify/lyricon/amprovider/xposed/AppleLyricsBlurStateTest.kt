@@ -21,6 +21,19 @@ import java.lang.reflect.Method
  * 同时固定“七个重复常量只保留一份”的处置。
  */
 class AppleLyricsBlurStateTest {
+    @Test fun `adapter focus uses observed native window not mismatched logical index`() {
+        val index = AppleLyricsTimedAdapterWindowIndex()
+        index.remember("iris", 4, adapterPosition = 5, beginMs = 1_000L, endMs = 2_100L)
+        index.remember("iris", 4, adapterPosition = 6, beginMs = 2_000L, endMs = 2_900L)
+        assertEquals(5, index.focus("iris", setOf(5, 6), 1_950L))
+        assertEquals(6, index.focus("iris", setOf(5, 6), 2_200L))
+        assertNull(index.focus("iris", setOf(5, 6), 900L))
+        assertNull(index.focus("another-song", setOf(5, 6), 2_200L))
+        index.remember("iris", 5, adapterPosition = 6, beginMs = 5_000L, endMs = 6_000L)
+        assertNull(index.focus("iris", setOf(5, 6), 2_200L))
+        assertEquals(6, index.focus("iris", setOf(5, 6), 5_200L))
+    }
+
     @Test fun `current playback row wins over lingering prior native active row`() {
         assertEquals(6, AppleLyricsBlurTransitionPolicy.clockAwareFocus(
             nativeActive = setOf(5, 6), playbackAdapterPosition = 6,

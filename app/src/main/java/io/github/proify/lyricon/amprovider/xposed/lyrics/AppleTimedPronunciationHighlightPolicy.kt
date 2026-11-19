@@ -110,9 +110,10 @@ internal object AppleTimedPronunciationHighlightPolicy {
             return (timeFrom + (timeTo - timeFrom) * fraction).roundToLong()
         }
 
-        // Validate a *complete* reading before taking its exact source offsets.
-        // A partial/AI-invented token must not silently misalign the real lyrics.
-        val acceptedSpans = phoneticSpans.takeIf { spans ->
+        // Preserve verified source-token anchors even when only part of the
+        // reading was tokenized. Unknown syllables must never inherit an Apple
+        // source-word index merely because a proportional fallback crossed it.
+        val structurallyValidSpans = phoneticSpans.takeIf { spans ->
             spans.isNotEmpty() && spans.zipWithNext().all { (a, b) ->
                 a.sourceEnd <= b.sourceStart
             } && spans.all { span ->
@@ -120,12 +121,42 @@ internal object AppleTimedPronunciationHighlightPolicy {
                     span.sourceEnd <= sourceText.length &&
                     (span.sourceText == null ||
                         sourceText.substring(span.sourceStart, span.sourceEnd) == span.sourceText)
-            } && spans.flatMap { it.hangul.filter(Char::isLetterOrDigit).toList() } ==
+            }
+        }
+        val acceptedSpans = structurallyValidSpans.takeIf { spans ->
+            spans != null &&
+                spans.flatMap { it.hangul.filter(Char::isLetterOrDigit).toList() } ==
                 pronouncedOffsets.map { pronunciation[it] }
         }
+        val partialAnchors: List<Pair<Double, Double>?>? =
+            if (acceptedSpans != null) null else structurallyValidSpans?.let { spans ->
+                val pronunciationLetters =
+                    pronouncedOffsets.joinToString("") { pronunciation[it].toString() }
+                val anchors = MutableList<Pair<Double, Double>?>(pronouncedOffsets.size) { null }
+                var nextPronunciationIndex = 0
+                var valid = true
+                for (span in spans) {
+                    val phonetic = span.hangul.filter(Char::isLetterOrDigit)
+                    val index = if (phonetic.isEmpty()) -1 else
+                        pronunciationLetters.indexOf(phonetic, nextPronunciationIndex)
+                    if (index < 0) {
+                        valid = false
+                        break
+                    }
+                    val width = (span.sourceEnd - span.sourceStart).toDouble()
+                    for (unit in phonetic.indices) {
+                        anchors[index + unit] =
+                            (span.sourceStart + width * unit / phonetic.length) to
+                                (span.sourceStart + width * (unit + 1) / phonetic.length)
+                    }
+                    nextPronunciationIndex = index + phonetic.length
+                }
+                anchors.takeIf { valid && it.any { anchor -> anchor != null } &&
+                    it.any { anchor -> anchor == null } }
+            }
 
-        val coordinates = if (acceptedSpans != null) {
-            buildList {
+        val coordinates: List<Pair<Double, Double>?> = when {
+            acceptedSpans != null -> buildList {
                 acceptedSpans.forEach { span ->
                     val count = span.hangul.count(Char::isLetterOrDigit)
                     if (count == 0) return@forEach
@@ -138,30 +169,63 @@ internal object AppleTimedPronunciationHighlightPolicy {
                     }
                 }
             }
-        } else {
-            // If Apple's timing is partial, estimating the whole reading
-            // from the remaining words would light missing syllables too early.
-            if (!fullNativeCoverage && !hasLineWindow) return emptyList()
-            // Manual/unsupported text has no verified phonetic token map.
-            // Use Apple word times, distributing syllables across the source;
-            // this approximation is still progressive rather than a whole-line flash.
-            val sourceStart = 0.0
-            val sourceEnd = sourceText.length.toDouble()
-            val width = sourceEnd - sourceStart
-            List(pronouncedOffsets.size) { index ->
-                (sourceStart + width * index / pronouncedOffsets.size) to
-                    (sourceStart + width * (index + 1) / pronouncedOffsets.size)
+            partialAnchors != null -> {
+                val estimated = partialAnchors.toMutableList()
+                // A real native line window allows a bounded approximation
+                // for missing syllables. Without it they stay unanimated.
+                if (hasLineWindow) {
+                    var cursor = 0
+                    while (cursor < estimated.size) {
+                        if (estimated[cursor] != null) {
+                            cursor++
+                            continue
+                        }
+                        val gapStart = cursor
+                        while (cursor < estimated.size && estimated[cursor] == null) cursor++
+                        val gapEnd = cursor
+                        val sourceFrom =
+                            if (gapStart == 0) 0.0 else estimated[gapStart - 1]?.second ?: 0.0
+                        val sourceTo =
+                            if (gapEnd == estimated.size) sourceText.length.toDouble()
+                            else estimated[gapEnd]?.first ?: sourceText.length.toDouble()
+                        if (sourceTo <= sourceFrom) continue
+                        val width = sourceTo - sourceFrom
+                        val count = gapEnd - gapStart
+                        for (offset in 0 until count) {
+                            estimated[gapStart + offset] =
+                                (sourceFrom + width * offset / count) to
+                                    (sourceFrom + width * (offset + 1) / count)
+                        }
+                    }
+                }
+                estimated
+            }
+            else -> {
+                // Without a validated map, partial native word coverage alone
+                // cannot safely animate the entire reading.
+                if (!fullNativeCoverage && !hasLineWindow) return emptyList()
+                val width = sourceText.length.toDouble()
+                List(pronouncedOffsets.size) { index ->
+                    (width * index / pronouncedOffsets.size) to
+                        (width * (index + 1) / pronouncedOffsets.size)
+                }
             }
         }
 
-        return pronouncedOffsets.zip(coordinates).mapNotNull { (textIndex, coordinate) ->
-            val begin = clockAt(coordinate.first, ending = false) ?: return@mapNotNull null
-            val end = clockAt(coordinate.second, ending = true) ?: return@mapNotNull null
-            if (end <= begin) return@mapNotNull null
+        return pronouncedOffsets.mapIndexedNotNull { syllableIndex, textIndex ->
+            val coordinate = coordinates.getOrNull(syllableIndex)
+                ?: return@mapIndexedNotNull null
+            val begin = clockAt(coordinate.first, ending = false)
+                ?: return@mapIndexedNotNull null
+            val end = clockAt(coordinate.second, ending = true)
+                ?: return@mapIndexedNotNull null
+            if (end <= begin) return@mapIndexedNotNull null
             val midpoint = (coordinate.first + coordinate.second) / 2.0
-            val sourceWord = located.firstOrNull { native ->
-                midpoint >= native.sourceStart && midpoint < native.sourceEnd
-            }?.nativeIndex ?: -1
+            val sourceWord =
+                if (partialAnchors != null && partialAnchors[syllableIndex] == null) -1
+                else located.firstOrNull { native ->
+                    midpoint >= native.sourceStart && midpoint < native.sourceEnd
+                }?.nativeIndex ?: -1
             AppleTimedReadingUnit(
                 textIndex, textIndex + 1, begin, end, sourceWordIndex = sourceWord,
             )

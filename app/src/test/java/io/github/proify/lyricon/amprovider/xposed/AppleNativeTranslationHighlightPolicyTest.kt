@@ -2,6 +2,7 @@ package io.github.proify.lyricon.amprovider.xposed
 
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -14,6 +15,7 @@ class AppleNativeTranslationHighlightPolicyTest {
         )
         assertFalse(owners.nativeVisible)
         assertTrue(owners.foregroundVisible)
+        assertEquals(AppleTranslationTone.ACTIVE, owners.tone)
     }
 
     @Test fun unavailableForegroundNeverHidesNativeMeaning() {
@@ -25,13 +27,45 @@ class AppleNativeTranslationHighlightPolicyTest {
         assertFalse(owners.foregroundVisible)
     }
 
-    @Test fun inactiveKoreanTranslationRestoresNativePainterOnly() {
+    @Test fun inactiveKoreanTranslationKeepsOneMutedOverlayWithoutPainterFlash() {
         val owners = AppleNativeTranslationHighlightPolicy.paintOwners(
             lineActive = false,
             foregroundReady = true,
         )
+        assertFalse(owners.nativeVisible)
+        assertTrue(owners.foregroundVisible)
+        assertEquals(AppleTranslationTone.MUTED, owners.tone)
+    }
+
+    @Test fun inactiveMeaningFallsBackToNativeWhenOverlayIsUnavailable() {
+        val owners = AppleNativeTranslationHighlightPolicy.paintOwners(
+            lineActive = false,
+            foregroundReady = false,
+        )
         assertTrue(owners.nativeVisible)
         assertFalse(owners.foregroundVisible)
+        assertEquals(AppleTranslationTone.MUTED, owners.tone)
+    }
+
+    @Test fun unchangedRebindKeepsPulseButNewSourceOrRecycledTextDoesNot() {
+        val existing = AppleTranslationLineContext("song", "駄目", 1000L, 1900L, "안 돼", 2L)
+        assertTrue(AppleNativeTranslationHighlightPolicy.canReusePulse(
+            existing, existing.copy(), sameViews = true, controlledTextsIntact = true,
+        ))
+        assertFalse(AppleNativeTranslationHighlightPolicy.canReusePulse(
+            existing, existing.copy(beginMs = 2000L),
+            sameViews = true, controlledTextsIntact = true,
+        ))
+        assertFalse(AppleNativeTranslationHighlightPolicy.canReusePulse(
+            existing, existing.copy(revision = 3L),
+            sameViews = true, controlledTextsIntact = true,
+        ))
+        assertFalse(AppleNativeTranslationHighlightPolicy.canReusePulse(
+            existing, existing.copy(), sameViews = false, controlledTextsIntact = true,
+        ))
+        assertFalse(AppleNativeTranslationHighlightPolicy.canReusePulse(
+            existing, existing.copy(), sameViews = true, controlledTextsIntact = false,
+        ))
     }
 
     @Test fun repeatedViewBindingRetainsTheSameTranslationClockUntilHolderRecycles() {

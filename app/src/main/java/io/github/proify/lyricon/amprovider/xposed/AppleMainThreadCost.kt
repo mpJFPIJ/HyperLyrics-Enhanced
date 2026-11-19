@@ -49,11 +49,14 @@ internal object AppleMainThreadCost {
     private var messageStartNs = 0L
     private var messageKey: String? = null
 
-    val isEnabled: Boolean get() = BuildConfig.DEBUG && Thread.currentThread() === mainThread
+    // Signed CI Debug builds are installed by users. Reserve the expensive
+    // Looper profiler for developer-local builds only.
+    val isEnabled: Boolean get() = BuildConfig.DEBUG &&
+        BuildConfig.HLE_BUILD_RUN == "local" && Thread.currentThread() === mainThread
 
     /** 在主线程调用一次：开始统计模块投递的主线程消息。 */
     fun installLooperObserver() {
-        if (!BuildConfig.DEBUG) return
+        if (!BuildConfig.DEBUG || BuildConfig.HLE_BUILD_RUN != "local") return
         Looper.getMainLooper().setMessageLogging(Printer { line ->
             if (line.startsWith(">>>>>")) {
                 messageKey = moduleRunnableKey(line)

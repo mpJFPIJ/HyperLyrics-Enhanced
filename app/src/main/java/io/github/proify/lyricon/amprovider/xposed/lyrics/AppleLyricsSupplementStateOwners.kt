@@ -40,6 +40,11 @@ internal class AppleLyricsPronunciationState {
         IdentityHashMap<Any, ApplePronunciationRenderPlan>()
     )
     private val wordRenderContexts = ThreadLocalStack<ApplePronunciationWordRenderContext>()
+    private val lineWideByHolder = WeakIdentityMap<Any, AppleLineWidePronunciationPayload>()
+    private val lineWideBySource = LinkedHashMap<String, AppleLineWidePronunciationPayload>()
+    private val ambiguousLineWideSources = HashSet<String>()
+    private var lineWideSongId: String? = null
+    private var lineWideRevision: Long = -1L
 
     fun rememberLanguages(songId: String, languages: List<String>) {
         languagesBySongId[songId] = languages
@@ -58,11 +63,21 @@ internal class AppleLyricsPronunciationState {
     fun registerRenderPlan(vector: Any, plan: ApplePronunciationRenderPlan) {
         synchronized(pendingRenderPlans) {
             if (pendingRenderPlans.size >= MAX_RENDER_PLANS) {
-                pendingRenderPlans.clear()
+                // Evict just one stale plan; clearing everything here causes
+                // unrelated visible rows to lose the native word mapping.
+                val pending = pendingRenderPlans.keys.iterator()
+                if (pending.hasNext()) {
+                    pending.next()
+                    pending.remove()
+                }
             }
             pendingRenderPlans[vector] = plan
         }
     }
+
+    /** Inspect without deleting: an adapter may probe before it can map words. */
+    fun peekRenderPlan(vector: Any): ApplePronunciationRenderPlan? =
+        synchronized(pendingRenderPlans) { pendingRenderPlans[vector] }
 
     /** Consumes the plan registered for [vector], if any. */
     fun consumeRenderPlan(vector: Any): ApplePronunciationRenderPlan? =
@@ -85,6 +100,114 @@ internal class AppleLyricsPronunciationState {
 
     fun popWordRenderContext() {
         wordRenderContexts.pop()
+    }
+
+    fun beginHolderBinding(holder: Any?) {
+        holder?.let(lineWideByHolder::remove)
+    }
+
+    /** No strong references to Apple ViewHolders escape this method. */
+    fun rememberLineWide(
+        payload: AppleLineWidePronunciationPayload,
+        holder: Any?,
+    ) {
+        holder?.let { lineWideByHolder[it] = payload }
+        synchronized(lineWideBySource) {
+            if (lineWideSongId != payload.songId || lineWideRevision != payload.revision ||
+                lineWideBySource.size >= MAX_RENDER_PLANS
+            ) {
+                lineWideBySource.clear()
+                ambiguousLineWideSources.clear()
+                lineWideSongId = payload.songId
+                lineWideRevision = payload.revision
+            }
+            val source = AppleLineWidePronunciationRowPolicy.sourceKey(payload.sourceText)
+            if (source.isBlank() || source in ambiguousLineWideSources) return@synchronized
+            val previous = lineWideBySource[source]
+            if (previous != null && previous.pronunciation != payload.pronunciation) {
+                lineWideBySource.remove(source)
+                ambiguousLineWideSources.add(source)
+            } else {
+                // Repeated chorus text is not a unique lyric event. Keep
+                // *all* native timing windows rather than letting the final
+                // occurrence overwrite the first and desynchronize karaoke.
+                val earlierTimings = previous?.let {
+                    listOf(it.timedWords) + it.repeatTimings
+                }.orEmpty().filter { it.isNotEmpty() }
+                val otherTimings = earlierTimings.filter { it != payload.timedWords }.distinct()
+                lineWideBySource[source] = payload.copy(repeatTimings = otherTimings)
+            }
+        }
+    }
+
+    fun lineWideForHolder(
+        holder: Any?,
+        songId: String?,
+        observedSourceText: String?,
+        revision: Long,
+        observedSourceCells: List<String> = emptyList(),
+    ): AppleLineWidePronunciationPayload? {
+        val pending = holder?.let { lineWideByHolder[it] }
+        if (pending != null && pending.songId == songId && pending.revision == revision) {
+            return pending
+        }
+        if (songId == null ||
+            (observedSourceText.isNullOrBlank() && observedSourceCells.isEmpty())
+        ) return null
+        synchronized(lineWideBySource) {
+            if (lineWideSongId != songId || lineWideRevision != revision) return null
+            if (!observedSourceText.isNullOrBlank()) {
+                val exact = lineWideBySource[
+                    AppleLineWidePronunciationRowPolicy.sourceKey(observedSourceText)
+                ]
+                if (exact != null && AppleLineWidePronunciationRowPolicy.safeSourceFallback(exact))
+                    return exact
+            }
+            // An English/Chinese translation can follow Japanese cells, so the
+            // rendered text as a whole is not the original lyric's identity.
+            // Prefer a single verified Japanese source prefix and fail closed
+            // when two registered lines could both match the same holder.
+            if (observedSourceCells.isEmpty()) return null
+            return lineWideBySource.values.singleOrNull { candidate ->
+                AppleLineWidePronunciationRowPolicy.safeSourceFallback(candidate) &&
+                    AppleLineWidePronunciationRowPolicy.verifiedInsertionIndex(
+                    candidate.sourceText, observedSourceCells,
+                ) != null
+            }
+        }
+    }
+
+    /** Used only to suppress Apple-native duplicate reading cells during line-wide presentation. */
+    fun hasLineWide(
+        songId: String?, sourceText: String?, revision: Long, sourcePriority: Int = 0,
+        holder: Any? = null,
+    ): Boolean {
+        if (songId.isNullOrBlank() || sourceText.isNullOrBlank()) return false
+        val sourceKey = AppleLineWidePronunciationRowPolicy.sourceKey(sourceText)
+        val exactHolder = holder?.let { lineWideByHolder[it] }
+        if (exactHolder != null && exactHolder.songId == songId &&
+            exactHolder.revision == revision && exactHolder.sourcePriority == sourcePriority &&
+            AppleLineWidePronunciationRowPolicy.sourceKey(exactHolder.sourceText) == sourceKey
+        ) return true
+        synchronized(lineWideBySource) {
+            if (lineWideSongId != songId || lineWideRevision != revision) return false
+            return lineWideBySource[sourceKey]?.let { candidate ->
+                candidate.sourcePriority == sourcePriority &&
+                    AppleLineWidePronunciationRowPolicy.safeSourceFallback(candidate)
+            } == true
+        }
+    }
+
+    /** Official/verified native words must never inherit an older line-wide fallback. */
+    fun forgetLineWide(songId: String?, sourceText: String?) {
+        if (songId.isNullOrBlank() || sourceText.isNullOrBlank()) return
+        synchronized(lineWideBySource) {
+            if (songId == lineWideSongId) {
+                val source = AppleLineWidePronunciationRowPolicy.sourceKey(sourceText)
+                lineWideBySource.remove(source)
+                ambiguousLineWideSources.remove(source)
+            }
+        }
     }
 
     internal companion object {

@@ -42,7 +42,13 @@ data class RichLyricLine(
     override var secondaryWords: List<LyricWord>? = null,
     override var translation: String? = null,
     override var translationWords: List<LyricWord>? = null,
-    override var roma: String? = null
+    override var roma: String? = null,
+    /** Same-order readings for original karaoke words, validated against [roma]. */
+    var pronunciationWords: List<LyricWordPronunciation>? = null,
+    /** Optional context-aware source spans; absent in older serialized song payloads. */
+    var pronunciationSpans: List<LyricPronunciationSpan>? = null,
+    /** COMPLETE/LINE_WIDE/MISSING_UNSUPPORTED; independent of translation. */
+    var pronunciationStatus: String? = null,
 ) : IRichLyricLine, DeepCopyable<RichLyricLine>, Normalize<RichLyricLine> {
 
     init {

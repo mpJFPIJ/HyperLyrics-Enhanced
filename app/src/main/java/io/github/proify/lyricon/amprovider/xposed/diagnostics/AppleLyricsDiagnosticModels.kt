@@ -22,4 +22,16 @@ internal data class AppleLyricsBindingDiagnosticContext(
     val position: Int?,
     val translationEnabled: Boolean?,
     val pronunciationEnabled: Boolean?,
+    val nestedForSameHolder: Boolean = false,
 )
+
+/** Two- and three-parameter native bind methods often call each other. */
+internal object AppleLyricsBindingPassPolicy {
+    fun isNestedForSameHolder(
+        parentHolder: Any?,
+        parentAdapterIdentity: Int?,
+        holder: Any?,
+        adapterIdentity: Int,
+    ): Boolean = holder != null && parentHolder === holder &&
+        parentAdapterIdentity == adapterIdentity
+}

@@ -61,9 +61,9 @@ internal class ApplePlaybackHooks(
     private var progressJob: Job? = null
     private var remotePlayer: RemotePlayer? = null
     /** Playback surface activity. BUFFERING remains active. */
-    private var playing = false
+    @Volatile private var playing = false
     /** True only while the media clock may advance. BUFFERING is false. */
-    private var timelineAdvancing = false
+    @Volatile private var timelineAdvancing = false
     private val exoPlaybackSignals =
         WeakIdentityMap<Any, AppleExoPlaybackIntentPolicy.Resolution>()
     private val networkErrorPlayer = ThreadLocal<Any?>()
@@ -73,12 +73,13 @@ internal class ApplePlaybackHooks(
     private var networkRetryAccess: NetworkRetryAccess? = null
     private var zeroPositionReadCount = 0
     private var hasLoggedNonZeroPosition = false
-    private var lastTimingSamplePosition = -1L
-    private var lastTimingSampleAtMs = 0L
+    @Volatile private var lastTimingSamplePosition = -1L
+    @Volatile private var lastTimingSampleSongId: String? = null
+    @Volatile private var lastTimingSampleAtMs = 0L
     private var lastTimingTraceAtMs = 0L
     private var lastTimingStateSignature: String? = null
-    private var lastExplicitSeekAtMs = 0L
-    private var lastExplicitSeekPosition = -1L
+    @Volatile private var lastExplicitSeekAtMs = 0L
+    @Volatile private var lastExplicitSeekPosition = -1L
     private var lastPlaybackAnchorAtMs = 0L
     private val atmosphereSessionCallbackHit = AtomicBoolean(false)
     private val atmosphereVariantCallbackHit = AtomicBoolean(false)
@@ -187,9 +188,11 @@ internal class ApplePlaybackHooks(
         )
         runtime.hookRegistrar.installHook(seekMethod, after = { chain, _ ->
             val position = chain.args.firstOrNull() as? Long ?: 0L
+            // Release builds must also honor a seek back to 0. Diagnostics
+            // may be disabled, but source/reading clocks must never diverge.
+            lastExplicitSeekAtMs = SystemClock.elapsedRealtime()
+            lastExplicitSeekPosition = position
             if (BuildConfig.DEBUG) {
-                lastExplicitSeekAtMs = SystemClock.elapsedRealtime()
-                lastExplicitSeekPosition = position
                 ProviderLogger.diagnostic(
                     "Timing seek: requested=$position, callbackPlayer=" +
                         "${chain.thisObject?.let(System::identityHashCode)}, " +
@@ -243,9 +246,24 @@ internal class ApplePlaybackHooks(
 
     fun activePlayer(): Any? = activePlaybackPlayer
 
-    fun currentPositionMs(): Long? =
-        runCatching { playbackPositionSource?.readPosition() }.getOrNull()
-            ?: lastTimingSamplePosition.takeIf { it >= 0L }
+    fun currentPositionMs(): Long? {
+        val raw = runCatching { playbackPositionSource?.readPosition() }.getOrNull()
+        val songId = currentLyricsSongId() ?: currentMetadataId()
+        val last = lastTimingSamplePosition.takeIf {
+            it >= 0L && songId != null && lastTimingSampleSongId == songId
+        }
+        val justSoughtToBeginning = lastExplicitSeekPosition == 0L &&
+            SystemClock.elapsedRealtime() - lastExplicitSeekAtMs < 2_500L
+        val sampleAgeMs = lastTimingSampleAtMs.takeIf { it > 0L }
+            ?.let { SystemClock.elapsedRealtime() - it }
+        return ApplePausedPlaybackClockPolicy.select(
+            currentMs = raw,
+            lastValidMs = last,
+            timelineAdvancing = timelineAdvancing,
+            explicitSeekToZero = justSoughtToBeginning,
+            lastValidAgeMs = sampleAgeMs,
+        )
+    }
 
     private fun startSyncAction() {
         if (playing && timelineAdvancing) return
@@ -807,6 +825,7 @@ internal class ApplePlaybackHooks(
             zeroPositionReadCount = 0
             hasLoggedNonZeroPosition = false
             lastTimingSamplePosition = -1L
+            lastTimingSampleSongId = null
             lastTimingSampleAtMs = 0L
             lastTimingStateSignature = null
             lastPlaybackAnchorAtMs = 0L
@@ -838,8 +857,18 @@ internal class ApplePlaybackHooks(
     }
 
     private fun logPlaybackTimingDiagnostic(position: Long) {
-        if (!BuildConfig.DEBUG) return
         val now = SystemClock.elapsedRealtime()
+        val songId = currentLyricsSongId() ?: currentMetadataId()
+        if (!BuildConfig.DEBUG) {
+            // BUGFIX: the release build previously returned before saving the
+            // last clock sample. A paused/temporarily unreadable player then
+            // sent Hangul's independent clock to null while Apple kept its
+            // last native karaoke frame visible.
+            lastTimingSampleAtMs = now
+            lastTimingSamplePosition = position
+            lastTimingSampleSongId = songId
+            return
+        }
         val source = playbackPositionSource
         val activeIdentity = activePlaybackPlayer?.let(System::identityHashCode)
         val sourceIdentity = source?.player?.let(System::identityHashCode)
@@ -897,6 +926,7 @@ internal class ApplePlaybackHooks(
         }
         lastTimingSampleAtMs = now
         lastTimingSamplePosition = position
+        lastTimingSampleSongId = songId
     }
 
     private fun publishPlaybackAnchor(position: Long, playing: Boolean, force: Boolean) {

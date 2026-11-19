@@ -1,11 +1,42 @@
 package com.juren233.hyperlyricsenhanced.root.aitrans
 
 import com.juren233.hyperlyricsenhanced.lyric.model.RichLyricLine
+import com.juren233.hyperlyricsenhanced.lyric.model.LyricPronunciationSpan
+import com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation
 import com.juren233.hyperlyricsenhanced.lyric.model.Song
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class AITranslationApplicatorTest {
+
+    @Test fun replacingAiPronunciationInvalidatesOldWordAndSourceAlignment() {
+        val line = RichLyricLine(
+            text = "君の名は", roma = "키미노나와",
+            pronunciationStatus = "ALIGNED",
+            pronunciationWords = listOf(LyricWordPronunciation("君の名は", "키미노나와")),
+            pronunciationSpans = listOf(LyricPronunciationSpan(
+                0, 4, "君の名は", "키미노나와",
+            )),
+        )
+        val translated = AITranslationApplicator.apply(
+            Song(lyrics = listOf(line)),
+            listOf(TranslationItem(0, "너의 이름은", "키미노 나와")),
+        )
+        assertEquals("키미노 나와", translated.lyrics?.single()?.roma)
+        assertEquals(null, translated.lyrics?.single()?.pronunciationWords)
+        assertEquals(null, translated.lyrics?.single()?.pronunciationSpans)
+    }
+
+    @Test fun aiPhoneticsHaveProvenanceIndependentOfTranslation() {
+        val song = Song(lyrics = listOf(RichLyricLine(text = "未知語")))
+        val translated = AITranslationApplicator.apply(
+            song, listOf(TranslationItem(0, "알 수 없는 말", "미치고")),
+        )
+        assertEquals("AI_GENERATED_UNVERIFIED",
+            translated.lyrics?.single()?.pronunciationStatus)
+        assertEquals("미치고", translated.lyrics?.single()?.roma)
+    }
+
 
     @Test
     fun `preserves online translations while filling unmatched lines`() {

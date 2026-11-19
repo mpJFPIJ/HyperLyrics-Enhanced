@@ -1,0 +1,724 @@
+package io.github.proify.lyricon.amprovider.xposed
+
+import android.graphics.Color
+import android.text.Spanned
+import android.text.SpannableStringBuilder
+import android.text.style.ForegroundColorSpan
+import android.text.style.BackgroundColorSpan
+import android.text.style.CharacterStyle
+import android.graphics.Rect
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
+import android.view.View
+import android.view.ViewGroup
+import android.widget.TextView
+import java.lang.ref.WeakReference
+import java.util.WeakHashMap
+
+internal enum class AppleTranslationTone { ACTIVE, MUTED }
+
+internal data class AppleTranslationPaintOwners(
+    val nativeVisible: Boolean,
+    val foregroundVisible: Boolean,
+    val tone: AppleTranslationTone,
+)
+
+internal enum class AppleTranslationBindResult { REUSE, REPLACE, STOP }
+
+internal data class AppleTranslationFocusCandidate(
+    val adapterPosition: Int?,
+    val beginMs: Long,
+    val endMs: Long,
+)
+
+/** NPatch loads Apple's AndroidX RecyclerView from the host classloader;
+ * `view is RecyclerView` with the module class identity is always false. */
+internal object AppleTranslationRecyclerOwnerPolicy {
+    fun isRecyclerViewHierarchy(classNames: Iterable<String>): Boolean =
+        classNames.any { it == "androidx.recyclerview.widget.RecyclerView" }
+
+    fun isNativeRecyclerView(view: View): Boolean {
+        val type: Class<*> = view.javaClass
+        return isRecyclerViewHierarchy(
+            generateSequence(type) { it.superclass }.map { it.name }.asIterable(),
+        )
+    }
+}
+
+/** The host adapter owns active lyric rows. The playback clock resolves its
+ * overlapping outgoing/incoming rows; a timestamp alone must never highlight
+ * a row which the host has already marked inactive. */
+internal object AppleTranslationFocusPolicy {
+    fun select(
+        rows: List<AppleTranslationFocusCandidate>,
+        nativeActive: Set<Int>?,
+        positionMs: Long?,
+    ): Int? {
+        val possible = rows.indices.filter { index ->
+            nativeActive == null || rows[index].adapterPosition
+                ?.let(nativeActive::contains) == true
+        }
+        if (possible.isEmpty()) return null
+        val timed = possible.filter { index ->
+            AppleNativeTranslationHighlightPolicy.lineActive(
+                positionMs, rows[index].beginMs, rows[index].endMs,
+            )
+        }
+        val choices = when {
+            timed.isNotEmpty() -> timed
+            nativeActive != null -> possible
+            else -> return null
+        }
+        return choices.maxWithOrNull(compareBy<Int> { rows[it].beginMs }
+            .thenBy { rows[it].adapterPosition ?: -1 })
+    }
+}
+
+/** A holder's bind entry invalidates cached source data, not its live painter. */
+internal class AppleTranslationBindingLifecycle {
+    private var generation = 0L
+    private var installed: AppleTranslationLineContext? = null
+    private var pending: AppleTranslationLineContext? = null
+
+    fun painterInstalled(context: AppleTranslationLineContext) {
+        installed = context
+        pending = context
+    }
+
+    fun painterStopped() {
+        installed = null
+        pending = null
+    }
+
+    fun beginHolderBind(): Long {
+        generation++
+        pending = installed
+        return generation
+    }
+
+    fun hasPendingPainter(): Boolean = pending != null
+
+    fun completeHolderBind(
+        bindingGeneration: Long,
+        context: AppleTranslationLineContext?,
+        sameViews: Boolean,
+        controlledTextsIntact: Boolean,
+    ): AppleTranslationBindResult {
+        if (bindingGeneration != generation) return AppleTranslationBindResult.STOP
+        val retained = pending
+        val result = when {
+            context == null -> AppleTranslationBindResult.STOP
+            retained != null && AppleNativeTranslationHighlightPolicy.canReusePulse(
+                retained, context, sameViews, controlledTextsIntact,
+            ) -> AppleTranslationBindResult.REUSE
+            else -> AppleTranslationBindResult.REPLACE
+        }
+        if (result != AppleTranslationBindResult.REUSE) painterStopped()
+        return result
+    }
+}
+
+/** Keep all wrapped Korean translation text on the SAME Apple source-line clock. */
+internal object AppleNativeTranslationHighlightPolicy {
+    /** Keep one foreground painter through active/inactive color changes. */
+    fun paintOwners(lineActive: Boolean, foregroundReady: Boolean): AppleTranslationPaintOwners {
+        return AppleTranslationPaintOwners(
+            nativeVisible = !foregroundReady,
+            foregroundVisible = foregroundReady,
+            tone = if (lineActive) AppleTranslationTone.ACTIVE else AppleTranslationTone.MUTED,
+        )
+    }
+
+    /** Exact repeated binds must not briefly restore the old native painter. */
+    fun canReusePulse(
+        existingContext: AppleTranslationLineContext,
+        requestedContext: AppleTranslationLineContext,
+        sameViews: Boolean,
+        controlledTextsIntact: Boolean,
+    ): Boolean = existingContext == requestedContext && sameViews && controlledTextsIntact
+
+    fun eligibleKoreanMeaning(translationVisible: Boolean, koreanTargetSelected: Boolean): Boolean =
+        translationVisible && koreanTargetSelected
+
+    /** The latest started native source window is the ONE highlighted meaning. */
+    fun activeRowIndex(
+        rows: List<AppleTranslationLineContext>,
+        positionMs: Long?,
+    ): Int? {
+        if (positionMs == null) return null
+        return rows.indices
+            .filter { lineActive(positionMs, rows[it].beginMs, rows[it].endMs) }
+            .maxWithOrNull(compareBy<Int> { rows[it].beginMs }.thenByDescending { it })
+    }
+
+    /** Never restore the old lyric into a TextView already rebound to another row. */
+    fun isStillBound(controlledText: CharSequence, currentText: CharSequence): Boolean =
+        controlledText === currentText
+
+    fun lineActive(positionMs: Long?, beginMs: Long, endMs: Long): Boolean =
+        positionMs != null && beginMs >= 0 && endMs > beginMs &&
+            positionMs >= beginMs && positionMs < endMs
+
+    fun compact(text: String): String =
+        text.filter(Char::isLetterOrDigit).lowercase(java.util.Locale.ROOT)
+
+    /**
+     * The original implementation scanned every TextView in the entire native
+     * row, then recolored arbitrary matching fragments. That could affect a
+     * reading or a future source lyric. Only the 6.5.3 translation TextView is
+     * safe to modify; accept an exact-text match when its ID is unavailable.
+     */
+    fun shouldRenderTranslationCell(
+        viewId: String?,
+        translation: String,
+        candidate: String,
+    ): Boolean {
+        val normalizedId = viewId.orEmpty()
+        if (normalizedId == "lyrics_translation_line")
+            return fragmentMatches(translation, candidate)
+        return normalizedId.isEmpty() &&
+            compact(candidate).length >= 2 &&
+            compact(candidate) == compact(translation)
+    }
+
+    fun fragmentMatches(translation: String, candidate: String): Boolean {
+        val expected = compact(translation)
+        val actual = compact(candidate)
+        // A one-letter candidate may be a Japanese source word or a rebinding
+        // placeholder. Prefer actual translated fragments; never alter source.
+        return actual.length >= 2 && expected.contains(actual)
+    }
+}
+
+internal class AppleNativeTranslationHighlight(
+    private val nativeActivePositions: (View) -> Set<Int>? = { null },
+) {
+    private val byHolder = AppleTranslationLineContextStore()
+    // A strong Pulse value owns its root and child TextViews; that defeats a
+    // WeakHashMap key and leaks native prefetched holders that never attach.
+    // Attached roots keep their Pulse alive through the attach listener.
+    private val pulses = WeakHashMap<View, WeakReference<Pulse>>()
+    private fun pulseAt(root: View): Pulse? = pulses[root]?.get()
+    private fun livePulses(): List<Pulse> = pulses.values.mapNotNull { it.get() }
+    private val bindingGenerations = WeakHashMap<View, Long>()
+    private val bindingLifecycle = WeakHashMap<View, AppleTranslationBindingLifecycle>()
+    private val bySource = LinkedHashMap<String, AppleTranslationLineContext>()
+    private val ambiguousSources = HashSet<String>()
+    private var indexedSongId: String? = null
+    private var indexedRevision = -1L
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var refreshScheduled = false
+    private var refreshDeadlineMs = Long.MAX_VALUE
+    private val sharedRefresh = object : Runnable {
+        override fun run() {
+            refreshScheduled = false
+            refreshDeadlineMs = Long.MAX_VALUE
+            val visible = refreshVisibleGroups()
+            scheduleRefresh(if (visible) 100L else 400L)
+        }
+    }
+
+    private fun scheduleRefresh(delayMs: Long = 0L) {
+        // A RecyclerView can bind an offscreen holder that never attaches.
+        // Such a pending bind must not keep a 400-ms UI timer alive forever.
+        if (livePulses().none { it.isRunning && it.root.isAttachedToWindow }) return
+        val deadline = SystemClock.uptimeMillis() + delayMs
+        if (refreshScheduled && deadline >= refreshDeadlineMs) return
+        if (refreshScheduled) mainHandler.removeCallbacks(sharedRefresh)
+        refreshScheduled = true
+        refreshDeadlineMs = deadline
+        mainHandler.postDelayed(sharedRefresh, delayMs)
+    }
+
+    private fun stopRefreshIfIdle() {
+        if (livePulses().any { it.isRunning && it.root.isAttachedToWindow }) return
+        mainHandler.removeCallbacks(sharedRefresh)
+        refreshScheduled = false
+        refreshDeadlineMs = Long.MAX_VALUE
+    }
+
+    private fun sourceKey(text: String): String =
+        AppleLineWidePronunciationRowPolicy.sourceKey(text)
+
+    private fun rememberSource(ctx: AppleTranslationLineContext) {
+        synchronized(bySource) {
+            if (indexedSongId != ctx.songId || indexedRevision != ctx.revision ||
+                bySource.size > 512
+            ) {
+                bySource.clear()
+                ambiguousSources.clear()
+                indexedSongId = ctx.songId
+                indexedRevision = ctx.revision
+            }
+            val key = sourceKey(ctx.sourceText)
+            if (key.isBlank() || key in ambiguousSources) return
+            val previous = bySource[key]
+            // The same chorus may have multiple distinct timing windows:
+            // don't highlight an unrelated recycled holder by guessing.
+            if (previous != null && previous.beginMs != ctx.beginMs) {
+                bySource.remove(key)
+                ambiguousSources.add(key)
+            } else {
+                bySource[key] = ctx
+            }
+        }
+    }
+
+    fun remember(
+        holder: Any?,
+        songId: String?,
+        sourceText: String?,
+        beginMs: Long,
+        endMs: Long,
+        translation: String,
+        revision: Long,
+    ) {
+        if (songId.isNullOrBlank() || sourceText.isNullOrBlank() ||
+            beginMs < 0L || endMs <= beginMs || translation.isBlank()
+        ) return
+        val ctx = AppleTranslationLineContext(
+            songId, sourceText, beginMs, endMs, translation, revision,
+        )
+        byHolder.remember(holder, ctx)
+        rememberSource(ctx)
+    }
+
+    fun beginHolderBinding(holder: Any?, root: View?) {
+        byHolder.clear(holder)
+        root?.let { view ->
+            // The native row may be rebound without changing any of its
+            // content. Keep the overlay until completed bind can verify it.
+            bindingLifecycle.getOrPut(view) { AppleTranslationBindingLifecycle() }
+                .beginHolderBind()
+            bindingGenerations[view] = (bindingGenerations[view] ?: 0L) + 1L
+        }
+    }
+
+    fun bind(
+        holder: Any?,
+        root: View?,
+        currentSongId: String?,
+        revision: Long,
+        enabled: Boolean,
+        playbackPositionMs: () -> Long?,
+        observedSourceCells: List<String> = emptyList(),
+        holderAdapterPosition: Int? = null,
+        retry: Int = 0,
+        isCurrent: () -> Boolean = { true },
+    ): Boolean {
+        root ?: return false
+        if (!isCurrent()) return false
+        // Keep an identical live row's foreground across repeated native
+        // onBind callbacks. Restoring its old text and alpha on every bind
+        // caused a one-frame white flash at the translation boundary.
+        fun stopOldPulse() {
+            if (retry == 0) {
+                pulses.remove(root)?.get()?.stop()
+                bindingLifecycle[root]?.painterStopped()
+            }
+        }
+        val generation = bindingGenerations[root] ?: 0L
+        fun retryAfterLayout(ctx: AppleTranslationLineContext? = null) {
+            if (retry >= 3 || !enabled) return
+            if (ctx != null) byHolder.remember(holder, ctx)
+            root.postDelayed({
+                if (bindingGenerations[root] == generation &&
+                    root.isAttachedToWindow && isCurrent()
+                ) bind(
+                    holder, root, currentSongId, revision, enabled,
+                    playbackPositionMs, observedSourceCells, holderAdapterPosition,
+                    retry + 1, isCurrent,
+                )
+            }, when (retry) {
+                0 -> 24L
+                1 -> 96L
+                else -> 220L
+            })
+        }
+        // A holder may be bound repeatedly while its lyric line is visible;
+        // consuming this context on the first pass made subsequent calls lose
+        // their source clock and log translation_context_missing.
+        val holderCtx = byHolder.forHolder(holder)
+        val fallback = if (holderCtx == null && currentSongId != null &&
+            observedSourceCells.isNotEmpty()
+        ) synchronized(bySource) {
+            if (indexedSongId != currentSongId || indexedRevision != revision) null
+            else bySource.values.singleOrNull { candidate ->
+                AppleLineWidePronunciationRowPolicy.verifiedInsertionIndex(
+                    candidate.sourceText, observedSourceCells,
+                ) != null
+            }
+        } else null
+        val ctx = holderCtx ?: fallback
+        if (ctx == null) {
+            // Apple may invoke a redundant bind before its translation getter.
+            // Keep the existing painter only while the same host text is intact.
+            val pending = pulseAt(root)
+            val keepPending = enabled &&
+                pending?.isSafeFor(currentSongId, revision) == true
+            if (!keepPending) stopOldPulse()
+            AppleLyricUiRuntimeProbe.record(
+                "translation_context_missing",
+                "holderPresent=${if (holder != null) 1 else 0} " +
+                    "sourceCellCount=${observedSourceCells.size} retry=$retry",
+                root,
+            )
+            retryAfterLayout()
+            return keepPending
+        }
+        if (!enabled || ctx.songId != currentSongId || ctx.revision != revision) {
+            stopOldPulse()
+            return false
+        }
+        val texts = mutableListOf<TextView>()
+        fun scan(view: View, depth: Int) {
+            if (depth > 12) return
+            if (view is TextView) {
+                // The injected Hangul ReadingView is not a Korean meaning
+                // line, even if its text happens to occur in the translation.
+                val entry = runCatching {
+                    view.resources.getResourceEntryName(view.id)
+                }.getOrNull()
+                if (view.javaClass.simpleName != "ReadingView" &&
+                    AppleNativeTranslationHighlightPolicy.shouldRenderTranslationCell(
+                        entry, ctx.translation, view.text.toString(),
+                    )
+                ) texts.add(view)
+            } else if (view is ViewGroup) {
+                for (i in 0 until view.childCount) scan(view.getChildAt(i), depth + 1)
+            }
+        }
+        scan(root, 0)
+        if (texts.isEmpty()) {
+            stopOldPulse()
+            AppleLyricUiRuntimeProbe.record(
+                "translation_cell_missing",
+                "candidateTextLen=${ctx.translation.length} retry=$retry",
+                root,
+            )
+            retryAfterLayout(ctx)
+            return false
+        }
+
+        // Exclude Hangul source-reading cells even when a short phonetic token
+        // accidentally matches part of a translated word.
+        val translationView = texts.filter { view ->
+            var parent: View? = view
+            var readingContainer = false
+            while (parent != null && parent !== root) {
+                val id = runCatching {
+                    parent.resources.getResourceEntryName(parent.id)
+                }.getOrNull().orEmpty()
+                if (id.contains("pronunciation", ignoreCase = true)) {
+                    readingContainer = true
+                    break
+                }
+                parent = parent.parent as? View
+            }
+            !readingContainer
+        }
+        if (translationView.isEmpty()) {
+            stopOldPulse()
+            retryAfterLayout(ctx)
+            return false
+        }
+        val existing = pulseAt(root)
+        val lifecycle = bindingLifecycle.getOrPut(root) { AppleTranslationBindingLifecycle() }
+        val canReuse = existing?.matches(ctx, translationView, holderAdapterPosition) == true
+        val lifecycleResult = lifecycle.completeHolderBind(
+            bindingGenerations[root] ?: 0L, ctx,
+            sameViews = canReuse,
+            controlledTextsIntact = canReuse,
+        )
+        if (canReuse && lifecycleResult == AppleTranslationBindResult.REUSE) {
+            existing?.updatePlaybackPosition(playbackPositionMs)
+            scheduleRefresh()
+            return true
+        }
+        pulses.remove(root)?.get()?.stop()
+        lifecycle.painterStopped()
+        AppleLyricUiRuntimeProbe.record(
+            "translation_cells_bound",
+            "matchedCells=${translationView.size} " +
+                "lineDurationMs=${ctx.endMs - ctx.beginMs} retry=$retry",
+            root,
+        )
+        val pulse = Pulse(
+            root, ctx, holderAdapterPosition, translationView, playbackPositionMs,
+            onScheduleRefresh = { scheduleRefresh() },
+            onDetach = { old, detached ->
+                if (pulseAt(detached) === old) pulses.remove(detached)
+                bindingLifecycle[detached]?.painterStopped()
+                stopRefreshIfIdle()
+            },
+        )
+        pulses[root] = WeakReference(pulse)
+        lifecycle.painterInstalled(ctx)
+        pulse.start()
+        scheduleRefresh()
+        return true
+    }
+
+    private fun groupOwner(root: View): View {
+        var ancestor: View? = root
+        while (ancestor != null) {
+            if (AppleTranslationRecyclerOwnerPolicy.isNativeRecyclerView(ancestor)) return ancestor
+            ancestor = ancestor.parent as? View
+        }
+        return root.rootView
+    }
+
+    /** One runnable per entire presentation, not one runnable per bound row.
+     * The old per-holder timers each walked all pulses, making the amount of
+     * UI work grow quadratically with visible lyric row count. */
+    private fun refreshVisibleGroups(): Boolean {
+        val snapshot = livePulses()
+        snapshot.filterNot(Pulse::textsIntact).forEach { stale ->
+            stale.stop()
+            if (pulseAt(stale.root) === stale) {
+                pulses.remove(stale.root)
+                bindingLifecycle[stale.root]?.painterStopped()
+            }
+        }
+        val attached = snapshot.filter { pulse ->
+            pulse.isRunning && pulse.root.isAttachedToWindow && pulse.textsIntact()
+        }
+        if (attached.isEmpty()) return false
+        attached.groupBy(::groupOwnerOfPulse).forEach { (owner, rows) ->
+            // A recycled native holder can temporarily coexist with its
+            // previous revision. There must be just one focused meaning for
+            // this entire RecyclerView, never one per revision group.
+            val songRows = rows.filter { pulse ->
+                pulse.ctx.songId == indexedSongId && pulse.ctx.revision == indexedRevision
+            }
+            val nativeActive = if (AppleTranslationRecyclerOwnerPolicy.isNativeRecyclerView(owner))
+                nativeActivePositions(owner) else null
+            val selected = AppleTranslationFocusPolicy.select(
+                rows = songRows.map { pulse ->
+                    AppleTranslationFocusCandidate(
+                        pulse.adapterPosition, pulse.ctx.beginMs, pulse.ctx.endMs,
+                    )
+                },
+                nativeActive = nativeActive,
+                positionMs = songRows.firstOrNull()?.currentPlaybackPosition(),
+            )
+            rows.forEach { pulse ->
+                pulse.render(selected != null && songRows.getOrNull(selected) === pulse)
+            }
+        }
+        return attached.any { it.root.isShown }
+    }
+
+    private fun groupOwnerOfPulse(pulse: Pulse): View = groupOwner(pulse.root)
+
+    private class Pulse(
+        val root: View,
+        val ctx: AppleTranslationLineContext,
+        val adapterPosition: Int?,
+        views: List<TextView>,
+        private var playbackPositionMs: () -> Long?,
+        private val onScheduleRefresh: () -> Unit,
+        private val onDetach: (Pulse, View) -> Unit,
+    ) : View.OnAttachStateChangeListener {
+        private data class SavedStyle(
+            val view: TextView,
+            val colors: android.content.res.ColorStateList,
+            val opacity: Float,
+            val originalText: CharSequence,
+            var controlledText: CharSequence,
+            var hiddenByPulse: Boolean = false,
+        )
+        private val originals = views.map {
+            SavedStyle(it, it.textColors, it.alpha, it.text, it.text)
+        }
+        private val inactiveColor = Color.rgb(145, 145, 145)
+
+        /**
+         * Apple draws Korean meaning through a colored Spanned CharSequence.
+         * TextView.setTextColor() cannot override spans, so the upper half of
+         * wrapped lyrics kept the native gradient even when the line was
+         * active. Strip only color spans once on bind; preserve typeface,
+         * layout, size and all non-color spans.
+         */
+        private fun removeConflictingColorSpans(view: TextView) {
+            val source = view.text as? Spanned ?: return
+            val copy = SpannableStringBuilder(source)
+            val conflicting = copy.getSpans(
+                0, copy.length, CharacterStyle::class.java,
+            ).filter { span ->
+                span is ForegroundColorSpan || span is BackgroundColorSpan ||
+                    span.javaClass.simpleName.contains("gradient", ignoreCase = true) ||
+                    span.javaClass.simpleName.contains("karaoke", ignoreCase = true)
+            }
+            if (conflicting.isEmpty()) return
+            conflicting.forEach(copy::removeSpan)
+            view.setText(copy, TextView.BufferType.SPANNABLE)
+        }
+        private var running = false
+        val isRunning: Boolean get() = running
+        private var lastActive: Boolean? = null
+        private var lastForegroundReady: Boolean? = null
+        private val bounds = Rect()
+        private var aboveNativeGradient: AppleKoreanTranslationForeground? = null
+
+        fun matches(
+            candidate: AppleTranslationLineContext,
+            cells: List<TextView>,
+            candidateAdapterPosition: Int?,
+        ): Boolean {
+            val sameViews = originals.size == cells.size &&
+                originals.indices.all { index -> originals[index].view === cells[index] }
+            val intact = originals.all { saved ->
+                AppleNativeTranslationHighlightPolicy.isStillBound(
+                    saved.controlledText, saved.view.text,
+                )
+            }
+            return running && adapterPosition == candidateAdapterPosition &&
+                AppleNativeTranslationHighlightPolicy.canReusePulse(
+                ctx, candidate, sameViews, intact,
+            )
+        }
+
+        fun updatePlaybackPosition(next: () -> Long?) {
+            playbackPositionMs = next
+        }
+
+        fun currentPlaybackPosition(): Long? = playbackPositionMs()
+
+        fun textsIntact(): Boolean = originals.all { saved ->
+            AppleNativeTranslationHighlightPolicy.isStillBound(
+                saved.controlledText, saved.view.text,
+            )
+        }
+
+        fun isSafeFor(songId: String?, revision: Long): Boolean =
+            running && ctx.songId == songId && ctx.revision == revision && textsIntact()
+
+        private fun attachForeground(color: Int): Boolean {
+            // If any wrapped cell has no measurable layout yet, keep Apple's
+            // original meaning fully visible until the overlay can draw all
+            // cells. Never hide the native fallback on a partial bind.
+            if (root !is ViewGroup || root.width <= 0 || root.height <= 0 || originals.any { saved ->
+                    saved.view.layout == null ||
+                        saved.view.width <= 0 || saved.view.height <= 0
+                }
+            ) {
+                detachForeground()
+                return false
+            }
+            if (aboveNativeGradient == null) {
+                // FullWidthAlphaGradientFlexboxLayout masks the child even
+                // after TextView.setTextColor(WHITE). A ViewOverlay on the
+                // *outer lyric holder* draws this one Korean meaning on top
+                // of that nested native gradient without changing Japanese
+                // source words, the pronunciation vector or their clocks.
+                val drawable = AppleKoreanTranslationForeground(
+                    root, originals.map { it.view }, color,
+                )
+                drawable.setBounds(0, 0, root.width, root.height)
+                if (runCatching { root.overlay.add(drawable) }.isFailure) return false
+                aboveNativeGradient = drawable
+            }
+            aboveNativeGradient?.let { drawable ->
+                if (drawable.bounds.width() != root.width ||
+                    drawable.bounds.height() != root.height
+                ) drawable.setBounds(0, 0, root.width, root.height)
+                drawable.setForegroundColor(color)
+            }
+            return aboveNativeGradient != null
+        }
+
+        private fun detachForeground() {
+            aboveNativeGradient?.let(root.overlay::remove)
+            aboveNativeGradient = null
+        }
+
+        fun start() {
+            if (running) return
+            running = true
+            root.addOnAttachStateChangeListener(this)
+            originals.forEach { saved ->
+                removeConflictingColorSpans(saved.view)
+                saved.controlledText = saved.view.text
+            }
+        }
+
+        fun stop() {
+            if (!running) return
+            running = false
+            root.removeOnAttachStateChangeListener(this)
+            detachForeground()
+            originals.forEach { saved ->
+                if (!AppleNativeTranslationHighlightPolicy.isStillBound(
+                        saved.controlledText, saved.view.text,
+                    )) {
+                    // RecyclerView may replace the text before this pulse is
+                    // stopped. Never restore its old text/colors, but do undo
+                    // our zero-alpha override so the next lyric isn't hidden.
+                    if (saved.hiddenByPulse && saved.view.alpha <= 0.01f)
+                        saved.view.alpha = 1f
+                    return@forEach
+                }
+                saved.view.setText(saved.originalText)
+                saved.view.setTextColor(saved.colors)
+                saved.view.alpha = saved.opacity
+            }
+        }
+
+        override fun onViewAttachedToWindow(v: View) {
+            if (running) onScheduleRefresh()
+        }
+
+        override fun onViewDetachedFromWindow(v: View) {
+            // Detach must remove the map entry: a WeakHashMap with a value
+            // pointing back to its View would otherwise retain the entire
+            // native karaoke row, its translation and attached TextViews.
+            stop()
+            onDetach(this, v)
+        }
+
+        fun render(active: Boolean) {
+            if (!running || !textsIntact()) return
+            val visible = root.isShown && root.getGlobalVisibleRect(bounds)
+            if (visible) {
+                // Both states keep the same drawable, changing its color
+                // only. Switching between native and overlay at the line
+                // boundary previously caused a visible one-frame flash.
+                val nativeColor = if (active) Color.WHITE else inactiveColor
+                val foregroundReady = attachForeground(nativeColor)
+                val owners = AppleNativeTranslationHighlightPolicy.paintOwners(
+                    lineActive = active, foregroundReady = foregroundReady,
+                )
+                originals.filter { saved ->
+                    AppleNativeTranslationHighlightPolicy.isStillBound(
+                        saved.controlledText, saved.view.text,
+                    )
+                }.forEach { saved ->
+                    val view = saved.view
+                    // The native host can repaint its word gradient after we
+                    // set the text color. Keep it hidden while the stable
+                    // outer foreground paints white (active) or grey (other).
+                    if (view.currentTextColor != nativeColor)
+                        view.setTextColor(nativeColor)
+                    val nativeAlpha = if (owners.nativeVisible) 1f else 0f
+                    if (kotlin.math.abs(view.alpha - nativeAlpha) > 0.01f)
+                        view.alpha = nativeAlpha
+                    saved.hiddenByPulse = !owners.nativeVisible
+                }
+                if (lastActive != active || lastForegroundReady != foregroundReady) {
+                    AppleLyricUiRuntimeProbe.record(
+                        if (active) "translation_painter_active" else "translation_painter_inactive",
+                        "foregroundReady=${if (foregroundReady) 1 else 0} " +
+                            "nativeVisible=${if (owners.nativeVisible) 1 else 0} " +
+                            "foregroundVisible=${if (owners.foregroundVisible) 1 else 0} " +
+                            "tone=${owners.tone} " +
+                            "cells=${originals.size}",
+                    )
+                }
+                lastActive = active
+                lastForegroundReady = foregroundReady
+            }
+        }
+    }
+}

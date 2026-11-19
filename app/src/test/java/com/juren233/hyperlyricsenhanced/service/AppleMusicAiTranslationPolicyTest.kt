@@ -5,6 +5,11 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AppleMusicAiTranslationPolicyTest {
+    @Test fun phoneticsOnlyOutputStillReachesAppleMusic() {
+        assertTrue(AppleMusicAiTranslationPolicy.shouldDeliverResult(0, 3))
+        assertTrue(AppleMusicAiTranslationPolicy.shouldDeliverResult(2, 0))
+        assertFalse(AppleMusicAiTranslationPolicy.shouldDeliverResult(0, 0))
+    }
     @Test fun rejectsCallersOtherThanAppleMusic() {
         assertFalse(AppleMusicAiTranslationPolicy.isAuthorizedCaller(null))
         assertFalse(AppleMusicAiTranslationPolicy.isAuthorizedCaller(arrayOf("com.example.other")))

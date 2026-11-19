@@ -440,7 +440,12 @@ private fun LazyListScope.settingsSections(
         var themeMode by remember { mutableIntStateOf(prefs.getInt(UIConstants.KEY_THEME_MODE, UIConstants.DEFAULT_THEME_MODE)) }
         val themeOptions = listOf(stringResource(R.string.theme_system), stringResource(R.string.theme_light), stringResource(R.string.theme_dark), stringResource(R.string.theme_system_monet), stringResource(R.string.theme_light_monet), stringResource(R.string.theme_dark_monet))
         var appLanguage by remember { mutableIntStateOf(prefs.getInt(UIConstants.KEY_APP_LANGUAGE, UIConstants.DEFAULT_APP_LANGUAGE)) }
-        val languageOptions = listOf(stringResource(R.string.language_system), stringResource(R.string.language_simplified_chinese), stringResource(R.string.language_english))
+        val languageOptions = listOf(
+            stringResource(R.string.language_system),
+            stringResource(R.string.language_simplified_chinese),
+            stringResource(R.string.language_english),
+            stringResource(R.string.language_korean),
+        )
 
         Card(modifier = Modifier.padding(horizontal = 12.dp).padding(bottom = 12.dp).fillMaxWidth()) {
             Column {
@@ -610,6 +615,7 @@ private fun LazyListScope.settingsSections(
                     title = stringResource(R.string.export_all_logs),
                     onClick = onExportAllLogs,
                 )
+                DiagnosticGitHubSettingsControls()
             }
         }
     }

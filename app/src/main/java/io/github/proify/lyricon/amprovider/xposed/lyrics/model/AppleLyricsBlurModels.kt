@@ -22,6 +22,8 @@ internal data class AppleLyricsBlurRuntimeState(
     var suspendedForScroll: Boolean = false,
     var pendingProgrammaticRecenterPosition: Int? = null,
     var lastActivePositions: Set<Int> = emptySet(),
+    var lastFocusedActivePosition: Int? = null,
+    var lastFollowRecoveryAtMs: Long = 0L,
     var pendingOutgoingPositions: Set<Int> = emptySet(),
     var outgoingZoneTopByPosition: Map<Int, Float> = emptyMap(),
     var pendingApplyBlur: Runnable? = null,

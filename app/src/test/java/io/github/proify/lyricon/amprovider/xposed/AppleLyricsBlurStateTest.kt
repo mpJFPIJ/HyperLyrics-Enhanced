@@ -21,6 +21,89 @@ import java.lang.reflect.Method
  * 同时固定“七个重复常量只保留一份”的处置。
  */
 class AppleLyricsBlurStateTest {
+    @Test fun `adapter focus uses observed native window not mismatched logical index`() {
+        val index = AppleLyricsTimedAdapterWindowIndex()
+        index.remember("iris", 4, adapterPosition = 5, beginMs = 1_000L, endMs = 2_100L)
+        index.remember("iris", 4, adapterPosition = 6, beginMs = 2_000L, endMs = 2_900L)
+        assertEquals(5, index.focus("iris", setOf(5, 6), 1_950L))
+        assertEquals(6, index.focus("iris", setOf(5, 6), 2_200L))
+        assertNull(index.focus("iris", setOf(5, 6), 900L))
+        assertNull(index.focus("another-song", setOf(5, 6), 2_200L))
+        index.remember("iris", 5, adapterPosition = 6, beginMs = 5_000L, endMs = 6_000L)
+        assertNull(index.focus("iris", setOf(5, 6), 2_200L))
+        assertEquals(6, index.focus("iris", setOf(5, 6), 5_200L))
+    }
+
+    @Test fun `current playback row wins over lingering prior native active row`() {
+        assertEquals(6, AppleLyricsBlurTransitionPolicy.clockAwareFocus(
+            nativeActive = setOf(5, 6), playbackAdapterPosition = 6,
+            previousFocus = 5,
+        ))
+        assertEquals(5, AppleLyricsBlurTransitionPolicy.clockAwareFocus(
+            nativeActive = setOf(5, 6), playbackAdapterPosition = 5,
+            previousFocus = 6,
+        ))
+        assertEquals(5, AppleLyricsBlurTransitionPolicy.clockAwareFocus(
+            nativeActive = setOf(5, 6), playbackAdapterPosition = null,
+            previousFocus = 5,
+        ))
+        assertEquals(6, AppleLyricsBlurTransitionPolicy.clockAwareFocus(
+            nativeActive = setOf(6), playbackAdapterPosition = 7,
+            previousFocus = 5,
+        ))
+        assertNull(AppleLyricsBlurTransitionPolicy.clockAwareFocus(
+            nativeActive = emptySet(), playbackAdapterPosition = 5,
+            previousFocus = 5,
+        ))
+    }
+
+
+    @Test fun `native blur never clamps bright glyph pixels onto row edges`() {
+        assertTrue(source("AppleLyricsBlurEngine.kt").contains("Shader.TileMode.DECAL"))
+    }
+
+    @Test fun `do not clear host render effects on rows we never blurred`() {
+        assertFalse(AppleLyricsBlurOwnershipPolicy.shouldClearNativeEffect(
+            knownBlurred = false, hasAppliedMode = false, trackedBlurred = false,
+        ))
+        // Only a module-applied effect may be removed; state alone is not ownership.
+        assertTrue(AppleLyricsBlurOwnershipPolicy.shouldClearNativeEffect(
+            knownBlurred = true, hasAppliedMode = false, trackedBlurred = false,
+        ))
+        assertTrue(AppleLyricsBlurOwnershipPolicy.shouldClearNativeEffect(
+            knownBlurred = false, hasAppliedMode = true, trackedBlurred = false,
+        ))
+        assertTrue(AppleLyricsBlurOwnershipPolicy.shouldClearNativeEffect(
+            knownBlurred = false, hasAppliedMode = false, trackedBlurred = true,
+        ))
+    }
+
+    @Test fun `zero radius on a fresh focus row never overrides an existing host effect`() {
+        assertTrue(AppleLyricsBlurOwnershipPolicy.shouldSkipZeroRadiusRequest(
+            radiusPx = 0, previouslyBlurred = false, hasAppliedMode = false,
+        ))
+        assertFalse(AppleLyricsBlurOwnershipPolicy.shouldSkipZeroRadiusRequest(
+            radiusPx = 0, previouslyBlurred = true, hasAppliedMode = true,
+        ))
+        assertFalse(AppleLyricsBlurOwnershipPolicy.shouldSkipZeroRadiusRequest(
+            radiusPx = 8, previouslyBlurred = false, hasAppliedMode = false,
+        ))
+    }
+
+    @Test fun `dual active native transition has one stable sharp lyric row`() {
+        assertEquals(5, AppleLyricsBlurTransitionPolicy.singleActiveFocus(
+            nativeActive = setOf(5, 6), previousFocus = 5,
+        ))
+        assertEquals(6, AppleLyricsBlurTransitionPolicy.singleActiveFocus(
+            nativeActive = setOf(6), previousFocus = 5,
+        ))
+        assertEquals(5, AppleLyricsBlurTransitionPolicy.singleActiveFocus(
+            nativeActive = setOf(5, 6), previousFocus = null,
+        ))
+        assertNull(AppleLyricsBlurTransitionPolicy.singleActiveFocus(
+            nativeActive = emptySet(), previousFocus = 5,
+        ))
+    }
 
     private fun mainSourceDir(): File =
         listOf(
@@ -34,6 +117,22 @@ class AppleLyricsBlurStateTest {
         // Held strongly so the weak-key method cache cannot drop the key mid-test.
         private val CACHED_CLASS = AppleLyricsBlurStateTest::class.java
         private val OTHER_CLASS = String::class.java
+    }
+
+    @Test
+    fun `stable blur does not reallocate GPU render effects on every lyric frame`() {
+        assertTrue(AppleLyricsBlurApplicationPolicy.canReuseExistingEffect(
+            alreadyBlurred = true, currentMode = 1, requestedMode = 1,
+            currentRadius = 8f, targetRadius = 8f, animatorRunning = false))
+        assertFalse(AppleLyricsBlurApplicationPolicy.canReuseExistingEffect(
+            alreadyBlurred = false, currentMode = 1, requestedMode = 1,
+            currentRadius = 8f, targetRadius = 8f, animatorRunning = false))
+        assertFalse(AppleLyricsBlurApplicationPolicy.canReuseExistingEffect(
+            alreadyBlurred = true, currentMode = 1, requestedMode = 1,
+            currentRadius = 8f, targetRadius = 11f, animatorRunning = false))
+        assertFalse(AppleLyricsBlurApplicationPolicy.canReuseExistingEffect(
+            alreadyBlurred = true, currentMode = 1, requestedMode = 1,
+            currentRadius = 8f, targetRadius = 8f, animatorRunning = true))
     }
 
     @Test

@@ -30,6 +30,7 @@ import com.juren233.hyperlyricsenhanced.ui.page.hooksettings.LyricProviderPage
 import com.juren233.hyperlyricsenhanced.ui.page.hooksettings.OfficialProviderDownloadPage
 import com.juren233.hyperlyricsenhanced.ui.page.hooksettings.LyricAnimationPage
 import com.juren233.hyperlyricsenhanced.ui.page.hooksettings.LyricSettingsPage
+import com.juren233.hyperlyricsenhanced.ui.page.hooksettings.AiTranslationCachePage
 import com.juren233.hyperlyricsenhanced.ui.page.hooksettings.OnlineTranslationSourcesPage
 import com.juren233.hyperlyricsenhanced.ui.page.hooksettings.AppleMusicOptimizationPage
 import com.juren233.hyperlyricsenhanced.ui.page.hooksettings.HyperIslandSettingsPage
@@ -126,6 +127,7 @@ fun AppNavigation(startRoute: Route) {
             appEntry<Route.LyricProviderDownloads>(swipeDismiss = swipeDismiss) { OfficialProviderDownloadPage() }
             appEntry<Route.LyricAnimation>(swipeDismiss = swipeDismiss) { LyricAnimationPage() }
             appEntry<Route.LyricSettings>(swipeDismiss = swipeDismiss) { LyricSettingsPage() }
+            appEntry<Route.AiTranslationCache>(swipeDismiss = swipeDismiss) { AiTranslationCachePage() }
             appEntry<Route.OnlineTranslationSources>(swipeDismiss = swipeDismiss) { OnlineTranslationSourcesPage() }
             appEntry<Route.LyricDisplay>(swipeDismiss = swipeDismiss) { LyricDisplayPage() }
             appEntry<Route.LyricScroll>(swipeDismiss = swipeDismiss) { LyricScrollPage() }

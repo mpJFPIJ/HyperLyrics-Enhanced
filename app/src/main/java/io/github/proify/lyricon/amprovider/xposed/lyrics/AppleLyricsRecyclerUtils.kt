@@ -116,7 +116,11 @@ internal fun AppleLyricsBlurHooks.appleLyricsRecyclerScrollState(recyclerView: A
         (AppleReflection.call(recyclerView, "getScrollState") as? Number)?.toInt()
     }.getOrNull() ?: AppleLyricsBlurHooks.APPLE_LYRICS_SCROLL_STATE_IDLE
 
-internal fun AppleLyricsBlurHooks.appleLyricsActiveAdapterPositions(adapter: Any): Set<Int> =
+/** A failed native reflection is unknown, not an observed empty active set.
+ * Translation can then safely fall back to its verified source time windows. */
+internal fun AppleLyricsBlurHooks.appleLyricsNativeActiveAdapterPositionsOrNull(
+    adapter: Any,
+): Set<Int>? =
     ((runCatching {
         AppleReflection.call(
             adapter,
@@ -128,7 +132,9 @@ internal fun AppleLyricsBlurHooks.appleLyricsActiveAdapterPositions(adapter: Any
     }.getOrNull() as? Iterable<*>)
         ?.mapNotNull { (it as? Number)?.toInt()?.takeIf { position -> position >= 0 } }
         ?.toSet())
-        .orEmpty()
+
+internal fun AppleLyricsBlurHooks.appleLyricsActiveAdapterPositions(adapter: Any): Set<Int> =
+    appleLyricsNativeActiveAdapterPositionsOrNull(adapter).orEmpty()
 
 internal fun AppleLyricsBlurHooks.appleLyricsLineBeginMs(
     adapter: Any,
@@ -276,6 +282,24 @@ internal fun AppleLyricsBlurHooks.appleLyricsVisiblePositionedChildren(
                 ?.let { position -> add(position to child) }
         }
     }
+}
+
+/** Restores must compare against an actual positioned row, not child[0]. */
+internal fun AppleLyricsBlurHooks.appleLyricsRestorePositionedObservation(
+    recyclerView: View,
+    targetPosition: Int,
+): AppleLyricsRestoreObservedChild {
+    val container = recyclerView as? ViewGroup
+        ?: return AppleLyricsRestoreObservedChild(null, null)
+    val observed = buildList {
+        repeat(container.childCount) { index ->
+            val child = container.getChildAt(index) ?: return@repeat
+            val adapterPosition = appleLyricsChildAdapterPosition(recyclerView, child)
+                .takeIf { it >= 0 }
+            add(AppleLyricsRestoreObservedChild(adapterPosition, child.top))
+        }
+    }
+    return AppleLyricsRestoreObservationPolicy.select(targetPosition, observed)
 }
 
 internal fun AppleLyricsBlurHooks.appleLyricsInstrumentalAdapterPositions(

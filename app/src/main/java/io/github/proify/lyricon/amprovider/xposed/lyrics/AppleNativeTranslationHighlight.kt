@@ -10,6 +10,7 @@ import android.graphics.Rect
 import android.view.View
 import android.view.ViewGroup
 import android.widget.TextView
+import androidx.recyclerview.widget.RecyclerView
 import java.util.WeakHashMap
 
 internal enum class AppleTranslationTone { ACTIVE, MUTED }
@@ -19,6 +20,52 @@ internal data class AppleTranslationPaintOwners(
     val foregroundVisible: Boolean,
     val tone: AppleTranslationTone,
 )
+
+internal enum class AppleTranslationBindResult { REUSE, REPLACE, STOP }
+
+/** A holder's bind entry invalidates cached source data, not its live painter. */
+internal class AppleTranslationBindingLifecycle {
+    private var generation = 0L
+    private var installed: AppleTranslationLineContext? = null
+    private var pending: AppleTranslationLineContext? = null
+
+    fun painterInstalled(context: AppleTranslationLineContext) {
+        installed = context
+        pending = context
+    }
+
+    fun painterStopped() {
+        installed = null
+        pending = null
+    }
+
+    fun beginHolderBind(): Long {
+        generation++
+        pending = installed
+        return generation
+    }
+
+    fun hasPendingPainter(): Boolean = pending != null
+
+    fun completeHolderBind(
+        bindingGeneration: Long,
+        context: AppleTranslationLineContext?,
+        sameViews: Boolean,
+        controlledTextsIntact: Boolean,
+    ): AppleTranslationBindResult {
+        if (bindingGeneration != generation) return AppleTranslationBindResult.STOP
+        val retained = pending
+        val result = when {
+            context == null -> AppleTranslationBindResult.STOP
+            retained != null && AppleNativeTranslationHighlightPolicy.canReusePulse(
+                retained, context, sameViews, controlledTextsIntact,
+            ) -> AppleTranslationBindResult.REUSE
+            else -> AppleTranslationBindResult.REPLACE
+        }
+        if (result != AppleTranslationBindResult.REUSE) painterStopped()
+        return result
+    }
+}
 
 /** Keep all wrapped Korean translation text on the SAME Apple source-line clock. */
 internal object AppleNativeTranslationHighlightPolicy {
@@ -38,6 +85,20 @@ internal object AppleNativeTranslationHighlightPolicy {
         sameViews: Boolean,
         controlledTextsIntact: Boolean,
     ): Boolean = existingContext == requestedContext && sameViews && controlledTextsIntact
+
+    fun eligibleKoreanMeaning(translationVisible: Boolean, koreanTargetSelected: Boolean): Boolean =
+        translationVisible && koreanTargetSelected
+
+    /** The latest started native source window is the ONE highlighted meaning. */
+    fun activeRowIndex(
+        rows: List<AppleTranslationLineContext>,
+        positionMs: Long?,
+    ): Int? {
+        if (positionMs == null) return null
+        return rows.indices
+            .filter { lineActive(positionMs, rows[it].beginMs, rows[it].endMs) }
+            .maxWithOrNull(compareBy<Int> { rows[it].beginMs }.thenByDescending { it })
+    }
 
     /** Never restore the old lyric into a TextView already rebound to another row. */
     fun isStillBound(controlledText: CharSequence, currentText: CharSequence): Boolean =
@@ -82,6 +143,7 @@ internal class AppleNativeTranslationHighlight {
     private val byHolder = AppleTranslationLineContextStore()
     private val pulses = WeakHashMap<View, Pulse>()
     private val bindingGenerations = WeakHashMap<View, Long>()
+    private val bindingLifecycle = WeakHashMap<View, AppleTranslationBindingLifecycle>()
     private val bySource = LinkedHashMap<String, AppleTranslationLineContext>()
     private val ambiguousSources = HashSet<String>()
     private var indexedSongId: String? = null
@@ -133,10 +195,13 @@ internal class AppleNativeTranslationHighlight {
         rememberSource(ctx)
     }
 
-    fun clearHolder(holder: Any?, root: View?) {
+    fun beginHolderBinding(holder: Any?, root: View?) {
         byHolder.clear(holder)
         root?.let { view ->
-            pulses.remove(view)?.stop()
+            // The native row may be rebound without changing any of its
+            // content. Keep the overlay until completed bind can verify it.
+            bindingLifecycle.getOrPut(view) { AppleTranslationBindingLifecycle() }
+                .beginHolderBind()
             bindingGenerations[view] = (bindingGenerations[view] ?: 0L) + 1L
         }
     }
@@ -158,7 +223,10 @@ internal class AppleNativeTranslationHighlight {
         // onBind callbacks. Restoring its old text and alpha on every bind
         // caused a one-frame white flash at the translation boundary.
         fun stopOldPulse() {
-            if (retry == 0) pulses.remove(root)?.stop()
+            if (retry == 0) {
+                pulses.remove(root)?.stop()
+                bindingLifecycle[root]?.painterStopped()
+            }
         }
         val generation = bindingGenerations[root] ?: 0L
         fun retryAfterLayout(ctx: AppleTranslationLineContext? = null) {
@@ -193,7 +261,12 @@ internal class AppleNativeTranslationHighlight {
         } else null
         val ctx = holderCtx ?: fallback
         if (ctx == null) {
-            stopOldPulse()
+            // Apple may invoke a redundant bind before its translation getter.
+            // Keep the existing painter only while the same host text is intact.
+            val pending = pulses[root]
+            val keepPending = enabled &&
+                pending?.isSafeFor(currentSongId, revision) == true
+            if (!keepPending) stopOldPulse()
             AppleLyricUiRuntimeProbe.record(
                 "translation_context_missing",
                 "holderPresent=${if (holder != null) 1 else 0} " +
@@ -201,7 +274,7 @@ internal class AppleNativeTranslationHighlight {
                 root,
             )
             retryAfterLayout()
-            return false
+            return keepPending
         }
         if (!enabled || ctx.songId != currentSongId || ctx.revision != revision) {
             stopOldPulse()
@@ -260,11 +333,19 @@ internal class AppleNativeTranslationHighlight {
             return false
         }
         val existing = pulses[root]
-        if (existing?.matches(ctx, translationView) == true) {
-            existing.updatePlaybackPosition(playbackPositionMs)
+        val lifecycle = bindingLifecycle.getOrPut(root) { AppleTranslationBindingLifecycle() }
+        val canReuse = existing?.matches(ctx, translationView) == true
+        val lifecycleResult = lifecycle.completeHolderBind(
+            bindingGenerations[root] ?: 0L, ctx,
+            sameViews = canReuse,
+            controlledTextsIntact = canReuse,
+        )
+        if (canReuse && lifecycleResult == AppleTranslationBindResult.REUSE) {
+            existing?.updatePlaybackPosition(playbackPositionMs)
             return true
         }
         pulses.remove(root)?.stop()
+        lifecycle.painterStopped()
         AppleLyricUiRuntimeProbe.record(
             "translation_cells_bound",
             "matchedCells=${translationView.size} " +
@@ -275,16 +356,42 @@ internal class AppleNativeTranslationHighlight {
             root, ctx, translationView, playbackPositionMs,
             onDetach = { old, detached ->
                 if (pulses[detached] === old) pulses.remove(detached)
+                bindingLifecycle[detached]?.painterStopped()
             },
         )
         pulses[root] = pulse
+        lifecycle.painterInstalled(ctx)
         pulse.start()
         return true
     }
 
-    private class Pulse(
-        private val root: View,
-        private val ctx: AppleTranslationLineContext,
+    private fun groupOwner(root: View): View {
+        var ancestor: View? = root
+        while (ancestor != null) {
+            if (ancestor is RecyclerView) return ancestor
+            ancestor = ancestor.parent as? View
+        }
+        return root.rootView
+    }
+
+    /** One native clock decision, repaint all currently bound rows in one UI pass. */
+    private fun refreshGroup(trigger: Pulse) {
+        val owner = groupOwner(trigger.root)
+        val rows = pulses.values.toList().filter { pulse ->
+            pulse.isRunning && pulse.root.isAttachedToWindow &&
+                pulse.ctx.songId == trigger.ctx.songId &&
+                pulse.ctx.revision == trigger.ctx.revision &&
+                groupOwner(pulse.root) === owner && pulse.textsIntact()
+        }
+        val selected = AppleNativeTranslationHighlightPolicy.activeRowIndex(
+            rows.map { it.ctx }, trigger.currentPlaybackPosition(),
+        )
+        rows.forEachIndexed { index, pulse -> pulse.render(index == selected) }
+    }
+
+    private inner class Pulse(
+        val root: View,
+        val ctx: AppleTranslationLineContext,
         views: List<TextView>,
         private var playbackPositionMs: () -> Long?,
         private val onDetach: (Pulse, View) -> Unit,
@@ -324,6 +431,7 @@ internal class AppleNativeTranslationHighlight {
             view.setText(copy, TextView.BufferType.SPANNABLE)
         }
         private var running = false
+        val isRunning: Boolean get() = running
         private var lastActive: Boolean? = null
         private var lastForegroundReady: Boolean? = null
         private val bounds = Rect()
@@ -345,6 +453,17 @@ internal class AppleNativeTranslationHighlight {
         fun updatePlaybackPosition(next: () -> Long?) {
             playbackPositionMs = next
         }
+
+        fun currentPlaybackPosition(): Long? = playbackPositionMs()
+
+        fun textsIntact(): Boolean = originals.all { saved ->
+            AppleNativeTranslationHighlightPolicy.isStillBound(
+                saved.controlledText, saved.view.text,
+            )
+        }
+
+        fun isSafeFor(songId: String?, revision: Long): Boolean =
+            running && ctx.songId == songId && ctx.revision == revision && textsIntact()
 
         private fun attachForeground(color: Int): Boolean {
             // If any wrapped cell has no measurable layout yet, keep Apple's
@@ -372,7 +491,9 @@ internal class AppleNativeTranslationHighlight {
                 aboveNativeGradient = drawable
             }
             aboveNativeGradient?.let { drawable ->
-                drawable.setBounds(0, 0, root.width, root.height)
+                if (drawable.bounds.width() != root.width ||
+                    drawable.bounds.height() != root.height
+                ) drawable.setBounds(0, 0, root.width, root.height)
                 drawable.setForegroundColor(color)
             }
             return aboveNativeGradient != null
@@ -432,23 +553,26 @@ internal class AppleNativeTranslationHighlight {
         override fun run() {
             if (!running) return
             if (!root.isAttachedToWindow) return
-            if (originals.any { saved ->
-                    !AppleNativeTranslationHighlightPolicy.isStillBound(
-                        saved.controlledText, saved.view.text,
-                    )
-                }
-            ) {
+            if (!textsIntact()) {
                 // Apple's RecyclerView reused these TextViews for a new lyric.
                 // An old pulse must never recolor or restore that new content.
                 stop()
                 onDetach(this, root)
                 return
             }
+            refreshGroup(this)
+            val visible = root.isShown && root.getGlobalVisibleRect(bounds)
+            root.postDelayed(this, when {
+                !visible -> 750L
+                lastActive == true -> 100L
+                else -> 360L
+            })
+        }
+
+        fun render(active: Boolean) {
+            if (!running || !textsIntact()) return
             val visible = root.isShown && root.getGlobalVisibleRect(bounds)
             if (visible) {
-                val active = AppleNativeTranslationHighlightPolicy.lineActive(
-                    playbackPositionMs(), ctx.beginMs, ctx.endMs,
-                )
                 // Both states keep the same drawable, changing its color
                 // only. Switching between native and overlay at the line
                 // boundary previously caused a visible one-frame flash.
@@ -486,14 +610,6 @@ internal class AppleNativeTranslationHighlight {
                 lastActive = active
                 lastForegroundReady = foregroundReady
             }
-            // ~35 main-thread pulse callbacks per second were observed in
-            // NPatch logs. Native source word animation stays untouched;
-            // translation itself only changes between active and inactive.
-            root.postDelayed(this, when {
-                !visible -> 750L
-                lastActive == true -> 100L
-                else -> 360L
-            })
         }
     }
 }

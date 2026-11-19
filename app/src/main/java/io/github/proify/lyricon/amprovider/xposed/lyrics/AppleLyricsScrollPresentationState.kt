@@ -203,3 +203,30 @@ internal class AppleLyricsRestoreAttemptGate {
         return true
     }
 }
+
+internal data class AppleLyricsRestoreObservedChild(val position: Int?, val offset: Int?)
+
+/** Ignore disappearing RecyclerView children with NO valid adapter position. */
+internal object AppleLyricsRestoreObservationPolicy {
+    fun select(
+        targetPosition: Int,
+        children: List<AppleLyricsRestoreObservedChild>,
+    ): AppleLyricsRestoreObservedChild =
+        children.firstOrNull { it.position == targetPosition } ?:
+            children.firstOrNull { it.position != null && it.position >= 0 } ?:
+            AppleLyricsRestoreObservedChild(null, null)
+}
+
+/** Only physically intersecting lyrics count as on-screen for native follow diagnostics. */
+internal object AppleLyricsVisibleViewportPolicy {
+    fun intersects(
+        childLeft: Int,
+        childTop: Int,
+        childRight: Int,
+        childBottom: Int,
+        viewportWidth: Int,
+        viewportHeight: Int,
+    ): Boolean = viewportWidth > 0 && viewportHeight > 0 &&
+        childRight > 0 && childLeft < viewportWidth &&
+        childBottom > 0 && childTop < viewportHeight
+}

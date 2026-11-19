@@ -290,7 +290,7 @@ internal class AppleLyricsSupplementHooks(
             appleRecyclerViewPredicate = { isAppleRecyclerViewInstance(it) },
             holderBindingStart = { context, root ->
                 pronunciationState.beginHolderBinding(context.holder)
-                translationLineHighlight.clearHolder(context.holder, root)
+                translationLineHighlight.beginHolderBinding(context.holder, root)
                 root?.let { view ->
                     lineWideBindingGeneration[view] =
                         (lineWideBindingGeneration[view] ?: 0L) + 1L

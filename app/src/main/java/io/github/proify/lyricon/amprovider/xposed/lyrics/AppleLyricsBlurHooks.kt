@@ -417,6 +417,16 @@ internal class AppleLyricsBlurHooks(
                     val latestActive = appleLyricsActiveAdapterPositions(latestAdapter)
                     if (latestActive != expectedActive) return@postDelayed
                     val visible = appleLyricsVisiblePositionedChildren(recyclerView)
+                        .filter { (_, child) ->
+                            AppleLyricsVisibleViewportPolicy.intersects(
+                                childLeft = child.left,
+                                childTop = child.top,
+                                childRight = child.right,
+                                childBottom = child.bottom,
+                                viewportWidth = recyclerView.width,
+                                viewportHeight = recyclerView.height,
+                            )
+                        }
                         .map { it.first }
                         .toSet()
                     val scrollState = appleLyricsRecyclerScrollState(recyclerView)
@@ -433,6 +443,13 @@ internal class AppleLyricsBlurHooks(
                 }, 750L)
             }
         }
+    }
+
+    /** Register the lyric list even with the blur effect disabled. */
+    private fun rememberAppleLyricsRecyclerAdapter(recyclerView: Any?) {
+        val view = recyclerView as? View ?: return
+        val adapter = appleRecyclerAdapter(view) ?: return
+        blurState.rememberRecycler(adapter, view)
     }
 
     private fun updateAppleLyricsActivePositions(
@@ -804,6 +821,7 @@ internal class AppleLyricsBlurHooks(
                             ?.let { recyclerView ->
                                 if (name == "setAdapter") {
                                     resetAppleLyricsBlurRuntimeState(recyclerView)
+                                    rememberAppleLyricsRecyclerAdapter(recyclerView)
                                 } else {
                                     if (name == "onChildAttachedToWindow") {
                                         // 只有复用且带过模糊状态的视图才可能有残留效果或未结束的动画；
@@ -817,6 +835,7 @@ internal class AppleLyricsBlurHooks(
                                         }
                                     }
                                     if (name == "onLayout") {
+                                        rememberAppleLyricsRecyclerAdapter(recyclerView)
                                         completeAppleLyricsProgrammaticRecenter(recyclerView)
                                     }
                                     scheduleAppleLyricsBlur(recyclerView)

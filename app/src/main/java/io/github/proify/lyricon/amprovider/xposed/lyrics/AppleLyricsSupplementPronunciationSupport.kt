@@ -333,7 +333,10 @@ internal fun AppleLyricsSupplementHooks.bindLineWidePronunciation(
             root = root,
             currentSongId = songId,
             revision = revision,
-            enabled = requestedAppleLyricsRowVisibility().translation,
+            enabled = AppleNativeTranslationHighlightPolicy.eligibleKoreanMeaning(
+                translationVisible = requestedAppleLyricsRowVisibility().translation,
+                koreanTargetSelected = koreanTranslationTargetSelected(),
+            ),
             playbackPositionMs = { appleLyricsCurrentPlaybackPositionMs() },
             observedSourceCells = observedCells,
             isCurrent = {

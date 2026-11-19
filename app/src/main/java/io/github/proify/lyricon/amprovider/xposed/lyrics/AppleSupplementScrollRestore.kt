@@ -333,13 +333,14 @@ internal fun AppleLyricsSupplementHooks.restoreAppleLyricsScrollSnapshot(fragmen
     // Seed the host LayoutManager's pending target immediately so that first layout is
     // built at the preserved lyric position instead of drawing a transient top frame.
     resolveRestoreTarget()?.let { target ->
-        val firstChild = recycler.getChildAt(0)
+        val observed = blurHooks.appleLyricsRestorePositionedObservation(
+            recycler, target.anchor.position,
+        )
         val resolvedMethod = if (attemptGate.shouldDispatch(
                 target.anchor.position,
                 target.anchor.offset,
-                firstChild?.let { blurHooks.appleLyricsChildAdapterPosition(recycler, it) }
-                    ?.takeIf { it >= 0 },
-                firstChild?.top,
+                observed.position,
+                observed.offset,
             )
         ) blurHooks.appleLyricsScrollToPositionWithOffset(
             layoutManager = target.layoutManager,
@@ -378,11 +379,11 @@ internal fun AppleLyricsSupplementHooks.restoreAppleLyricsScrollSnapshot(fragmen
         val itemCount = restoreTarget.itemCount
         val targetPosition = restoreTarget.anchor.position
         val targetOffset = restoreTarget.anchor.offset
-        val firstChild = recycler.getChildAt(0)
-        val currentPosition = firstChild?.let {
-            blurHooks.appleLyricsChildAdapterPosition(recycler, it)
-        }?.takeIf { it >= 0 }
-        val currentOffset = firstChild?.top
+        val observed = blurHooks.appleLyricsRestorePositionedObservation(
+            recycler, targetPosition,
+        )
+        val currentPosition = observed.position
+        val currentOffset = observed.offset
         if (BuildConfig.DEBUG) {
             ProviderLogger.diagnostic(
                 "Apple Music 歌词滚动恢复尝试: id=$songId, attempt=$attempts, " +

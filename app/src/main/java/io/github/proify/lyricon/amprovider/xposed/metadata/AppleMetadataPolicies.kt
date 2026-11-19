@@ -597,6 +597,15 @@ internal class AppleLyricsTimedAdapterWindowIndex {
     }
 
     @Synchronized
+    fun matchesKnownWindow(
+        currentSongId: String?, adapterPosition: Int, playbackPositionMs: Long?,
+    ): Boolean? {
+        if (songId != currentSongId || playbackPositionMs == null) return null
+        val window = windows[adapterPosition] ?: return null
+        return playbackPositionMs >= window.beginMs && playbackPositionMs < window.endMs
+    }
+
+    @Synchronized
     fun focus(
         currentSongId: String?,
         nativeActive: Set<Int>,

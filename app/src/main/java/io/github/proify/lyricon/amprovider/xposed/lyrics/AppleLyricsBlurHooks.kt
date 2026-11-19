@@ -126,7 +126,11 @@ internal class AppleLyricsBlurHooks(
     internal fun currentNativeFocusedAdapterPosition(adapter: Any): Int? {
         val active = appleLyricsActiveAdapterPositions(adapter)
         return when (active.size) {
-            1 -> active.first()
+            1 -> active.first().takeUnless { row ->
+                verifiedNativeWindows.matchesKnownWindow(
+                    currentSongId(), row, appleLyricsCurrentPlaybackPositionMs(),
+                ) == false
+            }
             0 -> null
             else -> verifiedNativeWindows.focus(
                 currentSongId(), active, appleLyricsCurrentPlaybackPositionMs(),

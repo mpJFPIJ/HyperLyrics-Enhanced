@@ -91,6 +91,8 @@ internal class AppleNativeHangulWordForeground(
                     )
                     val paint = layout.paint
                     val originalAlpha = paint.alpha
+                    val originalColor = paint.color
+                    val originalShader = paint.shader
                     try {
                         // Touch alpha only. The host's native CharacterStyles
                         // still choose foreground colors and per-word progress.
@@ -98,6 +100,8 @@ internal class AppleNativeHangulWordForeground(
                         layout.draw(canvas)
                     } finally {
                         paint.alpha = originalAlpha
+                        paint.color = originalColor
+                        paint.shader = originalShader
                     }
                 } finally {
                     canvas.restoreToCount(save)

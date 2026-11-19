@@ -116,7 +116,11 @@ internal fun AppleLyricsBlurHooks.appleLyricsRecyclerScrollState(recyclerView: A
         (AppleReflection.call(recyclerView, "getScrollState") as? Number)?.toInt()
     }.getOrNull() ?: AppleLyricsBlurHooks.APPLE_LYRICS_SCROLL_STATE_IDLE
 
-internal fun AppleLyricsBlurHooks.appleLyricsActiveAdapterPositions(adapter: Any): Set<Int> =
+/** A failed native reflection is unknown, not an observed empty active set.
+ * Translation can then safely fall back to its verified source time windows. */
+internal fun AppleLyricsBlurHooks.appleLyricsNativeActiveAdapterPositionsOrNull(
+    adapter: Any,
+): Set<Int>? =
     ((runCatching {
         AppleReflection.call(
             adapter,
@@ -128,7 +132,9 @@ internal fun AppleLyricsBlurHooks.appleLyricsActiveAdapterPositions(adapter: Any
     }.getOrNull() as? Iterable<*>)
         ?.mapNotNull { (it as? Number)?.toInt()?.takeIf { position -> position >= 0 } }
         ?.toSet())
-        .orEmpty()
+
+internal fun AppleLyricsBlurHooks.appleLyricsActiveAdapterPositions(adapter: Any): Set<Int> =
+    appleLyricsNativeActiveAdapterPositionsOrNull(adapter).orEmpty()
 
 internal fun AppleLyricsBlurHooks.appleLyricsLineBeginMs(
     adapter: Any,

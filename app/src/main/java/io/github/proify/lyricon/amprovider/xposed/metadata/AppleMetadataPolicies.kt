@@ -556,6 +556,16 @@ internal fun appleLyricsBlurFocusPositions(
 internal object AppleLyricsBlurTransitionPolicy {
     fun singleActiveFocus(nativeActive: Set<Int>, previousFocus: Int?): Int? =
         previousFocus?.takeIf(nativeActive::contains) ?: nativeActive.minOrNull()
+
+    /** A valid native song clock wins over a lingering outgoing active row.
+     * If the adapter clock cannot be resolved, retain the host's previous
+     * focus until it leaves the active set. */
+    fun clockAwareFocus(
+        nativeActive: Set<Int>,
+        playbackAdapterPosition: Int?,
+        previousFocus: Int?,
+    ): Int? = playbackAdapterPosition?.takeIf(nativeActive::contains)
+        ?: singleActiveFocus(nativeActive, previousFocus)
 }
 
 internal object AppleLyricsBlurOwnershipPolicy {

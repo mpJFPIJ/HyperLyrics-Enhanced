@@ -617,10 +617,23 @@ internal class AppleLyricsBlurHooks(
         }
         val activePositions = appleLyricsActiveAdapterPositions(adapter)
         updateAppleLyricsActivePositions(state, activePositions)
-        val singleActiveFocus = AppleLyricsBlurTransitionPolicy.singleActiveFocus(
+        val currentPositionMs = appleLyricsCurrentPlaybackPositionMs()
+        val playbackActivePosition = if (activePositions.size > 1)
+            currentPositionMs?.let { appleLyricsAdapterPositionForPlayback(adapter, it) }
+        else null
+        val singleActiveFocus = AppleLyricsBlurTransitionPolicy.clockAwareFocus(
             nativeActive = activePositions,
+            playbackAdapterPosition = playbackActivePosition,
             previousFocus = state.lastFocusedActivePosition,
         )
+        if (singleActiveFocus != state.lastFocusedActivePosition && activePositions.size > 1) {
+            AppleLyricUiRuntimeProbe.record(
+                "native_focus_selected",
+                "active=${activePositions.sorted()} selected=${singleActiveFocus ?: -1} " +
+                    "clockAdapterPos=${playbackActivePosition ?: -1} " +
+                    "playbackMs=${currentPositionMs ?: -1}",
+            )
+        }
         state.lastFocusedActivePosition = singleActiveFocus
         val instrumentalPositions = appleLyricsInstrumentalAdapterPositions(
             adapter = adapter,
@@ -636,7 +649,6 @@ internal class AppleLyricsBlurHooks(
             writersCreditsPositions = writersCreditsPositions,
         )
         val firstLineBeginMs = appleLyricsFirstLineBeginMs(adapter)
-        val currentPositionMs = appleLyricsCurrentPlaybackPositionMs()
         val shouldBlurBeforeFirstLine = focusPositions.isEmpty() &&
             AppleLyricsBlurPolicy.shouldBlurBeforeFirstLine(
                 currentPositionMs = currentPositionMs,

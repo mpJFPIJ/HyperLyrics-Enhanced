@@ -339,6 +339,7 @@ internal fun AppleLyricsSupplementHooks.bindLineWidePronunciation(
             ),
             playbackPositionMs = { appleLyricsCurrentPlaybackPositionMs() },
             observedSourceCells = observedCells,
+            holderAdapterPosition = context.position,
             isCurrent = {
                 currentAppleLyricsSongId == songId &&
                     nativeOnlineTranslationStore.revision() == revision

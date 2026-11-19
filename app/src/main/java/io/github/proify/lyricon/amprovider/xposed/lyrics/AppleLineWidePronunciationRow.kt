@@ -148,6 +148,9 @@ internal class AppleLineWidePronunciationRow {
         var playbackPositionMs: (() -> Long?)? = null
         var sourceWords: List<TextView> = emptyList()
         var boundPayload: AppleLineWidePronunciationPayload? = null
+        private var paintRoot: ViewGroup? = null
+        private var outerForeground: AppleHangulReadingForeground? = null
+        private val updatePaintLayer = Runnable { syncPaintLayer() }
         private var timedStyles: List<Pair<Int, KaraokeSyllableStyle>> = emptyList()
         private var timedVariants: List<List<AppleTimedReadingUnit>> = emptyList()
         private var timedVariantLookups: List<Map<Int, AppleTimedReadingUnit>> = emptyList()
@@ -156,6 +159,7 @@ internal class AppleLineWidePronunciationRow {
         private val highlightPulse = object : Runnable {
             override fun run() {
                 if (!isAttachedToWindow) return
+                syncPaintLayer()
                 val onScreen = isShown && getGlobalVisibleRect(visibleBounds)
                 if (onScreen) syncTimedHighlight()
                 // Apple's karaoke line may animate from its own RenderNode.
@@ -198,14 +202,74 @@ internal class AppleLineWidePronunciationRow {
             syncTimedHighlight()
         }
 
+        fun bindPaintRoot(root: View?) {
+            val next = root as? ViewGroup
+            if (paintRoot !== next) {
+                detachOuterForeground()
+                paintRoot = next
+            }
+            removeCallbacks(updatePaintLayer)
+            post(updatePaintLayer)
+        }
+
+        private fun detachOuterForeground() {
+            outerForeground?.let { foreground ->
+                paintRoot?.overlay?.remove(foreground)
+            }
+            outerForeground = null
+            if (kotlin.math.abs(alpha - 1f) > 0.01f) alpha = 1f
+        }
+
+        private fun syncPaintLayer() {
+            val root = paintRoot ?: return
+            val measured = isAttachedToWindow && root.isAttachedToWindow &&
+                width > 0 && height > 0 && root.width > 0 && root.height > 0
+            if (!measured && outerForeground != null) detachOuterForeground()
+            var newForeground = false
+            if (measured && outerForeground == null) {
+                val foreground = AppleHangulReadingForeground(root, this)
+                foreground.syncBounds()
+                if (runCatching { root.overlay.add(foreground) }.isSuccess) {
+                    outerForeground = foreground
+                    newForeground = true
+                }
+            }
+            outerForeground?.syncBounds()
+            val owners = AppleHangulReadingPaintPolicy.owners(
+                rootAttached = isAttachedToWindow && root.isAttachedToWindow,
+                rootWidth = root.width,
+                rootHeight = root.height,
+                readingWidth = width,
+                readingHeight = height,
+                overlayAttached = outerForeground != null,
+            )
+            val targetAlpha = if (owners.nativeVisible) 1f else 0f
+            if (kotlin.math.abs(alpha - targetAlpha) > 0.01f) alpha = targetAlpha
+            // Only timing-style changes and an initial attach require paint.
+            // Invalidating the same overlay on every idle poll causes jank.
+            if (newForeground) outerForeground?.invalidateSelf()
+        }
+
         override fun onAttachedToWindow() {
             super.onAttachedToWindow()
             removeCallbacks(highlightPulse)
             post(highlightPulse)
+            removeCallbacks(updatePaintLayer)
+            post(updatePaintLayer)
+        }
+
+        override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
+            super.onLayout(changed, left, top, right, bottom)
+            if (changed) {
+                removeCallbacks(updatePaintLayer)
+                post(updatePaintLayer)
+            }
         }
 
         override fun onDetachedFromWindow() {
             removeCallbacks(highlightPulse)
+            removeCallbacks(updatePaintLayer)
+            detachOuterForeground()
             super.onDetachedFromWindow()
         }
 
@@ -232,10 +296,8 @@ internal class AppleLineWidePronunciationRow {
             }
             val defaultNativeBrightness = nativeStates.filterNotNull()
                 .maxOfOrNull { it.first * it.second } ?: 1f
-            // The line-wide reading shares the same native parent fade.
-            // Applying another max word alpha to the *entire* Hangul line
-            // fades parts whose corresponding Japanese word is fully active.
-            if (kotlin.math.abs(alpha - 1f) > 0.01f) alpha = 1f
+            // The native flexbox measures this view but an outer holder
+            // foreground paints its Layout outside the host's alpha mask.
             val position = playbackPositionMs?.invoke()
             val activeVariantIndex = position?.let {
                 AppleTimedPronunciationHighlightPolicy.activeVariant(it, timedVariants)
@@ -265,7 +327,10 @@ internal class AppleLineWidePronunciationRow {
                     changed = true
                 }
             }
-            if (changed) invalidate()
+            if (changed) {
+                invalidate()
+                outerForeground?.invalidateSelf()
+            }
         }
     }
 
@@ -383,6 +448,7 @@ internal class AppleLineWidePronunciationRow {
                 AppleLineWidePronunciationRowPolicy.readingTextPx(sourceStyle.textSize)) < 0.8f
         ) {
             existing.playbackPositionMs = playbackPositionMs
+            existing.bindPaintRoot(root)
             return true
         }
         clear(root)
@@ -390,6 +456,7 @@ internal class AppleLineWidePronunciationRow {
             this.playbackPositionMs = playbackPositionMs
             this.sourceWords = sourceWords
             this.boundPayload = payload
+            bindPaintRoot(root)
             setTextSize(
                 TypedValue.COMPLEX_UNIT_PX,
                 AppleLineWidePronunciationRowPolicy.readingTextPx(sourceStyle.textSize),
@@ -398,7 +465,9 @@ internal class AppleLineWidePronunciationRow {
             setTextColor(Color.rgb(110, 110, 110))
             typeface = sourceStyle?.typeface
             gravity = Gravity.START
-            includeFontPadding = false
+            // Leave ascender/descender space when the native flexbox measures
+            // this hidden layout-only copy and the outer holder repaints it.
+            includeFontPadding = true
             setSingleLine(false)
             maxLines = Int.MAX_VALUE
             ellipsize = null

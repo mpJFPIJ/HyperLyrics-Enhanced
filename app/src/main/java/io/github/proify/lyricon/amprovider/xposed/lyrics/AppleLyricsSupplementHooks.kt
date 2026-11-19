@@ -303,7 +303,11 @@ internal class AppleLyricsSupplementHooks(
         )
     }
     internal val lineWidePronunciationRow = AppleLineWidePronunciationRow()
-    internal val translationLineHighlight = AppleNativeTranslationHighlight()
+    internal val translationLineHighlight = AppleNativeTranslationHighlight { recyclerView ->
+        appleRecyclerAdapter(recyclerView)?.let { adapter ->
+            blurHooks.appleLyricsNativeActiveAdapterPositionsOrNull(adapter)
+        }
+    }
     private val profiledNativeItemChanged by lazy {
         val point = AppleMusicHookPoint.RECYCLER_NOTIFY_ITEM_CHANGED
         if (AppleMusicHookProfiles.exactTargets(hookResolver.version, point).isEmpty()) null

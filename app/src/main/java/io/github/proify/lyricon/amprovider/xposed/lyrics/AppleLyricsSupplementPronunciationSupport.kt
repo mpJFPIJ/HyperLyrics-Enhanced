@@ -340,8 +340,10 @@ internal fun AppleLyricsSupplementHooks.bindLineWidePronunciation(
     // Japanese text. Keep its native position and timing, scale text only.
     val holderPosition = context.position
     lineWidePronunciationRow.fitNativeHangulSize(root) {
-        if (currentAppleLyricsSongId != songId ||
-            nativeOnlineTranslationStore.revision() != revision
+        if (shown || currentAppleLyricsSongId != songId ||
+            nativeOnlineTranslationStore.revision() != revision ||
+            !requestedAppleLyricsRowVisibility().pronunciation ||
+            !showHangulSupplementPronunciation() || shouldHideMandarinPronunciation()
         ) false else {
             val nativeRecycler = generateSequence(root) { view -> view.parent as? View }
                 .firstOrNull(AppleTranslationRecyclerOwnerPolicy::isNativeRecyclerView)

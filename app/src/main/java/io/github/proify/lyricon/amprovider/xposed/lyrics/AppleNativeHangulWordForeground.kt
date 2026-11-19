@@ -159,7 +159,7 @@ internal class AppleNativeHangulWordOverlayManager {
                 }
                 val focused = isFocused()
                 val measured = root.width > 0 && root.height > 0 &&
-                    painter.wordCells.all { word ->
+                    painter.wordCells.any { word ->
                         AppleNativeHangulWordPaintPolicy.eligible(
                             hangul = word.text.any { it in '가'..'힣' },
                             underPronunciation = true, underTranslation = false,

@@ -15,4 +15,8 @@ internal object AppleMusicAiTranslationPolicy {
         forceOverride: Boolean,
     ): Boolean =
         enabled && hasLyrics && (!hasExistingTranslation || !skipExisting || forceOverride)
+
+    /** A complete phonetics-only result is useful even while translation is unavailable. */
+    fun shouldDeliverResult(translatedLines: Int, pronouncedLines: Int): Boolean =
+        translatedLines > 0 || pronouncedLines > 0
 }

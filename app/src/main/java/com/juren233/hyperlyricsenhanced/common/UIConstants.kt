@@ -38,7 +38,8 @@ object UIConstants {
     const val DEFAULT_WORK_MODE = 0
     const val DEFAULT_SETUP_COMPLETED = false
     const val DEFAULT_THEME_MODE = 0
-    const val DEFAULT_APP_LANGUAGE = 0
+    // Applies only when no preference is saved; existing user selections remain unchanged.
+    const val DEFAULT_APP_LANGUAGE = 3
     const val DEFAULT_MONET_COLOR = 0
     const val DEFAULT_PREDICTIVE_BACK_GESTURE = false
     const val DEFAULT_SWIPE_BACK_GESTURE = true

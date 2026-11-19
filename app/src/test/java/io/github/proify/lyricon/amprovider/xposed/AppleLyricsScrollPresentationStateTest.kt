@@ -14,6 +14,67 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AppleLyricsScrollPresentationStateTest {
+    @Test
+    fun `restore observes positioned target instead of first disappearing recycler child`() {
+        val observed = AppleLyricsRestoreObservationPolicy.select(
+            targetPosition = 0,
+            children = listOf(
+                AppleLyricsRestoreObservedChild(null, 1483),
+                AppleLyricsRestoreObservedChild(0, 54),
+                AppleLyricsRestoreObservedChild(1, 115),
+            ),
+        )
+        assertEquals(0, observed.position)
+        assertEquals(54, observed.offset)
+        assertTrue(AppleLyricsVisibleViewportPolicy.intersects(
+            childLeft = 0, childTop = 54, childRight = 300, childBottom = 115,
+            viewportWidth = 300, viewportHeight = 600,
+        ))
+        assertFalse(AppleLyricsVisibleViewportPolicy.intersects(
+            childLeft = 0, childTop = 1483, childRight = 300, childBottom = 1560,
+            viewportWidth = 300, viewportHeight = 600,
+        ))
+    }
+
+    @Test
+    fun `restore detects progress when target row is still outside positioned children`() {
+        val observation = AppleLyricsRestoreObservationPolicy.select(
+            targetPosition = 9,
+            children = listOf(
+                AppleLyricsRestoreObservedChild(null, -500),
+                AppleLyricsRestoreObservedChild(6, -125),
+                AppleLyricsRestoreObservedChild(7, 20),
+            ),
+        )
+        assertEquals(6, observation.position)
+        assertEquals(-125, observation.offset)
+    }
+
+    @Test
+    fun `repeated identical restore requests do not fight eight consecutive native layouts`() {
+        val gate = AppleLyricsRestoreAttemptGate()
+        assertTrue(gate.shouldDispatch(0, -110, null, 1483))
+        repeat(3) {
+            assertFalse(gate.shouldDispatch(0, -110, null, 1483))
+        }
+        // One bounded retry remains when the first native call was ignored.
+        assertTrue(gate.shouldDispatch(0, -110, null, 1483))
+        repeat(4) {
+            assertFalse(gate.shouldDispatch(0, -110, null, 1483))
+        }
+    }
+
+    @Test
+    fun `scroll restore permits changed target or observable native movement`() {
+        val gate = AppleLyricsRestoreAttemptGate()
+        assertTrue(gate.shouldDispatch(5, 120, 0, 300))
+        assertFalse(gate.shouldDispatch(5, 120, 0, 300))
+        assertTrue(gate.shouldDispatch(5, 120, 1, 180))
+        assertFalse(gate.shouldDispatch(5, 120, 1, 180))
+        assertTrue(gate.shouldDispatch(6, 120, 1, 180))
+        assertTrue(gate.shouldDispatch(6, 90, 1, 180))
+    }
+
     private class Listener : ViewTreeObserver.OnPreDrawListener {
         override fun onPreDraw(): Boolean = true
     }

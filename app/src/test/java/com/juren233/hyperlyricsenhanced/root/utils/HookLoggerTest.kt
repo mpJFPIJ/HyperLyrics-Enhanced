@@ -14,6 +14,7 @@ import com.juren233.hyperlyricsenhanced.utils.LOG_EXPORT_LEVEL_DEBUG
 import com.juren233.hyperlyricsenhanced.utils.LogExportStream
 import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
+import io.github.proify.lyricon.amprovider.xposed.ApplePronunciationAnchorReporter
 import java.io.StringReader
 import java.io.StringWriter
 import java.lang.reflect.Proxy
@@ -128,6 +129,22 @@ class HookLoggerTest {
         assertEquals("[Lifecycle] callback", entries[1].message)
         assertSame(failure, entries[2].error)
         assertSame(failure, entries[3].error)
+    }
+
+    @Test
+    fun `Apple pronunciation anchor report reaches the NPatch module log`() {
+        ApplePronunciationAnchorReporter.record(
+            "stage=anchor_probe holderWidth=360 holderHeight=96 holderChildren=2",
+        )
+
+        assertEquals(1, entries.size)
+        assertEquals(Log.INFO, entries.single().priority)
+        assertNull(entries.single().tag)
+        assertEquals(
+            "[ApplePronunciationAnchor] stage=anchor_probe holderWidth=360 " +
+                "holderHeight=96 holderChildren=2",
+            entries.single().message,
+        )
     }
 
     @Test

@@ -37,10 +37,12 @@ internal class AITranslationScheduler(
         key: String,
         configs: AiTranslationConfigs,
         song: Song,
-        originalLines: List<String>
+        originalLines: List<String>,
+        onProgress: ((AiTranslationProgress) -> Unit)? = null,
     ): Deferred<List<TranslationItem>?> {
         synchronized(lock) {
             jobs[key]?.let {
+                if (onProgress != null) it.onProgress = onProgress
                 HookLogger.d(TAG, "复用翻译任务: song=${song.name}, key=$key")
                 return it.deferred
             }
@@ -51,7 +53,8 @@ internal class AITranslationScheduler(
                 configs = configs,
                 song = song,
                 originalLines = originalLines,
-                generation = generation.get()
+                generation = generation.get(),
+                onProgress = onProgress,
             )
             jobs[key] = job
             pending.addLast(job)
@@ -75,6 +78,36 @@ internal class AITranslationScheduler(
                 HookLogger.d(TAG, "取消等待中的翻译任务: song=${job.songName}")
             }
         }
+    }
+
+    /** Cancel only translation jobs for selected song cache keys. */
+    fun cancelKeys(keys: Set<String>) = cancelMatching { it.key in keys }
+
+    /** A pending variant may not be in SQLite yet; match its original song content. */
+    fun cancelSongGroup(groupId: String) = cancelMatching { job ->
+        AiCachedSongCatalog.groupId(job.song.name, job.song.artist, job.originalLines) == groupId
+    }
+
+    private fun cancelMatching(matches: (TranslationJob) -> Boolean) {
+        val toCancel = synchronized(lock) {
+            pending.removeAll { job ->
+                if (!matches(job)) return@removeAll false
+                job.state = TranslationJobState.CANCELLED
+                jobs.remove(job.key, job)
+                job.deferred.complete(null)
+                true
+            }
+            jobs.values.mapNotNull { job ->
+                if (!matches(job) || job.state != TranslationJobState.RUNNING)
+                    return@mapNotNull null
+                job.state = TranslationJobState.CANCELLED
+                jobs.remove(job.key, job)
+                running = (running - 1).coerceAtLeast(0)
+                job.deferred.cancel(CancellationException("Song translation cleared"))
+                job.coroutineJob
+            }.also { dispatchNextLocked() }
+        }
+        toCancel.forEach { it.cancel() }
     }
 
     fun releaseForReload() {
@@ -131,13 +164,20 @@ internal class AITranslationScheduler(
 
     private suspend fun runJob(job: TranslationJob) {
         try {
+            val groupId = AiCachedSongCatalog.groupId(
+                job.song.name, job.song.artist, job.originalLines,
+            )
+            val epoch = cache.currentGroupEpoch(groupId)
             val apiResults =
-                OpenAiTranslationClient.request(job.configs, job.song, job.originalLines)
+                OpenAiTranslationClient.request(job.configs, job.song, job.originalLines) {
+                    job.onProgress?.invoke(it)
+                }
             if (job.state == TranslationJobState.CANCELLED) return
             if (!apiResults.isNullOrEmpty() && job.generation == generation.get()) {
-                HookLogger.d(TAG, "翻译任务完成: song=${job.songName}, cached=true")
-                cache.putMemory(job.key, apiResults)
-                cache.saveToDb(job.key, apiResults)
+                val saved = cache.saveToDb(
+                    job.key, apiResults, job.song, job.originalLines, expectedEpoch = epoch,
+                )
+                HookLogger.d(TAG, "翻译任务完成: song=${job.songName}, cached=$saved")
             }
             job.state = TranslationJobState.COMPLETED
             job.deferred.complete(apiResults)
@@ -166,6 +206,7 @@ internal class AITranslationScheduler(
         val song: Song,
         val originalLines: List<String>,
         val generation: Int,
+        @Volatile var onProgress: ((AiTranslationProgress) -> Unit)? = null,
         val deferred: CompletableDeferred<List<TranslationItem>?> = CompletableDeferred(),
         var coroutineJob: Job? = null,
         @Volatile

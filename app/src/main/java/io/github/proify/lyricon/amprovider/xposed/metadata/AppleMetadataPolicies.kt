@@ -551,6 +551,44 @@ internal fun appleLyricsBlurFocusPositions(
     return activePositions + trailingWritersCredits
 }
 
+/** A host may report both outgoing and incoming karaoke rows as active.
+ * Keep the outgoing visual focus until it actually leaves the native set. */
+internal object AppleLyricsBlurTransitionPolicy {
+    fun singleActiveFocus(nativeActive: Set<Int>, previousFocus: Int?): Int? =
+        previousFocus?.takeIf(nativeActive::contains) ?: nativeActive.minOrNull()
+}
+
+internal object AppleLyricsBlurOwnershipPolicy {
+    fun shouldSkipZeroRadiusRequest(
+        radiusPx: Int,
+        previouslyBlurred: Boolean,
+        hasAppliedMode: Boolean,
+    ): Boolean = radiusPx <= 0 && !previouslyBlurred && !hasAppliedMode
+
+    fun shouldClearNativeEffect(
+        knownBlurred: Boolean,
+        hasAppliedMode: Boolean,
+        trackedBlurred: Boolean,
+    ): Boolean = knownBlurred || hasAppliedMode || trackedBlurred
+}
+
+/** Recovery is permitted only after the native follow has failed to settle;
+ * never override a lyric list being scrolled or browsed by the listener. */
+internal object AppleLyricsFollowRecoveryPolicy {
+    fun shouldRecover(
+        active: Set<Int>,
+        visible: Set<Int>,
+        scrollState: Int,
+        suspendedForBrowse: Boolean,
+        playing: Boolean,
+        nowMs: Long,
+        lastRecoveryAtMs: Long,
+    ): Boolean = playing && !suspendedForBrowse && scrollState == 0 &&
+        active.isNotEmpty() && visible.isNotEmpty() &&
+        active.none(visible::contains) &&
+        (lastRecoveryAtMs == 0L || nowMs - lastRecoveryAtMs >= 4_000L)
+}
+
 internal fun shouldDeferAppleLyricsOutgoingBlur(
     isPendingOutgoing: Boolean,
     rowBottomY: Float?,

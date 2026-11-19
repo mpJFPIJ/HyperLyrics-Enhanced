@@ -75,7 +75,7 @@ internal class ApplePlaybackHooks(
     private var hasLoggedNonZeroPosition = false
     @Volatile private var lastTimingSamplePosition = -1L
     @Volatile private var lastTimingSampleSongId: String? = null
-    private var lastTimingSampleAtMs = 0L
+    @Volatile private var lastTimingSampleAtMs = 0L
     private var lastTimingTraceAtMs = 0L
     private var lastTimingStateSignature: String? = null
     @Volatile private var lastExplicitSeekAtMs = 0L
@@ -254,11 +254,14 @@ internal class ApplePlaybackHooks(
         }
         val justSoughtToBeginning = lastExplicitSeekPosition == 0L &&
             SystemClock.elapsedRealtime() - lastExplicitSeekAtMs < 2_500L
+        val sampleAgeMs = lastTimingSampleAtMs.takeIf { it > 0L }
+            ?.let { SystemClock.elapsedRealtime() - it }
         return ApplePausedPlaybackClockPolicy.select(
             currentMs = raw,
             lastValidMs = last,
             timelineAdvancing = timelineAdvancing,
             explicitSeekToZero = justSoughtToBeginning,
+            lastValidAgeMs = sampleAgeMs,
         )
     }
 

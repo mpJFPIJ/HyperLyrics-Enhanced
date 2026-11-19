@@ -124,6 +124,11 @@ internal fun AppleLyricsBlurHooks.applyAppleLyricsBlur(view: View, mode: Int, ra
     }
     val state = blurState.withRuntimeState(view) { it }
     val targetRadius = radiusPx.coerceAtLeast(0).toFloat()
+    if (AppleLyricsBlurOwnershipPolicy.shouldSkipZeroRadiusRequest(
+            radiusPx = radiusPx,
+            previouslyBlurred = blurState.isBlurred(view),
+            hasAppliedMode = state.blurMode != null,
+        )) return
     if (AppleLyricsBlurApplicationPolicy.canReuseExistingEffect(
             alreadyBlurred = blurState.isBlurred(view),
             currentMode = state.blurMode,
@@ -244,7 +249,10 @@ internal fun AppleLyricsBlurHooks.applyAppleLyricsNativeBlur(view: View, radiusP
             RenderEffect.createBlurEffect(
                 radius,
                 radius,
-                Shader.TileMode.CLAMP,
+                // Native karaoke rows contain alpha gradients and overlaid text.
+                // CLAMP repeats a bright edge pixel beyond the row bounds and
+                // can leave a thin light band where two masked rows meet.
+                Shader.TileMode.DECAL,
             )
         }
     )
@@ -274,14 +282,20 @@ internal fun AppleLyricsBlurHooks.clearAppleLyricsBlur(view: View, knownBlurred:
         )
     }
     val state = blurState.runtimeStateOrNull(view)
-    val hadModuleBlur = knownBlurred || state != null || blurState.isBlurred(view)
+    val hadModuleBlur = AppleLyricsBlurOwnershipPolicy.shouldClearNativeEffect(
+        knownBlurred = knownBlurred,
+        hasAppliedMode = state?.blurMode != null,
+        trackedBlurred = blurState.isBlurred(view),
+    )
     state?.let {
         cancelAppleLyricsBlurAnimator(it)
         it.blurMode = null
         it.currentBlurRadius = 0f
         it.targetBlurRadius = 0f
     }
-    view.setRenderEffect(null)
+    // A lyric row may also have a RenderEffect installed by Apple Music.
+    // Do not erase it on a row this module never touched.
+    if (hadModuleBlur) view.setRenderEffect(null)
     if (hadModuleBlur) clearAppleLyricsHyperOsBlur(view)
     blurState.unmarkBlurred(view)
     if (state != null) blurState.removeRuntimeStateIf(view, state)

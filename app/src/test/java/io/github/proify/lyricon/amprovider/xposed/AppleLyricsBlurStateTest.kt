@@ -28,13 +28,29 @@ class AppleLyricsBlurStateTest {
 
     @Test fun `do not clear host render effects on rows we never blurred`() {
         assertFalse(AppleLyricsBlurOwnershipPolicy.shouldClearNativeEffect(
-            knownBlurred = false, stateExists = false, trackedBlurred = false,
+            knownBlurred = false, hasAppliedMode = false, trackedBlurred = false,
+        ))
+        // Only a module-applied effect may be removed; state alone is not ownership.
+        assertTrue(AppleLyricsBlurOwnershipPolicy.shouldClearNativeEffect(
+            knownBlurred = true, hasAppliedMode = false, trackedBlurred = false,
         ))
         assertTrue(AppleLyricsBlurOwnershipPolicy.shouldClearNativeEffect(
-            knownBlurred = true, stateExists = false, trackedBlurred = false,
+            knownBlurred = false, hasAppliedMode = true, trackedBlurred = false,
         ))
         assertTrue(AppleLyricsBlurOwnershipPolicy.shouldClearNativeEffect(
-            knownBlurred = false, stateExists = true, trackedBlurred = false,
+            knownBlurred = false, hasAppliedMode = false, trackedBlurred = true,
+        ))
+    }
+
+    @Test fun `zero radius on a fresh focus row never overrides an existing host effect`() {
+        assertTrue(AppleLyricsBlurOwnershipPolicy.shouldSkipZeroRadiusRequest(
+            radiusPx = 0, previouslyBlurred = false, hasAppliedMode = false,
+        ))
+        assertFalse(AppleLyricsBlurOwnershipPolicy.shouldSkipZeroRadiusRequest(
+            radiusPx = 0, previouslyBlurred = true, hasAppliedMode = true,
+        ))
+        assertFalse(AppleLyricsBlurOwnershipPolicy.shouldSkipZeroRadiusRequest(
+            radiusPx = 8, previouslyBlurred = false, hasAppliedMode = false,
         ))
     }
 

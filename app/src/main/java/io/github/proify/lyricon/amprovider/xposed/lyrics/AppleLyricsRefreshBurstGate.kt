@@ -25,3 +25,24 @@ internal class AppleLyricsRefreshBurstGate {
         pending.remove(key)
     }
 }
+
+/** Collapses different online-translation revisions into one upcoming UI frame.
+ * A different song or presentation generation is a separate request, so an
+ * obsolete callback cannot consume the next song's pending refresh. */
+internal class AppleLyricsFrameRefreshQueue {
+    private data class Group(val songId: String?, val presentationGeneration: Long)
+    private val pending = LinkedHashMap<Group, AppleLyricsRefreshKey>()
+
+    @Synchronized fun offer(request: AppleLyricsRefreshKey): Boolean {
+        val group = Group(request.songId, request.presentationGeneration)
+        val previous = pending[group]
+        pending[group] = if (previous == null) request else request.copy(
+            revision = listOfNotNull(previous.revision, request.revision).maxOrNull(),
+            syncDisplayFlags = previous.syncDisplayFlags || request.syncDisplayFlags,
+        )
+        return previous == null
+    }
+
+    @Synchronized fun consume(scheduledRequest: AppleLyricsRefreshKey): AppleLyricsRefreshKey? =
+        pending.remove(Group(scheduledRequest.songId, scheduledRequest.presentationGeneration))
+}

@@ -311,8 +311,8 @@ internal class AppleLyricsSupplementHooks(
     }
     internal val lineWideBindingGeneration =
         java.util.WeakHashMap<android.view.View, Long>()
-    private val refreshGateByView =
-        java.util.WeakHashMap<View, AppleLyricsRefreshBurstGate>()
+    private val frameRefreshQueueByView =
+        java.util.WeakHashMap<View, AppleLyricsFrameRefreshQueue>()
     internal val lineWideMissingDiagnosticCount = AtomicInteger()
     internal val lineWideShownDiagnosticCount = AtomicInteger()
     internal val lineWideRegisteredDiagnosticCount = AtomicInteger()
@@ -719,13 +719,13 @@ internal class AppleLyricsSupplementHooks(
         )
 
         val bindingTicket = presentationBinding.ticket()
-        fun isRefreshCurrent(): Boolean =
+        fun isRefreshCurrent(request: AppleLyricsRefreshKey): Boolean =
             presentationBinding.isCurrent(bindingTicket) &&
-                (expectedSongId == null || bindingTicket.songId == expectedSongId) &&
-                (expectedRevision == null ||
+                (request.songId == null || bindingTicket.songId == request.songId) &&
+                (request.revision == null ||
                     nativeOnlineTranslationStore.isCurrentRevision(
-                        songId = expectedSongId,
-                        revision = expectedRevision,
+                        songId = request.songId,
+                        revision = request.revision,
                     ))
 
         val recyclerViewAsView = recyclerView as? View ?: return
@@ -735,12 +735,12 @@ internal class AppleLyricsSupplementHooks(
             syncDisplayFlags = syncDisplayFlags,
             presentationGeneration = bindingTicket.generation,
         )
-        val gate = synchronized(refreshGateByView) {
-            refreshGateByView.getOrPut(recyclerViewAsView) {
-                AppleLyricsRefreshBurstGate()
+        val queue = synchronized(frameRefreshQueueByView) {
+            frameRefreshQueueByView.getOrPut(recyclerViewAsView) {
+                AppleLyricsFrameRefreshQueue()
             }
         }
-        if (!gate.begin(key)) return
+        if (!queue.offer(key)) return
 
         fun isComputingLayout(): Boolean =
             runCatching {
@@ -748,47 +748,41 @@ internal class AppleLyricsSupplementHooks(
             }.getOrNull() == true
 
         fun rebindAllRows(stage: String) {
-            if (!isRefreshCurrent()) {
-                gate.end(key)
-                return
-            }
             if (isComputingLayout()) {
                 recyclerViewAsView.postOnAnimation { rebindAllRows(stage) }
                 return
             }
-            try {
-                val adapter = appleRecyclerAdapter(recyclerView) ?: return
-                val itemCount = appleRecyclerAdapterItemCount(adapter)
-                if (itemCount <= 0) return
-                if (syncDisplayFlags ||
-                    appleLyricsDisplayMode() != RootConstants.APPLE_MUSIC_LYRICS_MODE_APPLE
-                ) {
-                    syncAppleLyricsAdapterDisplayFlags(adapter)
-                    invalidateAppleLyricsVisibleHolderTextCaches(recyclerView)
-                }
-                if (BuildConfig.DEBUG) {
-                    ProviderLogger.debug(
-                        "[LyricsScrollDiag] rebindAllRows: stage=$stage, expectedSongId=$expectedSongId, itemCount=$itemCount"
-                    )
-                }
-                runCatching {
-                    appleRecyclerNotifyDataSetChanged(adapter)
-                }.onFailure {
-                    ProviderLogger.error(
-                        "Apple Music 歌词列表完整重绑失败: stage=$stage",
-                        it,
-                    )
-                }
-                if (BuildConfig.DEBUG) {
-                    ProviderLogger.diagnostic(
-                        "Apple Music 歌词列表已请求完整重绑: " +
-                            "id=$expectedSongId, revision=${expectedRevision ?: "none"}, " +
-                            "stage=$stage, adapter=${adapter.javaClass.name}, " +
-                            "itemCount=$itemCount"
-                    )
-                }
-            } finally {
-                gate.end(key)
+            val request = queue.consume(key) ?: return
+            if (!isRefreshCurrent(request)) return
+            val adapter = appleRecyclerAdapter(recyclerView) ?: return
+            val itemCount = appleRecyclerAdapterItemCount(adapter)
+            if (itemCount <= 0) return
+            if (request.syncDisplayFlags ||
+                appleLyricsDisplayMode() != RootConstants.APPLE_MUSIC_LYRICS_MODE_APPLE
+            ) {
+                syncAppleLyricsAdapterDisplayFlags(adapter)
+                invalidateAppleLyricsVisibleHolderTextCaches(recyclerView)
+            }
+            if (BuildConfig.DEBUG) {
+                ProviderLogger.debug(
+                    "[LyricsScrollDiag] rebindAllRows: stage=$stage, expectedSongId=$expectedSongId, itemCount=$itemCount"
+                )
+            }
+            runCatching {
+                appleRecyclerNotifyDataSetChanged(adapter)
+            }.onFailure {
+                ProviderLogger.error(
+                    "Apple Music 歌词列表完整重绑失败: stage=$stage",
+                    it,
+                )
+            }
+            if (BuildConfig.DEBUG) {
+                ProviderLogger.diagnostic(
+                    "Apple Music 歌词列表已请求完整重绑: " +
+                        "id=$expectedSongId, revision=${request.revision ?: "none"}, " +
+                        "stage=$stage, adapter=${adapter.javaClass.name}, " +
+                        "itemCount=$itemCount"
+                )
             }
         }
 
@@ -801,7 +795,7 @@ internal class AppleLyricsSupplementHooks(
                 rebindAllRows("next_frame")
             }
         } catch (error: Throwable) {
-            gate.end(key)
+            queue.consume(key)
             throw error
         }
     }

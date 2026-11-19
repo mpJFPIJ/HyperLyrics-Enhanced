@@ -514,22 +514,33 @@ internal class AppleLyricsDiagnostics(
                     executable = method,
                     enter = { chain ->
                         val adapter = chain.thisObject ?: return@installScopedHook false
+                        val parentContext = appleLyricsBindingDiagnosticContexts.current
+                        val holder = chain.args.firstOrNull()
+                        val adapterIdentity = System.identityHashCode(adapter)
                         val context = AppleLyricsBindingDiagnosticContext(
                             songId = currentSongId(),
                             adapterClass = adapter.javaClass.name,
-                            adapterIdentity = System.identityHashCode(adapter),
+                            adapterIdentity = adapterIdentity,
                             methodName = "${method.name}/${method.parameterCount}",
-                            holder = chain.args.firstOrNull(),
+                            holder = holder,
                             position = (chain.args.getOrNull(1) as? Number)?.toInt(),
                             translationEnabled = if (BuildConfig.DEBUG)
                                 debugAppleBooleanField(adapter, translationFieldName) else null,
                             pronunciationEnabled = if (BuildConfig.DEBUG)
                                 debugAppleBooleanField(adapter, pronunciationFieldName) else null,
+                            nestedForSameHolder = AppleLyricsBindingPassPolicy.isNestedForSameHolder(
+                                parentHolder = parentContext?.holder,
+                                parentAdapterIdentity = parentContext?.adapterIdentity,
+                                holder = holder,
+                                adapterIdentity = adapterIdentity,
+                            ),
                         )
                         appleLyricsBindingDiagnosticContexts.push(context)
-                        runCatching {
-                            holderBindingStart(context, appleLyricsHolderRoot(context.holder))
-                        }.onFailure { ProviderLogger.error("Apple pronunciation holder clear failed", it) }
+                        if (!context.nestedForSameHolder) {
+                            runCatching {
+                                holderBindingStart(context, appleLyricsHolderRoot(context.holder))
+                            }.onFailure { ProviderLogger.error("Apple pronunciation holder clear failed", it) }
+                        }
                         if (BuildConfig.DEBUG && BuildConfig.HLE_BUILD_RUN == "local") {
                             val parentPerformanceContext =
                                 appleLyricsBindingPerformanceContexts.current
@@ -552,6 +563,10 @@ internal class AppleLyricsDiagnostics(
                             performance.originalInclusiveNanos =
                                 SystemClock.elapsedRealtimeNanos() - performance.startedAtNanos
                         }
+                        // The outer bind sees the fully populated native cells. Rendering
+                        // inside the nested delegate destroys and reinserts the same
+                        // Hangul row before the host has finished measuring its words.
+                        if (context.nestedForSameHolder) return@installScopedHook
                         if (!BuildConfig.DEBUG || BuildConfig.HLE_BUILD_RUN != "local") {
                             // Production must still bind the two lyric
                             // overlays. Avoid expensive text tree dumps,

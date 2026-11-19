@@ -33,6 +33,17 @@ internal data class AppleLineWidePronunciationPayload(
 )
 
 internal object AppleLineWidePronunciationRowPolicy {
+    fun canReuseReading(
+        boundPayload: AppleLineWidePronunciationPayload?,
+        requestedPayload: AppleLineWidePronunciationPayload,
+        oldWords: List<*>,
+        newWords: List<*>,
+        currentIndex: Int,
+        insertionIndex: Int,
+    ): Boolean = boundPayload == requestedPayload && currentIndex == insertionIndex &&
+        oldWords.size == newWords.size &&
+        oldWords.indices.all { oldWords[it] === newWords[it] }
+
     /** Native karaoke words sometimes include a line break between source characters. */
     fun sourceKey(text: String): String = text.filter(Char::isLetterOrDigit)
 
@@ -96,6 +107,18 @@ internal object AppleLineWidePronunciationRowPolicy {
     fun fullWidth(measuredWidth: Int): Int = measuredWidth.takeIf { it > 0 } ?: -1
 }
 
+/** Pre-wake only the visible upcoming lyric, keeping unrelated rows at low rate. */
+internal object AppleReadingPulsePolicy {
+    fun nextDelayMs(
+        onScreen: Boolean,
+        positionMs: Long?,
+        nextBeginMs: Long?,
+        active: Boolean,
+    ): Long = if (onScreen && (active ||
+            (positionMs != null && nextBeginMs != null &&
+                nextBeginMs - positionMs in 0L..450L))) 60L else 400L
+}
+
 /**
  * Attached to Apple's measured karaoke_line_flexbox, not to any timed native word.
  * The flexbox wraps this full-width child below the intact native Japanese line.
@@ -124,9 +147,11 @@ internal class AppleLineWidePronunciationRow {
     private class ReadingView(context: android.content.Context) : TextView(context) {
         var playbackPositionMs: (() -> Long?)? = null
         var sourceWords: List<TextView> = emptyList()
+        var boundPayload: AppleLineWidePronunciationPayload? = null
         private var timedStyles: List<Pair<Int, KaraokeSyllableStyle>> = emptyList()
         private var timedVariants: List<List<AppleTimedReadingUnit>> = emptyList()
         private var timedVariantLookups: List<Map<Int, AppleTimedReadingUnit>> = emptyList()
+        private var variantBeginTimes = longArrayOf()
         private val visibleBounds = Rect()
         private val highlightPulse = object : Runnable {
             override fun run() {
@@ -138,13 +163,19 @@ internal class AppleLineWidePronunciationRow {
                 // Never poll unrelated/off-screen lines at animation rate.
                 // Native word cells own fast karaoke animation; this fallback
                 // is only a last-resort line-wide display.
-                postDelayed(this, if (onScreen && lineActive()) 60L else 400L)
+                val position = playbackPositionMs?.invoke()
+                postDelayed(this, AppleReadingPulsePolicy.nextDelayMs(
+                    onScreen = onScreen,
+                    positionMs = position,
+                    nextBeginMs = position?.let { now ->
+                        variantBeginTimes.firstOrNull { begin -> begin >= now }
+                    },
+                    active = position != null &&
+                        AppleTimedPronunciationHighlightPolicy.activeVariant(
+                            position, timedVariants,
+                        ) != null,
+                ))
             }
-        }
-
-        private fun lineActive(): Boolean {
-            val position = playbackPositionMs?.invoke() ?: return false
-            return AppleTimedPronunciationHighlightPolicy.activeVariant(position, timedVariants) != null
         }
 
         fun setTimedText(value: String, variants: List<List<AppleTimedReadingUnit>>) {
@@ -152,6 +183,10 @@ internal class AppleLineWidePronunciationRow {
             timedVariants = variants.map { units ->
                 units.filter { it.start >= 0 && it.end <= value.length && it.start < it.end }
             }
+            variantBeginTimes = timedVariants.mapNotNull { units ->
+                units.minOfOrNull(AppleTimedReadingUnit::beginMs)
+                    ?.takeIf { it >= 0L }
+            }.sorted().toLongArray()
             timedVariantLookups = timedVariants.map { it.associateBy(AppleTimedReadingUnit::start) }
             timedStyles = timedVariants.flatten().distinctBy(AppleTimedReadingUnit::start)
                 .map { unit ->
@@ -306,11 +341,12 @@ internal class AppleLineWidePronunciationRow {
         playbackPositionMs: () -> Long? = { null },
     ): Boolean {
         val anchor = anchor(root) ?: return false
-        clear(root)
         if (!AppleLineWidePronunciationRowPolicy.shouldDisplay(
                 payload, currentSongId, currentRevision, visible, currentSourcePriority,
-            )
-        ) return false
+        )) {
+            clear(root)
+            return false
+        }
 
         val childText = visibleNativeCellTexts(root).orEmpty()
         val insertionIndex = (if (trustedHolder)
@@ -318,16 +354,42 @@ internal class AppleLineWidePronunciationRow {
                 payload?.sourceText.orEmpty(), childText,
             ) else AppleLineWidePronunciationRowPolicy.verifiedInsertionIndex(
                 payload?.sourceText.orEmpty(), childText,
-            )) ?: return false
+        )) ?: run {
+            clear(root)
+            return false
+        }
         val sourceWords = (0 until insertionIndex).flatMap { index ->
             nativeWordTexts(anchor.getChildAt(index))
         }
-        val sourceStyle = sourceWords.firstOrNull() ?: return false
+        val sourceStyle = sourceWords.firstOrNull() ?: run {
+            clear(root)
+            return false
+        }
         val text = AppleLineWidePronunciationRowPolicy.readableText(payload?.pronunciation)
-            ?: return false
+            ?: run {
+                clear(root)
+                return false
+            }
+        val existing = (0 until anchor.childCount)
+            .map(anchor::getChildAt).filterIsInstance<ReadingView>().singleOrNull()
+        if (existing != null && AppleLineWidePronunciationRowPolicy.canReuseReading(
+                boundPayload = existing.boundPayload,
+                requestedPayload = payload!!,
+                oldWords = existing.sourceWords,
+                newWords = sourceWords,
+                currentIndex = anchor.indexOfChild(existing),
+                insertionIndex = insertionIndex,
+            ) && kotlin.math.abs(existing.textSize -
+                AppleLineWidePronunciationRowPolicy.readingTextPx(sourceStyle.textSize)) < 0.8f
+        ) {
+            existing.playbackPositionMs = playbackPositionMs
+            return true
+        }
+        clear(root)
         val reading = ReadingView(anchor.context).apply {
             this.playbackPositionMs = playbackPositionMs
             this.sourceWords = sourceWords
+            this.boundPayload = payload
             setTextSize(
                 TypedValue.COMPLEX_UNIT_PX,
                 AppleLineWidePronunciationRowPolicy.readingTextPx(sourceStyle.textSize),

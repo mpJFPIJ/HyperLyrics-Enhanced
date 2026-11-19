@@ -14,6 +14,31 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AppleLyricsScrollPresentationStateTest {
+    @Test
+    fun `repeated identical restore requests do not fight eight consecutive native layouts`() {
+        val gate = AppleLyricsRestoreAttemptGate()
+        assertTrue(gate.shouldDispatch(0, -110, null, 1483))
+        repeat(3) {
+            assertFalse(gate.shouldDispatch(0, -110, null, 1483))
+        }
+        // One bounded retry remains when the first native call was ignored.
+        assertTrue(gate.shouldDispatch(0, -110, null, 1483))
+        repeat(4) {
+            assertFalse(gate.shouldDispatch(0, -110, null, 1483))
+        }
+    }
+
+    @Test
+    fun `scroll restore permits changed target or observable native movement`() {
+        val gate = AppleLyricsRestoreAttemptGate()
+        assertTrue(gate.shouldDispatch(5, 120, 0, 300))
+        assertFalse(gate.shouldDispatch(5, 120, 0, 300))
+        assertTrue(gate.shouldDispatch(5, 120, 1, 180))
+        assertFalse(gate.shouldDispatch(5, 120, 1, 180))
+        assertTrue(gate.shouldDispatch(6, 120, 1, 180))
+        assertTrue(gate.shouldDispatch(6, 90, 1, 180))
+    }
+
     private class Listener : ViewTreeObserver.OnPreDrawListener {
         override fun onPreDraw(): Boolean = true
     }

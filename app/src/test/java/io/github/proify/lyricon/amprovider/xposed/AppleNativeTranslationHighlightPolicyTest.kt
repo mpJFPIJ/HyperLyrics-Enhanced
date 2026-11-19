@@ -68,6 +68,54 @@ class AppleNativeTranslationHighlightPolicyTest {
         ))
     }
 
+    @Test fun holderBindStartDefersPainterDisposalUntilNewContextIsKnown() {
+        val lifecycle = AppleTranslationBindingLifecycle()
+        val existing = AppleTranslationLineContext("song", "最初", 1000, 2000, "처음", 4)
+        lifecycle.painterInstalled(existing)
+        val first = lifecycle.beginHolderBind()
+        assertTrue(lifecycle.hasPendingPainter())
+        assertEquals(AppleTranslationBindResult.REUSE, lifecycle.completeHolderBind(
+            first, existing.copy(), sameViews = true, controlledTextsIntact = true,
+        ))
+        val second = lifecycle.beginHolderBind()
+        assertTrue(lifecycle.hasPendingPainter())
+        assertEquals(AppleTranslationBindResult.REUSE, lifecycle.completeHolderBind(
+            second, existing.copy(), sameViews = true, controlledTextsIntact = true,
+        ))
+        val third = lifecycle.beginHolderBind()
+        assertEquals(AppleTranslationBindResult.REPLACE, lifecycle.completeHolderBind(
+            third, existing.copy(sourceText = "次", beginMs = 2000, endMs = 3000),
+            sameViews = true, controlledTextsIntact = true,
+        ))
+        assertFalse(lifecycle.hasPendingPainter())
+    }
+
+    @Test fun oneSelectedKoreanMeaningAtBoundaryOverlapGapAndSeek() {
+        val first = AppleTranslationLineContext("song", "one", 1000, 2100, "첫째", 1)
+        val next = AppleTranslationLineContext("song", "two", 2000, 2800, "둘째", 1)
+        val third = AppleTranslationLineContext("song", "three", 3000, 3900, "셋째", 1)
+        val rows = listOf(first, next, third)
+        assertEquals(0, AppleNativeTranslationHighlightPolicy.activeRowIndex(rows, 1999L))
+        assertEquals(1, AppleNativeTranslationHighlightPolicy.activeRowIndex(rows, 2000L))
+        assertEquals(1, AppleNativeTranslationHighlightPolicy.activeRowIndex(rows, 2099L))
+        assertNull(AppleNativeTranslationHighlightPolicy.activeRowIndex(rows, 2900L))
+        assertEquals(2, AppleNativeTranslationHighlightPolicy.activeRowIndex(rows, 3100L))
+        assertEquals(0, AppleNativeTranslationHighlightPolicy.activeRowIndex(rows, 1200L))
+        assertNull(AppleNativeTranslationHighlightPolicy.activeRowIndex(rows, null))
+    }
+
+    @Test fun painterOnlyOverridesEligibleKoreanMeaningTarget() {
+        assertTrue(AppleNativeTranslationHighlightPolicy.eligibleKoreanMeaning(
+            translationVisible = true, koreanTargetSelected = true,
+        ))
+        assertFalse(AppleNativeTranslationHighlightPolicy.eligibleKoreanMeaning(
+            translationVisible = true, koreanTargetSelected = false,
+        ))
+        assertFalse(AppleNativeTranslationHighlightPolicy.eligibleKoreanMeaning(
+            translationVisible = false, koreanTargetSelected = true,
+        ))
+    }
+
     @Test fun repeatedViewBindingRetainsTheSameTranslationClockUntilHolderRecycles() {
         val holder = Any()
         val context = AppleTranslationLineContext("song", "駄目", 1000, 1900, "안 돼", 2)

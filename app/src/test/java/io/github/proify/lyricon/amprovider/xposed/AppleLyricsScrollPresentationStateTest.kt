@@ -15,6 +15,42 @@ import org.junit.Test
 
 class AppleLyricsScrollPresentationStateTest {
     @Test
+    fun `restore observes positioned target instead of first disappearing recycler child`() {
+        val observed = AppleLyricsRestoreObservationPolicy.select(
+            targetPosition = 0,
+            children = listOf(
+                AppleLyricsRestoreObservedChild(null, 1483),
+                AppleLyricsRestoreObservedChild(0, 54),
+                AppleLyricsRestoreObservedChild(1, 115),
+            ),
+        )
+        assertEquals(0, observed.position)
+        assertEquals(54, observed.offset)
+        assertTrue(AppleLyricsVisibleViewportPolicy.intersects(
+            childLeft = 0, childTop = 54, childRight = 300, childBottom = 115,
+            viewportWidth = 300, viewportHeight = 600,
+        ))
+        assertFalse(AppleLyricsVisibleViewportPolicy.intersects(
+            childLeft = 0, childTop = 1483, childRight = 300, childBottom = 1560,
+            viewportWidth = 300, viewportHeight = 600,
+        ))
+    }
+
+    @Test
+    fun `restore detects progress when target row is still outside positioned children`() {
+        val observation = AppleLyricsRestoreObservationPolicy.select(
+            targetPosition = 9,
+            children = listOf(
+                AppleLyricsRestoreObservedChild(null, -500),
+                AppleLyricsRestoreObservedChild(6, -125),
+                AppleLyricsRestoreObservedChild(7, 20),
+            ),
+        )
+        assertEquals(6, observation.position)
+        assertEquals(-125, observation.offset)
+    }
+
+    @Test
     fun `repeated identical restore requests do not fight eight consecutive native layouts`() {
         val gate = AppleLyricsRestoreAttemptGate()
         assertTrue(gate.shouldDispatch(0, -110, null, 1483))

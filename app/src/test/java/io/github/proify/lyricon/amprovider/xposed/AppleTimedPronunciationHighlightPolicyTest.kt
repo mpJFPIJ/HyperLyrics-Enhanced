@@ -200,4 +200,51 @@ class AppleTimedPronunciationHighlightPolicyTest {
         ).isEmpty())
     }
 
+
+    @Test
+    fun `partialVerifiedReadingSpansKeepTheirOwnNativeWordClocks`() {
+        val units = AppleTimedPronunciationHighlightPolicy.units(
+            sourceText = "A中CDE",
+            pronunciation = "가나다",
+            timedWords = listOf(
+                AppleTimedSourceWord("A", 100, 200),
+                AppleTimedSourceWord("中", 300, 400),
+                AppleTimedSourceWord("CDE", 700, 1000),
+            ),
+            phoneticSpans = listOf(
+                ApplePronunciationSourceToken(0, 1, "가", "A"),
+                ApplePronunciationSourceToken(2, 5, "다", "CDE"),
+            ),
+        )
+        assertEquals(listOf("가", "다"), units.map { "가나다".substring(it.start, it.end) })
+        assertEquals(listOf(100L, 700L), units.map { it.beginMs })
+        assertEquals(listOf(200L, 1000L), units.map { it.endMs })
+        assertEquals(listOf(0, 2), units.map { it.sourceWordIndex })
+    }
+
+    @Test
+    fun `unknownReadingBetweenVerifiedAnchorsIsOnlyApproximateWithRealLineWindow`() {
+        val units = AppleTimedPronunciationHighlightPolicy.units(
+            sourceText = "A中CDE",
+            pronunciation = "가나다",
+            timedWords = listOf(
+                AppleTimedSourceWord("A", 100, 200),
+                AppleTimedSourceWord("中", 300, 400),
+                AppleTimedSourceWord("CDE", 700, 1000),
+            ),
+            phoneticSpans = listOf(
+                ApplePronunciationSourceToken(0, 1, "가", "A"),
+                ApplePronunciationSourceToken(2, 5, "다", "CDE"),
+            ),
+            lineBeginMs = 50,
+            lineEndMs = 1100,
+        )
+        assertEquals(3, units.size)
+        assertEquals(listOf(100L, 700L), listOf(units[0].beginMs, units[2].beginMs))
+        assertEquals(listOf(200L, 1000L), listOf(units[0].endMs, units[2].endMs))
+        assertEquals(listOf(0, -1, 2), units.map { it.sourceWordIndex })
+        assertTrue(units[1].beginMs >= 50 && units[1].endMs <= 1100)
+        assertTrue(units[1].endMs > units[1].beginMs)
+    }
+
 }

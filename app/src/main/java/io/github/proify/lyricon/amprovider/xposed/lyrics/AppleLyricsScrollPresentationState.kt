@@ -163,3 +163,70 @@ internal class AppleLyricsActiveLineUpdateController(
         lastAppliedIndex = -1
     }
 }
+
+/**
+ * Native RecyclerView may report the same unfinished layout for eight
+ * consecutive PreDraw callbacks. Do not issue eight identical scroll commands:
+ * allow the first, one delayed retry, and any command whose target or observed
+ * native layout genuinely changed. Each restore owns a fresh instance.
+ */
+internal class AppleLyricsRestoreAttemptGate {
+    private data class Observation(
+        val targetPosition: Int,
+        val targetOffset: Int,
+        val observedPosition: Int?,
+        val observedOffset: Int?,
+    )
+
+    private var last: Observation? = null
+    private var unchangedSamples = 0
+    private var identicalDispatches = 0
+
+    fun shouldDispatch(
+        targetPosition: Int,
+        targetOffset: Int,
+        observedPosition: Int?,
+        observedOffset: Int?,
+    ): Boolean {
+        val current = Observation(
+            targetPosition, targetOffset, observedPosition, observedOffset,
+        )
+        if (last != current) {
+            last = current
+            unchangedSamples = 0
+            identicalDispatches = 1
+            return true
+        }
+        unchangedSamples++
+        if (identicalDispatches >= 2 || unchangedSamples < 4) return false
+        identicalDispatches++
+        return true
+    }
+}
+
+internal data class AppleLyricsRestoreObservedChild(val position: Int?, val offset: Int?)
+
+/** Ignore disappearing RecyclerView children with NO valid adapter position. */
+internal object AppleLyricsRestoreObservationPolicy {
+    fun select(
+        targetPosition: Int,
+        children: List<AppleLyricsRestoreObservedChild>,
+    ): AppleLyricsRestoreObservedChild =
+        children.firstOrNull { it.position == targetPosition } ?:
+            children.firstOrNull { it.position != null && it.position >= 0 } ?:
+            AppleLyricsRestoreObservedChild(null, null)
+}
+
+/** Only physically intersecting lyrics count as on-screen for native follow diagnostics. */
+internal object AppleLyricsVisibleViewportPolicy {
+    fun intersects(
+        childLeft: Int,
+        childTop: Int,
+        childRight: Int,
+        childBottom: Int,
+        viewportWidth: Int,
+        viewportHeight: Int,
+    ): Boolean = viewportWidth > 0 && viewportHeight > 0 &&
+        childRight > 0 && childLeft < viewportWidth &&
+        childBottom > 0 && childTop < viewportHeight
+}

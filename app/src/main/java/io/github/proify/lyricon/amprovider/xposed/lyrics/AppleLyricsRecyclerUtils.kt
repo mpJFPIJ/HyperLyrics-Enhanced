@@ -278,6 +278,24 @@ internal fun AppleLyricsBlurHooks.appleLyricsVisiblePositionedChildren(
     }
 }
 
+/** Restores must compare against an actual positioned row, not child[0]. */
+internal fun AppleLyricsBlurHooks.appleLyricsRestorePositionedObservation(
+    recyclerView: View,
+    targetPosition: Int,
+): AppleLyricsRestoreObservedChild {
+    val container = recyclerView as? ViewGroup
+        ?: return AppleLyricsRestoreObservedChild(null, null)
+    val observed = buildList {
+        repeat(container.childCount) { index ->
+            val child = container.getChildAt(index) ?: return@repeat
+            val adapterPosition = appleLyricsChildAdapterPosition(recyclerView, child)
+                .takeIf { it >= 0 }
+            add(AppleLyricsRestoreObservedChild(adapterPosition, child.top))
+        }
+    }
+    return AppleLyricsRestoreObservationPolicy.select(targetPosition, observed)
+}
+
 internal fun AppleLyricsBlurHooks.appleLyricsInstrumentalAdapterPositions(
     adapter: Any,
     positionedChildren: List<Pair<Int, View>>,

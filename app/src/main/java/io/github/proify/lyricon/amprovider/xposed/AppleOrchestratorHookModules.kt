@@ -97,9 +97,10 @@ import kotlin.math.abs
 import kotlin.math.roundToInt
 
 internal fun AppleMusicProviderOrchestrator.startHooks() {
-    val costs = if (BuildConfig.DEBUG) mutableListOf<StartupHookModuleCost>() else null
+    val userDiagnostics = BuildConfig.DEBUG && BuildConfig.HLE_BUILD_RUN == "local"
+    val costs = if (userDiagnostics) mutableListOf<StartupHookModuleCost>() else null
     hookModules().asSequence()
-        .filter { hookModule -> !hookModule.debugOnly || BuildConfig.DEBUG }
+        .filter { hookModule -> !hookModule.debugOnly || userDiagnostics }
         .forEach { hookModule ->
             val startNs = if (costs != null) System.nanoTime() else 0L
             hookRegistrar.withModule(hookModule.id, hookModule::installHooks)
@@ -146,9 +147,12 @@ private fun logStartupHookCosts(costs: List<StartupHookModuleCost>) {
     )
 }
 
-internal fun AppleMusicProviderOrchestrator.hookModuleIdsForBuild(debug: Boolean): List<String> =
+internal fun AppleMusicProviderOrchestrator.hookModuleIdsForBuild(
+    debug: Boolean,
+    ciBuildRun: String = "local",
+): List<String> =
     hookModules()
-        .filter { hookModule -> !hookModule.debugOnly || debug }
+        .filter { hookModule -> !hookModule.debugOnly || (debug && ciBuildRun == "local") }
         .map { hookModule -> hookModule.id }
 
 internal fun AppleMusicProviderOrchestrator.hookModules() = listOf(
@@ -335,8 +339,10 @@ internal fun AppleMusicProviderOrchestrator.hookModules() = listOf(
         installer = { lyricsPlayback.lyricsHooks.hookAppleLyricsUiDiagnostics() },
     ),
     FunctionalAppleMusicHookModule(
+        // Release also needs this holder lifecycle hook: it owns the
+        // Korean translation and line-wide Hangul highlight render path.
+        // Only its diagnostic probes may remain debug-only.
         "hookAppleLyricsBindingDiagnostics",
-        debugOnly = true,
         installer = { lyricsPlayback.lyricsHooks.hookAppleLyricsBindingDiagnostics() },
     ),
     FunctionalAppleMusicHookModule(

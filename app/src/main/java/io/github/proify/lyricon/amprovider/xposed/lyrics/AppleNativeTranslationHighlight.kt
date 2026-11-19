@@ -354,6 +354,7 @@ internal class AppleNativeTranslationHighlight {
         )
         val pulse = Pulse(
             root, ctx, translationView, playbackPositionMs,
+            onRefresh = ::refreshGroup,
             onDetach = { old, detached ->
                 if (pulses[detached] === old) pulses.remove(detached)
                 bindingLifecycle[detached]?.painterStopped()
@@ -389,11 +390,12 @@ internal class AppleNativeTranslationHighlight {
         rows.forEachIndexed { index, pulse -> pulse.render(index == selected) }
     }
 
-    private inner class Pulse(
+    private class Pulse(
         val root: View,
         val ctx: AppleTranslationLineContext,
         views: List<TextView>,
         private var playbackPositionMs: () -> Long?,
+        private val onRefresh: (Pulse) -> Unit,
         private val onDetach: (Pulse, View) -> Unit,
     ) : Runnable, View.OnAttachStateChangeListener {
         private data class SavedStyle(
@@ -560,7 +562,7 @@ internal class AppleNativeTranslationHighlight {
                 onDetach(this, root)
                 return
             }
-            refreshGroup(this)
+            onRefresh(this)
             val visible = root.isShown && root.getGlobalVisibleRect(bounds)
             root.postDelayed(this, when {
                 !visible -> 750L

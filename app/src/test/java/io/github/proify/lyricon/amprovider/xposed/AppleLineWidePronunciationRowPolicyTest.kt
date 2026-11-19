@@ -7,6 +7,34 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AppleLineWidePronunciationRowPolicyTest {
+    @Test fun `reading uses exactly one outer paint owner after layout`() {
+        val ready = AppleHangulReadingPaintPolicy.owners(
+            rootAttached = true, rootWidth = 720, rootHeight = 800,
+            readingWidth = 660, readingHeight = 54, overlayAttached = true,
+        )
+        assertFalse(ready.nativeVisible)
+        assertTrue(ready.outerOverlayVisible)
+        val pending = AppleHangulReadingPaintPolicy.owners(
+            rootAttached = true, rootWidth = 720, rootHeight = 800,
+            readingWidth = 660, readingHeight = 54, overlayAttached = false,
+        )
+        assertTrue(pending.nativeVisible)
+        assertFalse(pending.outerOverlayVisible)
+    }
+
+    @Test fun `unmeasured or detached reading cannot disappear behind outer overlay`() {
+        for ((attached, rootWidth, readingHeight) in listOf(
+            Triple(false, 720, 54), Triple(true, 0, 54), Triple(true, 720, 0),
+        )) {
+            val paint = AppleHangulReadingPaintPolicy.owners(
+                rootAttached = attached, rootWidth = rootWidth, rootHeight = 800,
+                readingWidth = 660, readingHeight = readingHeight, overlayAttached = true,
+            )
+            assertTrue(paint.nativeVisible)
+            assertFalse(paint.outerOverlayVisible)
+        }
+    }
+
     @Test fun unchangedReadingAndNativeWordViewIdentitiesAreReusable() {
         val payload = AppleLineWidePronunciationPayload(
             songId = "s", lineKey = "1", sourceText = "君の名は",

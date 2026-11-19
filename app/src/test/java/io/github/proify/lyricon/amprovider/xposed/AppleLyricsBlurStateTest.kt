@@ -21,6 +21,29 @@ import java.lang.reflect.Method
  * 同时固定“七个重复常量只保留一份”的处置。
  */
 class AppleLyricsBlurStateTest {
+    @Test fun `current playback row wins over lingering prior native active row`() {
+        assertEquals(6, AppleLyricsBlurTransitionPolicy.clockAwareFocus(
+            nativeActive = setOf(5, 6), playbackAdapterPosition = 6,
+            previousFocus = 5,
+        ))
+        assertEquals(5, AppleLyricsBlurTransitionPolicy.clockAwareFocus(
+            nativeActive = setOf(5, 6), playbackAdapterPosition = 5,
+            previousFocus = 6,
+        ))
+        assertEquals(5, AppleLyricsBlurTransitionPolicy.clockAwareFocus(
+            nativeActive = setOf(5, 6), playbackAdapterPosition = null,
+            previousFocus = 5,
+        ))
+        assertEquals(6, AppleLyricsBlurTransitionPolicy.clockAwareFocus(
+            nativeActive = setOf(6), playbackAdapterPosition = 7,
+            previousFocus = 5,
+        ))
+        assertNull(AppleLyricsBlurTransitionPolicy.clockAwareFocus(
+            nativeActive = emptySet(), playbackAdapterPosition = 5,
+            previousFocus = 5,
+        ))
+    }
+
 
     @Test fun `native blur never clamps bright glyph pixels onto row edges`() {
         assertTrue(source("AppleLyricsBlurEngine.kt").contains("Shader.TileMode.DECAL"))

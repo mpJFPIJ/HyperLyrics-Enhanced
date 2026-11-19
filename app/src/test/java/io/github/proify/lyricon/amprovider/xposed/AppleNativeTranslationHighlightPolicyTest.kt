@@ -8,6 +8,39 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 
 class AppleNativeTranslationHighlightPolicyTest {
+    @Test fun nativeActiveRowWinsWhenClockIsStaleOrMissing() {
+        val rows = listOf(
+            AppleTranslationFocusCandidate(4, 1_000L, 2_100L),
+            AppleTranslationFocusCandidate(5, 2_000L, 2_800L),
+            AppleTranslationFocusCandidate(7, 3_000L, 3_900L),
+        )
+        assertEquals(1, AppleTranslationFocusPolicy.select(rows, setOf(5), 1_600L))
+        assertEquals(1, AppleTranslationFocusPolicy.select(rows, setOf(5), null))
+        assertNull(AppleTranslationFocusPolicy.select(rows, setOf(9), 2_300L))
+        assertNull(AppleTranslationFocusPolicy.select(rows, emptySet(), 2_300L))
+    }
+
+    @Test fun twoNativeActiveRowsHaveOnlyOneMeaningMatchedToSourceClock() {
+        val rows = listOf(
+            AppleTranslationFocusCandidate(4, 1_000L, 2_100L),
+            AppleTranslationFocusCandidate(5, 2_000L, 2_800L),
+        )
+        assertEquals(0, AppleTranslationFocusPolicy.select(rows, setOf(4, 5), 1_950L))
+        assertEquals(1, AppleTranslationFocusPolicy.select(rows, setOf(4, 5), 2_250L))
+        assertEquals(1, AppleTranslationFocusPolicy.select(rows, setOf(4, 5), null))
+        assertEquals(0, AppleTranslationFocusPolicy.select(rows, null, 1_950L))
+        assertNull(AppleTranslationFocusPolicy.select(rows, null, null))
+    }
+
+    @Test fun unknownHolderPositionCannotBorrowOtherNativeLineHighlight() {
+        val rows = listOf(
+            AppleTranslationFocusCandidate(null, 1_000L, 2_100L),
+            AppleTranslationFocusCandidate(5, 2_000L, 2_800L),
+        )
+        assertEquals(1, AppleTranslationFocusPolicy.select(rows, setOf(5), 2_200L))
+        assertNull(AppleTranslationFocusPolicy.select(rows, setOf(4), 1_300L))
+    }
+
     @Test fun activeKoreanTranslationHasExactlyOneVisiblePaintOwner() {
         val owners = AppleNativeTranslationHighlightPolicy.paintOwners(
             lineActive = true,

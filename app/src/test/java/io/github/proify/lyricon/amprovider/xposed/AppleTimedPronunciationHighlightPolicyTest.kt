@@ -6,6 +6,37 @@ import org.junit.Assert.assertFalse
 import org.junit.Test
 
 class AppleTimedPronunciationHighlightPolicyTest {
+    @Test fun noVerifiedSourcePhoneticsMeansOneHonestLineWindowNotGuessedSyllables() {
+        val units = AppleTimedPronunciationHighlightPolicy.units(
+            sourceText = "溺れ",
+            pronunciation = "오보레",
+            timedWords = listOf(AppleTimedSourceWord("溺れ", 1_000L, 1_800L)),
+        )
+        assertEquals(1, units.size)
+        assertEquals(0, units.single().start)
+        assertEquals("오보레".length, units.single().end)
+        assertEquals(-1, units.single().sourceWordIndex)
+        assertEquals(1_000L, units.single().beginMs)
+        assertEquals(1_800L, units.single().endMs)
+    }
+
+    @Test fun verifiedWholeMorphemeCrossingNativeCellsRetainsItsOneSoundGroup() {
+        val units = AppleTimedPronunciationHighlightPolicy.units(
+            sourceText = "溺れ",
+            pronunciation = "오보레",
+            timedWords = listOf(
+                AppleTimedSourceWord("溺", 1_000L, 1_400L),
+                AppleTimedSourceWord("れ", 1_400L, 1_800L),
+            ),
+            phoneticSpans = listOf(ApplePronunciationSourceToken(0, 2, "오보레", "溺れ")),
+        )
+        assertEquals(1, units.size)
+        assertEquals("오보레", "오보레".substring(units.single().start, units.single().end))
+        assertEquals(1_000L, units.single().beginMs)
+        assertEquals(1_800L, units.single().endMs)
+        assertEquals(-1, units.single().sourceWordIndex)
+    }
+
     @org.junit.Test fun `eachHangulSyllableTracksItsOwnOriginalAppleWordRatherThanBrightestWord`() {
         val timed = listOf(
             AppleTimedSourceWord("みその中", 1_000L, 2_000L),

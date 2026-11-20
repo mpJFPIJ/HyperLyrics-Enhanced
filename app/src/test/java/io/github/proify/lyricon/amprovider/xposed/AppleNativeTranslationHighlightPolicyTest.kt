@@ -222,6 +222,16 @@ class AppleNativeTranslationHighlightPolicyTest {
             null, meaning, meaning))
     }
 
+    @Test fun aSingleHangulGlyphInTheVerifiedNativeMeaningCellStillReceivesFocus() {
+        assertTrue(AppleNativeTranslationHighlightPolicy.shouldRenderTranslationCell(
+            "lyrics_translation_line", "나", "나",
+        ))
+        // Unknown-ID one-glyph fragments remain unsafe to identify by text.
+        assertFalse(AppleNativeTranslationHighlightPolicy.shouldRenderTranslationCell(
+            null, "나", "나",
+        ))
+    }
+
     @Test fun wrappedKoreanTranslationMustHaveOneNativeLineActiveWindow() {
         assertFalse(AppleNativeTranslationHighlightPolicy.lineActive(999L, 1000L, 2000L))
         assertTrue(AppleNativeTranslationHighlightPolicy.lineActive(1000L, 1000L, 2000L))

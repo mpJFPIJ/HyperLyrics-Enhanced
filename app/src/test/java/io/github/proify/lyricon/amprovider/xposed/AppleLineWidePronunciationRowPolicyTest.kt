@@ -7,6 +7,15 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AppleLineWidePronunciationRowPolicyTest {
+    @Test fun existingNativeWordPainterMustNotHaveAnUnverifiedSecondOverlayOwner() {
+        // Apple's own native pronunciation word views already paint every
+        // karaoke cell. A second manager registered on the line row doubles
+        // paint and bypasses the source word's parent gradient.
+        assertFalse(AppleLineWidePronunciationRow::class.java.declaredFields.any { field ->
+            field.type.simpleName == "AppleNativeHangulWordOverlayManager"
+        })
+    }
+
     @Test fun nativeHangulOverlayNeverBorrowsSourceOrTranslationCells() {
         assertTrue(AppleNativeHangulWordPaintPolicy.eligible(
             hangul = true, underPronunciation = true, underTranslation = false,

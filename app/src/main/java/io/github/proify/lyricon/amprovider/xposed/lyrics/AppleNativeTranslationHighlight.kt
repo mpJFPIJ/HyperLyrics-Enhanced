@@ -46,32 +46,38 @@ internal object AppleTranslationRecyclerOwnerPolicy {
     }
 }
 
-/** The host adapter owns active lyric rows. The playback clock resolves its
- * overlapping outgoing/incoming rows; a timestamp alone must never highlight
- * a row which the host has already marked inactive. */
+/** One verified source-line interval owns the meaning's focus. Host active
+ * positions corroborate overlapping intervals but may lag immediately after
+ * a seek or be briefly empty during a RecyclerView update. */
 internal object AppleTranslationFocusPolicy {
     fun select(
         rows: List<AppleTranslationFocusCandidate>,
         nativeActive: Set<Int>?,
         positionMs: Long?,
     ): Int? {
-        val possible = rows.indices.filter { index ->
-            nativeActive == null || rows[index].adapterPosition
-                ?.let(nativeActive::contains) == true
+        if (positionMs != null) {
+            // A remembered native line clock is valid only for an actual
+            // holder position, not a source-text guess or stale placeholder.
+            val timed = rows.indices.filter { index ->
+                rows[index].adapterPosition != null &&
+                    AppleNativeTranslationHighlightPolicy.lineActive(
+                        positionMs, rows[index].beginMs, rows[index].endMs,
+                    )
+            }
+            if (timed.isEmpty()) return null
+            val corroborated = timed.filter { index ->
+                rows[index].adapterPosition?.let { it in nativeActive.orEmpty() } == true
+            }
+            val choices = corroborated.ifEmpty { timed }
+            return choices.maxWithOrNull(compareBy<Int> { rows[it].beginMs }
+                .thenBy { rows[it].adapterPosition ?: -1 })
         }
-        if (possible.isEmpty()) return null
-        val timed = possible.filter { index ->
-            AppleNativeTranslationHighlightPolicy.lineActive(
-                positionMs, rows[index].beginMs, rows[index].endMs,
-            )
-        }
-        val choices = when {
-            timed.isNotEmpty() -> timed
-            nativeActive != null -> possible
-            else -> return null
-        }
-        return choices.maxWithOrNull(compareBy<Int> { rows[it].beginMs }
-            .thenBy { rows[it].adapterPosition ?: -1 })
+        // If the player clock is unavailable, an unambiguous host active row
+        // is the only safe fallback. Never choose a future row from an
+        // arbitrary multi-active set without knowing the playback position.
+        return rows.indices.filter { index ->
+            rows[index].adapterPosition?.let { it in nativeActive.orEmpty() } == true
+        }.singleOrNull()
     }
 }
 

@@ -58,9 +58,9 @@ class AppleMusicSourcePhoneticsTest {
 
         val result = AppleMusicSourcePhonetics.attach(line, "駄目", reading)
 
-        assertEquals("PROJECTED_NATIVE_WORDS", result.pronunciationStatus)
+        assertEquals("LINE_WIDE", result.pronunciationStatus)
         assertEquals("다메", result.roma)
-        assertEquals(listOf("다", "메"), result.pronunciationWords?.map { it.hangul })
+        assertNull(result.pronunciationWords)
         assertEquals("안 돼", result.translation)
         assertTrue(result.pronunciationSpans.orEmpty().isNotEmpty())
     }

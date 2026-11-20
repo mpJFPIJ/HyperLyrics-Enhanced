@@ -158,13 +158,60 @@ internal object AppleNativeTranslationHighlightPolicy {
         observedSourceCells: List<String>,
     ): Boolean {
         if (pending.songId != currentSongId || pending.revision != currentRevision ||
-            boundAdapterPosition == null || currentAdapterPosition != boundAdapterPosition
+            boundAdapterPosition == null || boundAdapterPosition < 0 ||
+            currentAdapterPosition != boundAdapterPosition
         ) return false
         return observedSourceCells.isEmpty() ||
-            AppleLineWidePronunciationRowPolicy.verifiedInsertionIndex(
-                pending.sourceText, observedSourceCells,
-            ) != null
+            sourceCellsMatchExactly(pending.sourceText, observedSourceCells)
     }
+
+    /** The native observer collects song_lyrics_word cells only. A matching
+     * prefix (including a Japanese + Latin continuation) is not one source
+     * line. Do not equate a string prefix with an occurrence identity. */
+    fun sourceCellsMatchExactly(source: String, sourceCells: List<String>): Boolean {
+        if (sourceCells.isEmpty()) return false
+        val expected = AppleLineWidePronunciationRowPolicy.sourceKey(source)
+        val actual = AppleLineWidePronunciationRowPolicy.sourceKey(
+            sourceCells.joinToString(separator = ""),
+        )
+        return expected.isNotEmpty() && actual == expected
+    }
+
+    /** Missing per-holder getter: only an already timed occurrence at THIS
+     * adapter position can supply a fallback context, never a global
+     * same-source cache (which cannot distinguish repeated choruses). */
+    fun verifiedFallbackContext(
+        byPosition: Map<Int, AppleTranslationLineContext>,
+        indexedSongId: String?,
+        indexedRevision: Long,
+        currentSongId: String?,
+        currentRevision: Long,
+        adapterPosition: Int?,
+        observedSourceCells: List<String>,
+    ): AppleTranslationLineContext? {
+        if (adapterPosition == null || adapterPosition < 0 ||
+            indexedSongId != currentSongId || indexedRevision != currentRevision
+        ) return null
+        return byPosition[adapterPosition]?.takeIf { candidate ->
+            candidate.songId == currentSongId && candidate.revision == currentRevision &&
+                sourceCellsMatchExactly(candidate.sourceText, observedSourceCells)
+        }
+    }
+
+    /** When layout waits for native translation cells, a genuinely new lyric
+     * must retire the previous painter immediately, including on retries. */
+    fun mustStopPendingForContext(
+        pending: AppleTranslationLineContext,
+        requested: AppleTranslationLineContext,
+        boundAdapterPosition: Int?,
+        currentSongId: String?,
+        currentRevision: Long,
+        currentAdapterPosition: Int?,
+        observedSourceCells: List<String>,
+    ): Boolean = pending != requested || !mayKeepPendingPainter(
+        pending, boundAdapterPosition, currentSongId, currentRevision,
+        currentAdapterPosition, observedSourceCells,
+    )
 
     fun eligibleKoreanMeaning(translationVisible: Boolean, koreanTargetSelected: Boolean): Boolean =
         translationVisible && koreanTargetSelected
@@ -236,8 +283,7 @@ internal class AppleNativeTranslationHighlight(
     private fun livePulses(): List<Pulse> = pulses.values.mapNotNull { it.get() }
     private val bindingGenerations = WeakHashMap<View, Long>()
     private val bindingLifecycle = WeakHashMap<View, AppleTranslationBindingLifecycle>()
-    private val bySource = LinkedHashMap<String, AppleTranslationLineContext>()
-    private val ambiguousSources = HashSet<String>()
+    private val byPosition = LinkedHashMap<Int, AppleTranslationLineContext>()
     private var indexedSongId: String? = null
     private var indexedRevision = -1L
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -271,30 +317,17 @@ internal class AppleNativeTranslationHighlight(
         refreshDeadlineMs = Long.MAX_VALUE
     }
 
-    private fun sourceKey(text: String): String =
-        AppleLineWidePronunciationRowPolicy.sourceKey(text)
-
-    private fun rememberSource(ctx: AppleTranslationLineContext) {
-        synchronized(bySource) {
+    private fun rememberPosition(ctx: AppleTranslationLineContext, adapterPosition: Int?) {
+        synchronized(byPosition) {
             if (indexedSongId != ctx.songId || indexedRevision != ctx.revision ||
-                bySource.size > 512
+                byPosition.size > 512
             ) {
-                bySource.clear()
-                ambiguousSources.clear()
+                byPosition.clear()
                 indexedSongId = ctx.songId
                 indexedRevision = ctx.revision
             }
-            val key = sourceKey(ctx.sourceText)
-            if (key.isBlank() || key in ambiguousSources) return
-            val previous = bySource[key]
-            // The same chorus may have multiple distinct timing windows:
-            // don't highlight an unrelated recycled holder by guessing.
-            if (previous != null && previous.beginMs != ctx.beginMs) {
-                bySource.remove(key)
-                ambiguousSources.add(key)
-            } else {
-                bySource[key] = ctx
-            }
+            if (adapterPosition != null && adapterPosition >= 0)
+                byPosition[adapterPosition] = ctx
         }
     }
 
@@ -306,6 +339,7 @@ internal class AppleNativeTranslationHighlight(
         endMs: Long,
         translation: String,
         revision: Long,
+        adapterPosition: Int? = null,
     ) {
         if (songId.isNullOrBlank() || sourceText.isNullOrBlank() ||
             beginMs < 0L || endMs <= beginMs || translation.isBlank()
@@ -314,7 +348,7 @@ internal class AppleNativeTranslationHighlight(
             songId, sourceText, beginMs, endMs, translation, revision,
         )
         byHolder.remember(holder, ctx)
-        rememberSource(ctx)
+        rememberPosition(ctx, adapterPosition)
     }
 
     fun beginHolderBinding(holder: Any?, root: View?) {
@@ -336,6 +370,7 @@ internal class AppleNativeTranslationHighlight(
         enabled: Boolean,
         playbackPositionMs: () -> Long?,
         observedSourceCells: List<String> = emptyList(),
+        observeSourceCells: () -> List<String> = { observedSourceCells },
         holderAdapterPosition: Int? = null,
         retry: Int = 0,
         isCurrent: () -> Boolean = { true },
@@ -360,8 +395,10 @@ internal class AppleNativeTranslationHighlight(
                     root.isAttachedToWindow && isCurrent()
                 ) bind(
                     holder, root, currentSongId, revision, enabled,
-                    playbackPositionMs, observedSourceCells, holderAdapterPosition,
-                    retry + 1, isCurrent,
+                    playbackPositionMs, observedSourceCells = observeSourceCells(),
+                    observeSourceCells = observeSourceCells,
+                    holderAdapterPosition = holderAdapterPosition,
+                    retry = retry + 1, isCurrent = isCurrent,
                 )
             }, when (retry) {
                 0 -> 24L
@@ -373,15 +410,11 @@ internal class AppleNativeTranslationHighlight(
         // consuming this context on the first pass made subsequent calls lose
         // their source clock and log translation_context_missing.
         val holderCtx = byHolder.forHolder(holder)
-        val fallback = if (holderCtx == null && currentSongId != null &&
-            observedSourceCells.isNotEmpty()
-        ) synchronized(bySource) {
-            if (indexedSongId != currentSongId || indexedRevision != revision) null
-            else bySource.values.singleOrNull { candidate ->
-                AppleLineWidePronunciationRowPolicy.verifiedInsertionIndex(
-                    candidate.sourceText, observedSourceCells,
-                ) != null
-            }
+        val fallback = if (holderCtx == null) synchronized(byPosition) {
+            AppleNativeTranslationHighlightPolicy.verifiedFallbackContext(
+                byPosition, indexedSongId, indexedRevision, currentSongId,
+                revision, holderAdapterPosition, observedSourceCells,
+            )
         } else null
         val ctx = holderCtx ?: fallback
         if (ctx == null) {
@@ -416,7 +449,32 @@ internal class AppleNativeTranslationHighlight(
             return keepPending
         }
         if (!enabled || ctx.songId != currentSongId || ctx.revision != revision) {
-            stopOldPulse()
+            stopOldPulse(force = true)
+            return false
+        }
+        val old = pulseAt(root)
+        if (old != null && (!old.isSafeFor(
+                currentSongId, revision, holderAdapterPosition, observedSourceCells,
+            ) || AppleNativeTranslationHighlightPolicy.mustStopPendingForContext(
+                old.ctx, ctx, old.adapterPosition, currentSongId, revision,
+                holderAdapterPosition, observedSourceCells,
+            ))
+        ) stopOldPulse(force = true)
+
+        // A timed holder getter is strong evidence of ownership, but Apple's
+        // Japanese word views may still be from its previous bind. Wait for
+        // their actual replacement before installing the new painter.
+        if (observedSourceCells.isNotEmpty() &&
+            !AppleNativeTranslationHighlightPolicy.sourceCellsMatchExactly(
+                ctx.sourceText, observedSourceCells,
+            )
+        ) {
+            AppleLyricUiRuntimeProbe.record(
+                "translation_source_mismatch",
+                "sourceCellCount=${observedSourceCells.size} retry=$retry",
+                root,
+            )
+            retryAfterLayout(ctx)
             return false
         }
         val texts = mutableListOf<TextView>()

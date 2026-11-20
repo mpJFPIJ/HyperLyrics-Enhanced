@@ -146,7 +146,7 @@ class AppleNativeTranslationHighlightPolicyTest {
         val first = AppleTranslationLineContext(
             "song", "君の名は", 1_000L, 2_000L, "너의 이름은", 7L,
         )
-        val unchangedCells = listOf("君", "の", "名は", "너의 이름은")
+        val unchangedCells = listOf("君", "の", "名は")
         val policy = AppleNativeTranslationHighlightPolicy
 
         // A redundant bind of the same source/adapter row may retain the
@@ -167,14 +167,81 @@ class AppleNativeTranslationHighlightPolicyTest {
         assertFalse(policy.mayKeepPendingPainter(
             first, 12, "song", 7L, 12, listOf("別", "の", "歌", "다른 노래"),
         ))
+        // The native observer supplies only song_lyrics_word cells. A Latin
+        // continuation is still original text, not proof of a Korean meaning.
+        assertFalse(policy.mayKeepPendingPainter(
+            first, 12, "song", 7L, 12, unchangedCells + "LOVE",
+        ))
         assertFalse(policy.mayKeepPendingPainter(
             first, 12, "song", 7L, null, unchangedCells,
+        ))
+        assertFalse(policy.mayKeepPendingPainter(
+            first, -1, "song", 7L, -1, unchangedCells,
         ))
         assertFalse(policy.mayKeepPendingPainter(
             first, 12, "other song", 7L, 12, unchangedCells,
         ))
         assertFalse(policy.mayKeepPendingPainter(
             first, 12, "song", 8L, 12, unchangedCells,
+        ))
+    }
+
+    @Test fun cachedSourceWithoutTheSameVerifiedAdapterRowNeverOwnsAnotherMeaning() {
+        val first = AppleTranslationLineContext(
+            "song", "君の名は", 1_000L, 2_000L, "너의 이름은", 7L,
+        )
+        val repeated = first.copy(beginMs = 20_000L, endMs = 21_000L)
+        val byPosition = mapOf(12 to first, 13 to repeated)
+        val cells = listOf("君", "の", "名は")
+        val policy = AppleNativeTranslationHighlightPolicy
+
+        assertEquals(first, policy.verifiedFallbackContext(
+            byPosition, "song", 7L, "song", 7L, 12, cells,
+        ))
+        assertEquals(repeated, policy.verifiedFallbackContext(
+            byPosition, "song", 7L, "song", 7L, 13, cells,
+        ))
+        // If 13 has never supplied its timed native getter, a cached 12
+        // cannot be reused merely because its Japanese cells are identical.
+        assertNull(policy.verifiedFallbackContext(
+            mapOf(12 to first), "song", 7L, "song", 7L, 13, cells,
+        ))
+        assertNull(policy.verifiedFallbackContext(
+            byPosition, "song", 7L, "song", 7L, null, cells,
+        ))
+        assertNull(policy.verifiedFallbackContext(
+            byPosition, "song", 7L, "song", 7L, -1, cells,
+        ))
+        assertNull(policy.verifiedFallbackContext(
+            byPosition, "song", 7L, "song", 7L, 12, cells + "LOVE",
+        ))
+        assertNull(policy.verifiedFallbackContext(
+            byPosition, "song", 7L, "song", 8L, 12, cells,
+        ))
+        assertNull(policy.verifiedFallbackContext(
+            byPosition, "song", 7L, "other", 7L, 12, cells,
+        ))
+    }
+
+    @Test fun changedTranslationContextMustDropPendingPainterEvenOnLayoutRetry() {
+        val first = AppleTranslationLineContext(
+            "song", "最初", 1_000L, 2_000L, "처음", 7L,
+        )
+        val second = first.copy(sourceText = "次", beginMs = 2_000L,
+            endMs = 3_000L, translation = "다음")
+        val policy = AppleNativeTranslationHighlightPolicy
+
+        assertTrue(policy.mustStopPendingForContext(
+            first, second, 12, "song", 7L, 12, listOf("最初"),
+        ))
+        assertFalse(policy.mustStopPendingForContext(
+            first, first.copy(), 12, "song", 7L, 12, listOf("最初"),
+        ))
+        assertTrue(policy.mustStopPendingForContext(
+            first, first, 12, "song", 7L, 13, listOf("最初"),
+        ))
+        assertTrue(policy.mustStopPendingForContext(
+            first, first, 12, "song", 7L, 12, listOf("次"),
         ))
     }
 

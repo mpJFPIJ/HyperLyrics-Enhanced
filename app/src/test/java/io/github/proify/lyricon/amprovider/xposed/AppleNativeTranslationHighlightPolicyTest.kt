@@ -142,6 +142,42 @@ class AppleNativeTranslationHighlightPolicyTest {
         ))
     }
 
+    @Test fun pendingMeaningCannotSurviveARebindToAnotherLyricInTheSameSong() {
+        val first = AppleTranslationLineContext(
+            "song", "君の名は", 1_000L, 2_000L, "너의 이름은", 7L,
+        )
+        val unchangedCells = listOf("君", "の", "名は", "너의 이름은")
+        val policy = AppleNativeTranslationHighlightPolicy
+
+        // A redundant bind of the same source/adapter row may retain the
+        // painter while Apple's native translation getter catches up.
+        assertTrue(policy.mayKeepPendingPainter(
+            first, 12, "song", 7L, 12, unchangedCells,
+        ))
+        assertTrue(policy.mayKeepPendingPainter(
+            first, 12, "song", 7L, 12, emptyList(),
+        ))
+
+        // A recycled holder can still display the *old* TextView text for a
+        // moment. Equal song/revision and intact text are not enough: the
+        // native adapter row is a different lyric, even in a repeated chorus.
+        assertFalse(policy.mayKeepPendingPainter(
+            first, 12, "song", 7L, 13, unchangedCells,
+        ))
+        assertFalse(policy.mayKeepPendingPainter(
+            first, 12, "song", 7L, 12, listOf("別", "の", "歌", "다른 노래"),
+        ))
+        assertFalse(policy.mayKeepPendingPainter(
+            first, 12, "song", 7L, null, unchangedCells,
+        ))
+        assertFalse(policy.mayKeepPendingPainter(
+            first, 12, "other song", 7L, 12, unchangedCells,
+        ))
+        assertFalse(policy.mayKeepPendingPainter(
+            first, 12, "song", 8L, 12, unchangedCells,
+        ))
+    }
+
     @Test fun holderBindStartDefersPainterDisposalUntilNewContextIsKnown() {
         val lifecycle = AppleTranslationBindingLifecycle()
         val existing = AppleTranslationLineContext("song", "最初", 1000, 2000, "처음", 4)

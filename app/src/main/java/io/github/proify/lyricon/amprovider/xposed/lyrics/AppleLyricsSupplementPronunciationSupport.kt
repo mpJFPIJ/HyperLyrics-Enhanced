@@ -103,8 +103,12 @@ internal fun AppleLyricsSupplementHooks.hookAppleLyricTextGetter(clazz: Class<*>
                 ) {
                     val revision = nativeOnlineTranslationStore.revision()
                     val rawSource = nativeOriginalLineText(chain.thisObject)
+                    val hasNativeContextConsumer = timedContext?.holder != null ||
+                        (timedContext?.adapterInstance != null &&
+                            timedContext?.position?.let { it >= 0 } == true)
                     val displayedNativeSource = if (
-                        rawSource != null && AppleLyricTextTransform.isTransformEnabled()
+                        rawSource != null && hasNativeContextConsumer &&
+                        AppleLyricTextTransform.isTransformEnabled()
                     ) {
                         // The host transforms each real native word getter,
                         // not the whole line. A dictionary phrase may cross

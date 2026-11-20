@@ -65,6 +65,14 @@ class AppleNativeTranslationHighlightPolicyTest {
         assertNull(AppleTranslationFocusPolicy.select(rows, emptySet(), null))
     }
 
+    @Test fun clockExactEndAndPrestartCannotBorrowAHostStaleFocus() {
+        val rows = listOf(AppleTranslationFocusCandidate(4, 0L, 500L))
+        assertEquals(0, AppleTranslationFocusPolicy.select(rows, setOf(4), 0L))
+        assertEquals(0, AppleTranslationFocusPolicy.select(rows, setOf(4), 499L))
+        assertNull(AppleTranslationFocusPolicy.select(rows, setOf(4), 500L))
+        assertNull(AppleTranslationFocusPolicy.select(rows, setOf(4), -1L))
+    }
+
     @Test fun unknownHolderPositionCannotBorrowOtherNativeLineHighlight() {
         val rows = listOf(
             AppleTranslationFocusCandidate(null, 1_000L, 2_100L),

@@ -54,6 +54,19 @@ These changes address **verified code defects**, but are not equivalent to a suc
 | [#236](https://github.com/mpJFPIJ/HyperLyrics-Enhanced/actions/runs/44711794149) | Initial correction | 3,059 tests, only 1 obsolete projection expectation failed; updated that expectation to line-wide mode. |
 | [#237](https://github.com/mpJFPIJ/HyperLyrics-Enhanced/actions/runs/44713118814) | Recheck corrected baseline | Canceled automatically on branch update; **not** a passing test run. |
 | [#238](https://github.com/mpJFPIJ/HyperLyrics-Enhanced/actions/runs/44714448180) | Actual second pre-fix RED | **3,063 tests, 4 expected assertions failed, 5 skipped**: duplicate native reading overlay, single-syllable meaning exclusion, invented `溺れ` sound division, unverified syllable sweep. Other 3,059 tests passed. |
+| [#239](https://github.com/mpJFPIJ/HyperLyrics-Enhanced/actions/runs/44716655672) | Candidate GREEN | JVM tests, debug/release lint and signed Android APK build passed. This is **not** native-device A–I validation. |
+| [#240](https://github.com/mpJFPIJ/HyperLyrics-Enhanced/actions/runs/44740919918) | Paused-seek RED | 3,064 JVM tests, **one intentional `AssertionError`** in `explicitZeroSeekWithUnreadableClockMustNotReviveThePreviousLyric`, five previously skipped; reproduced on the original clock selector before any seek fix. |
+
+## Continued seek investigation — source evidence, not a device claim
+
+The source review after #239 identifies a **distinct, testable paused-seek clock defect** relevant to G/H:
+
+1. `ApplePlaybackHooks.installExoMediaPlayer` records an accepted Exo `seekToPosition` only in `lastExplicitSeekAtMs`/`lastExplicitSeekPosition`; it does **not** update the paused fallback clock. `resumeCoroutineTask` refreshes `lastTimingSamplePosition` only while the timeline is advancing, so a paused seek can leave the previous location as the only remembered clock sample.
+2. `ApplePlaybackHooks.currentPositionMs` passes `explicitSeekToZero` for just 2,500 ms after the seek. After expiration, a legitimate `currentMs=0` with older `lastValidMs>0` is classified as an unreadable paused player and returns the **previous** lyric position. The special case was time-limited rather than tied to the clock event's actual provenance.
+3. Even **inside** that interval, `ApplePausedPlaybackClockPolicy.select` returns `lastValidMs` immediately when `currentMs=null && !timelineAdvancing`, without checking `explicitSeekToZero`. Thus a paused return-to-start with temporarily unavailable getter deterministically revives the previous lyric.
+4. The existing `ApplePausedPlaybackClockPolicyTest` covered `currentMs=0, explicitSeekToZero=true` but not the null-current boundary or post-expiration case. Explicit seek-to-nonzero with transient `currentMs=0` also lacked an event-scoped fallback test.
+
+These defects are confirmed by the control flow and reproducible unit-level inputs; the #234 silent footage **cannot** establish that a specific recorded seek exhibited them. The correct time provenance must distinguish the latest actual player sample from an accepted seek target, be scoped to the same Exo player and song, and prefer a later valid player observation. Arbitrary audio timing offsets or guessed syllable times are inappropriate. The paused MediaSession lyric anchor must also be refreshed when a valid seek occurs; the old code only published this on pause/play state transition. Retest on-device before marking the visible seeking/highlight bug solved.
 
 ## Required handoff replay
 

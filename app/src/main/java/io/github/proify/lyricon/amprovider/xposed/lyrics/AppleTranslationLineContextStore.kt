@@ -10,6 +10,9 @@ internal data class AppleTranslationLineContext(
     val endMs: Long,
     val translation: String,
     val revision: Long,
+    /** Displayed native word-getter concatenation (if verified). This may
+     * differ from whole-line Traditional→Simplified phrase conversion. */
+    val displayedSourceText: String? = null,
 )
 
 /** A renderer can bind the same holder more than once before it is recycled. */

@@ -187,7 +187,25 @@ internal object AppleNativeTranslationHighlightPolicy {
         val actual = AppleLineWidePronunciationRowPolicy.sourceKey(
             sourceCells.joinToString(separator = ""),
         )
-        return expected.isNotEmpty() && actual == expected
+        val raw = AppleLineWidePronunciationRowPolicy.sourceKey(source)
+        return actual.isNotEmpty() && (actual == expected || actual == raw)
+    }
+
+    /** Host word getters transform each word individually. Whole-line
+     * Traditional→Simplified phrase conversion is not equivalent when the
+     * native karaoke model splits a dictionary phrase across word cells. */
+    fun displayedNativeWordSource(
+        originalLine: String,
+        rawWords: List<String>,
+        displayWord: (String) -> String,
+    ): String? {
+        if (rawWords.isEmpty()) return null
+        val originalKey = AppleLineWidePronunciationRowPolicy.sourceKey(originalLine)
+        val wordKey = AppleLineWidePronunciationRowPolicy.sourceKey(
+            rawWords.joinToString(separator = ""),
+        )
+        if (originalKey.isEmpty() || wordKey != originalKey) return null
+        return rawWords.joinToString(separator = "", transform = displayWord)
     }
 
     /** Missing per-holder getter: only an already timed occurrence at THIS
@@ -201,7 +219,7 @@ internal object AppleNativeTranslationHighlightPolicy {
         currentRevision: Long,
         adapterPosition: Int?,
         observedSourceCells: List<String>,
-        displaySource: (String) -> String = { it },
+        displaySource: (AppleTranslationLineContext) -> String = { it.sourceText },
     ): AppleTranslationLineContext? {
         if (adapterPosition == null || adapterPosition < 0 ||
             indexedSongId != currentSongId || indexedRevision != currentRevision
@@ -210,7 +228,7 @@ internal object AppleNativeTranslationHighlightPolicy {
             candidate.songId == currentSongId && candidate.revision == currentRevision &&
                 sourceCellsMatchExactly(
                     candidate.sourceText, observedSourceCells,
-                    displaySource(candidate.sourceText),
+                    displaySource(candidate),
                 )
         }
     }
@@ -325,7 +343,7 @@ internal class AppleTranslationOccurrenceIndex {
         adapterOwner: Any?,
         adapterPosition: Int?,
         observedSourceCells: List<String>,
-        displaySource: (String) -> String = { it },
+        displaySource: (AppleTranslationLineContext) -> String = { it.sourceText },
     ): AppleTranslationLineContext? {
         val rows = adapterOwner?.let { byAdapter[it] } ?: return null
         return AppleNativeTranslationHighlightPolicy.verifiedFallbackContext(
@@ -333,6 +351,30 @@ internal class AppleTranslationOccurrenceIndex {
             adapterPosition, observedSourceCells, displaySource,
         )
     }
+}
+
+/** Only native translation getter code may write byHolder. Fallback resolves
+ * one current attempt, and must be reconsidered against freshly observed
+ * source cells on EVERY delayed bind, never promoted into getter provenance. */
+internal class AppleTranslationContextResolver(
+    private val byHolder: AppleTranslationLineContextStore,
+    private val occurrenceIndex: AppleTranslationOccurrenceIndex,
+) {
+    fun resolve(
+        holder: Any?,
+        currentSongId: String?,
+        revision: Long,
+        adapterOwner: Any?,
+        adapterPosition: Int?,
+        observedSourceCells: List<String>,
+        displaySource: (AppleTranslationLineContext) -> String = { ctx ->
+            ctx.displayedSourceText ?: ctx.sourceText
+        },
+    ): AppleTranslationLineContext? = byHolder.forHolder(holder) ?:
+        occurrenceIndex.verifiedFallback(
+            currentSongId, revision, adapterOwner, adapterPosition,
+            observedSourceCells, displaySource,
+        )
 }
 
 internal class AppleNativeTranslationHighlight(
@@ -348,6 +390,7 @@ internal class AppleNativeTranslationHighlight(
     private val bindingGenerations = WeakHashMap<View, Long>()
     private val bindingLifecycle = WeakHashMap<View, AppleTranslationBindingLifecycle>()
     private val occurrenceIndex = AppleTranslationOccurrenceIndex()
+    private val contextResolver = AppleTranslationContextResolver(byHolder, occurrenceIndex)
     private val mainHandler = Handler(Looper.getMainLooper())
     private var refreshScheduled = false
     private var refreshDeadlineMs = Long.MAX_VALUE
@@ -389,12 +432,14 @@ internal class AppleNativeTranslationHighlight(
         revision: Long,
         adapterPosition: Int? = null,
         adapterOwner: Any? = null,
+        displayedSourceText: String? = null,
     ) {
         if (songId.isNullOrBlank() || sourceText.isNullOrBlank() ||
             beginMs < 0L || endMs <= beginMs || translation.isBlank()
         ) return
         val ctx = AppleTranslationLineContext(
             songId, sourceText, beginMs, endMs, translation, revision,
+            displayedSourceText,
         )
         byHolder.remember(holder, ctx)
         occurrenceIndex.remember(ctx, adapterOwner, adapterPosition)
@@ -437,9 +482,8 @@ internal class AppleNativeTranslationHighlight(
             }
         }
         val generation = bindingGenerations[root] ?: 0L
-        fun retryAfterLayout(ctx: AppleTranslationLineContext? = null) {
+        fun retryAfterLayout() {
             if (retry >= 3 || !enabled) return
-            if (ctx != null) byHolder.remember(holder, ctx)
             root.postDelayed({
                 if (bindingGenerations[root] == generation &&
                     root.isAttachedToWindow && isCurrent()
@@ -460,13 +504,15 @@ internal class AppleNativeTranslationHighlight(
         // A holder may be bound repeatedly while its lyric line is visible;
         // consuming this context on the first pass made subsequent calls lose
         // their source clock and log translation_context_missing.
-        val holderCtx = byHolder.forHolder(holder)
-        val fallback = if (holderCtx == null) occurrenceIndex.verifiedFallback(
-            currentSongId, revision, adapterOwner, holderAdapterPosition,
+        val ctx = contextResolver.resolve(
+            holder, currentSongId, revision, adapterOwner, holderAdapterPosition,
             observedSourceCells,
-            displaySource = { source -> AppleLyricTextTransform.transform(source) ?: source },
-        ) else null
-        val ctx = holderCtx ?: fallback
+            displaySource = { candidate ->
+                candidate.displayedSourceText ?:
+                    (AppleLyricTextTransform.transform(candidate.sourceText)
+                        ?: candidate.sourceText)
+            },
+        )
         if (ctx == null) {
             // Apple may invoke a redundant bind before its translation getter.
             // Keep the existing painter only while the same host text is intact.
@@ -510,20 +556,24 @@ internal class AppleNativeTranslationHighlight(
             ) || AppleNativeTranslationHighlightPolicy.mustStopPendingForContext(
                 old.ctx, ctx, old.adapterPosition, currentSongId, revision,
                 holderAdapterPosition, observedSourceCells, old.adapterOwner,
-                adapterOwner, AppleLyricTextTransform.transform(old.ctx.sourceText)
-                    ?: old.ctx.sourceText,
+                adapterOwner, old.ctx.displayedSourceText ?:
+                    (AppleLyricTextTransform.transform(old.ctx.sourceText)
+                        ?: old.ctx.sourceText),
             ))
         ) stopOldPulse(force = true)
 
-        // An exact getter within this holder's bind establishes identity.
-        // Its raw Japanese line may legitimately differ from displayed cells
-        // after optional Traditional->Simplified per-word transformation.
-        // Source-derived fallback already required positive exact displayed
-        // cells, so an unrelated cached line cannot reach the painter.
-        if (holderCtx == null &&
+        // Opaque/empty word views are not contradictory proof. However, when
+        // actual readable Japanese cells disagree with a context (even a
+        // fresh getter while native views are still from the previous bind),
+        // never install a painter on the old cells. Displayed source respects
+        // the exact word split under optional Traditional→Simplified mode.
+        if (AppleNativeTranslationHighlightPolicy.sourceCellsHaveReadableText(
+                observedSourceCells,
+            ) &&
             !AppleNativeTranslationHighlightPolicy.sourceCellsMatchExactly(
                 ctx.sourceText, observedSourceCells,
-                AppleLyricTextTransform.transform(ctx.sourceText) ?: ctx.sourceText,
+                ctx.displayedSourceText ?:
+                    (AppleLyricTextTransform.transform(ctx.sourceText) ?: ctx.sourceText),
             )
         ) {
             AppleLyricUiRuntimeProbe.record(
@@ -531,7 +581,7 @@ internal class AppleNativeTranslationHighlight(
                 "sourceCellCount=${observedSourceCells.size} retry=$retry",
                 root,
             )
-            retryAfterLayout(ctx)
+            retryAfterLayout()
             return false
         }
         val texts = mutableListOf<TextView>()
@@ -560,7 +610,7 @@ internal class AppleNativeTranslationHighlight(
                 "candidateTextLen=${ctx.translation.length} retry=$retry",
                 root,
             )
-            retryAfterLayout(ctx)
+            retryAfterLayout()
             return false
         }
 
@@ -583,7 +633,7 @@ internal class AppleNativeTranslationHighlight(
         }
         if (translationView.isEmpty()) {
             stopOldPulse()
-            retryAfterLayout(ctx)
+            retryAfterLayout()
             return false
         }
         val existing = pulseAt(root)
@@ -778,8 +828,9 @@ internal class AppleNativeTranslationHighlight(
                 observedSourceCells = observedSourceCells,
                 boundAdapterOwner = adapterOwner,
                 currentAdapterOwner = currentAdapterOwner,
-                displayedSource = AppleLyricTextTransform.transform(ctx.sourceText)
-                    ?: ctx.sourceText,
+                displayedSource = ctx.displayedSourceText ?:
+                    (AppleLyricTextTransform.transform(ctx.sourceText)
+                        ?: ctx.sourceText),
             )
 
         private fun attachForeground(color: Int): Boolean {

@@ -102,16 +102,45 @@ internal fun AppleLyricsSupplementHooks.hookAppleLyricTextGetter(clazz: Class<*>
                     lineEnd != null && lineEnd > lineBegin && result.isNotBlank()
                 ) {
                     val revision = nativeOnlineTranslationStore.revision()
+                    val rawSource = nativeOriginalLineText(chain.thisObject)
+                    val displayedNativeSource = if (
+                        rawSource != null && AppleLyricTextTransform.isTransformEnabled()
+                    ) {
+                        // The host transforms each real native word getter,
+                        // not the whole line. A dictionary phrase may cross
+                        // word boundaries (反 + 覆 must remain 反覆).
+                        val rawNativeWords = AppleLyricTextTransform.withRawReads {
+                            runCatching {
+                                nativeVectorItems(
+                                    lyricsNativeCall(
+                                        chain.thisObject,
+                                        AppleMusicRuntimeMember.LYRICS_NATIVE_WORDS_METHOD,
+                                    ),
+                                    limit = 256,
+                                ).mapNotNull { word ->
+                                    lyricsNativeCall(
+                                        word, AppleMusicRuntimeMember.LYRICS_NATIVE_LINE_TEXT_METHOD,
+                                    ) as? String
+                                }
+                            }.getOrNull().orEmpty()
+                        }
+                        AppleNativeTranslationHighlightPolicy.displayedNativeWordSource(
+                            originalLine = rawSource,
+                            rawWords = rawNativeWords,
+                            displayWord = { AppleLyricTextTransform.transform(it) ?: it },
+                        )
+                    } else null
                     translationLineHighlight.remember(
                         holder = timedContext?.holder,
                         songId = currentAppleLyricsSongId,
-                        sourceText = nativeOriginalLineText(chain.thisObject),
+                        sourceText = rawSource,
                         beginMs = lineBegin,
                         endMs = lineEnd,
                         translation = result,
                         revision = revision,
                         adapterPosition = timedContext?.position,
                         adapterOwner = timedContext?.adapterInstance,
+                        displayedSourceText = displayedNativeSource,
                     )
                     // This exact native getter executes inside its holder bind,
                     // so this is a verified adapter-row↔native-line time axis.

@@ -239,12 +239,63 @@ class AppleNativeTranslationHighlightPolicyTest {
         assertNull(index.verifiedFallback("song", 7L, adapter, 2, listOf("爱")))
         assertEquals(raw, index.verifiedFallback(
             "song", 7L, adapter, 2, listOf("爱"),
-            displaySource = { if (it == "愛") "爱" else it },
+            displaySource = { if (it.sourceText == "愛") "爱" else it.sourceText },
         ))
         assertFalse(policy.sourceCellsMatchExactly("愛", listOf(""), "爱"))
         assertFalse(policy.sourceCellsMatchExactly("君", listOf("君", "LOVE")))
         assertFalse(policy.sourceCellsHaveReadableText(listOf("", "", "")))
         assertTrue(policy.sourceCellsHaveReadableText(listOf("", "君", "")))
+    }
+
+    @Test fun displayedSourceRespectsNativeWordSplitsNotWholeLinePhraseConversion() {
+        val policy = AppleNativeTranslationHighlightPolicy
+        val nativeWords = listOf("反", "覆", "愛")
+        val displayed = policy.displayedNativeWordSource(
+            originalLine = "反覆愛",
+            rawWords = nativeWords,
+            displayWord = { if (it == "愛") "爱" else it },
+        )
+        // Dictionary converts the whole phrase 反覆 -> 反复, but separate
+        // word getters do not; the expected TextView cells are 反, 覆, 爱.
+        assertEquals("反覆爱", displayed)
+        assertTrue(policy.sourceCellsMatchExactly(
+            "反覆愛", listOf("反", "覆", "爱"), displayed!!,
+        ))
+        assertFalse(policy.sourceCellsMatchExactly(
+            "反覆愛", listOf("反", "覆", "爱"), "反复爱",
+        ))
+        assertNull(policy.displayedNativeWordSource(
+            originalLine = "反覆愛", rawWords = listOf("反", "愛"),
+            displayWord = { it },
+        ))
+    }
+
+    @Test fun fallbackIsNeverPromotedIntoActualHolderGetterAcrossSourceRetry() {
+        val holder = Any()
+        val adapter = Any()
+        val contexts = AppleTranslationLineContextStore()
+        val index = AppleTranslationOccurrenceIndex()
+        val resolver = AppleTranslationContextResolver(contexts, index)
+        val first = AppleTranslationLineContext("song", "最初", 1_000, 2_000, "나", 7)
+        val second = AppleTranslationLineContext("song", "次", 3_000, 4_000, "나는", 7)
+        index.remember(first, adapter, 12)
+
+        // Bind #1 sees old native cells A: source-cache fallback is allowed,
+        // but it MUST NOT mutate holder getter provenance as layout retries.
+        assertEquals(first, resolver.resolve(
+            holder, "song", 7L, adapter, 12, listOf("最初"),
+        ))
+        assertNull(contexts.forHolder(holder))
+        // Native source changes to B before translation cells are ready.
+        assertNull(resolver.resolve(holder, "song", 7L, adapter, 12, listOf("次")))
+        index.remember(second, adapter, 12)
+        assertEquals(second, resolver.resolve(
+            holder, "song", 7L, adapter, 12, listOf("次"),
+        ))
+        assertNull(contexts.forHolder(holder))
+        // The actual native getter is the only actor permitted to remember.
+        contexts.remember(holder, second)
+        assertEquals(second, resolver.resolve(holder, "song", 7L, adapter, 12, emptyList()))
     }
 
     @Test fun cachedSourceWithoutTheSameVerifiedAdapterRowNeverOwnsAnotherMeaning() {

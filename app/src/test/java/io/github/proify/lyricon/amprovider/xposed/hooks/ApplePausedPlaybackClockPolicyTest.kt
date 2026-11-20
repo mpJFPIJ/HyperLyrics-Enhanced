@@ -131,38 +131,38 @@ class ApplePausedPlaybackClockPolicyTest {
     @Test fun pausedSeekFallbackUsesNewestScopedEventNotAnExpiringMagicWindow() {
         assertEquals(ApplePausedClockFallback(0L, true),
             ApplePausedPlaybackClockPolicy.newestFallback(
-                measuredMs = 21_370L, measuredAtMs = 1_000L,
-                acceptedSeekMs = 0L, acceptedSeekAtMs = 2_000L,
+                measuredMs = 21_370L, measuredSequence = 1L,
+                acceptedSeekMs = 0L, acceptedSeekSequence = 2L,
             ))
         assertEquals(ApplePausedClockFallback(77_000L, true),
             ApplePausedPlaybackClockPolicy.newestFallback(
-                measuredMs = 21_370L, measuredAtMs = 1_000L,
-                acceptedSeekMs = 77_000L, acceptedSeekAtMs = 2_000L,
+                measuredMs = 21_370L, measuredSequence = 1L,
+                acceptedSeekMs = 77_000L, acceptedSeekSequence = 2L,
             ))
         // A real player sample after the seek supersedes the requested target.
         assertEquals(ApplePausedClockFallback(22_000L, false),
             ApplePausedPlaybackClockPolicy.newestFallback(
-                measuredMs = 22_000L, measuredAtMs = 3_000L,
-                acceptedSeekMs = 0L, acceptedSeekAtMs = 2_000L,
+                measuredMs = 22_000L, measuredSequence = 3L,
+                acceptedSeekMs = 0L, acceptedSeekSequence = 2L,
             ))
         // If the song/player identity does not match, the hook passes no seek.
         assertEquals(ApplePausedClockFallback(21_370L, false),
             ApplePausedPlaybackClockPolicy.newestFallback(
-                measuredMs = 21_370L, measuredAtMs = 1_000L,
-                acceptedSeekMs = null, acceptedSeekAtMs = null,
+                measuredMs = 21_370L, measuredSequence = 1L,
+                acceptedSeekMs = null, acceptedSeekSequence = null,
             ))
         assertEquals(ApplePausedClockFallback(null, false),
             ApplePausedPlaybackClockPolicy.newestFallback(
-                measuredMs = null, measuredAtMs = null,
-                acceptedSeekMs = null, acceptedSeekAtMs = null,
+                measuredMs = null, measuredSequence = null,
+                acceptedSeekMs = null, acceptedSeekSequence = null,
             ))
     }
 
 
     @Test fun pausedNonzeroSeekSurvivesTransientZeroFromThePlayerGetter() {
         val selected = ApplePausedPlaybackClockPolicy.newestFallback(
-            measuredMs = 40_000L, measuredAtMs = 1_000L,
-            acceptedSeekMs = 77_000L, acceptedSeekAtMs = 2_000L,
+            measuredMs = 40_000L, measuredSequence = 1L,
+            acceptedSeekMs = 77_000L, acceptedSeekSequence = 2L,
         )
         assertEquals(77_000L, ApplePausedPlaybackClockPolicy.select(
             currentMs = 0L, lastValidMs = selected.positionMs,

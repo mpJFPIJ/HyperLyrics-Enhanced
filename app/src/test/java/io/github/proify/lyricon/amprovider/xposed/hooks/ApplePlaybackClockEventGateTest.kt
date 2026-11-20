@@ -42,6 +42,9 @@ class ApplePlaybackClockEventGateTest {
         val next = gate.readTicket()
         assertFalse(gate.publishIfCurrent(next, stillCurrent = { false }) { })
         assertTrue(gate.publishIfCurrent(next, stillCurrent = { true }) { })
+        assertFalse(gate.acceptSeek(stillCurrent = { false }) {
+            throw AssertionError("A seek from the previous player was delivered")
+        })
     }
 
     @Test fun rapidSeeksAndSamplesHaveStrictOrderEvenWithinOneMillisecond() {

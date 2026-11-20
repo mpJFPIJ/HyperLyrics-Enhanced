@@ -24,22 +24,21 @@ internal object ApplePausedPlaybackClockPolicy {
         return AppleAcceptedSeekClockSample(positionMs, songId)
     }
 
-    /** Choose by the order of real player observations and accepted seeks,
-     * not by a time-to-live marker that expires during a long pause. Callers
-     * must first verify that both events refer to the current player/song. */
+    /** Strict event sequences distinguish reads and seeks completed within
+     * the same millisecond. Callers first scope both to the player and song. */
     fun newestFallback(
         measuredMs: Long?,
-        measuredAtMs: Long?,
+        measuredSequence: Long?,
         acceptedSeekMs: Long?,
-        acceptedSeekAtMs: Long?,
+        acceptedSeekSequence: Long?,
     ): ApplePausedClockFallback {
         val measured = measuredMs?.takeIf { it >= 0L }
         val seek = acceptedSeekMs?.takeIf {
-            it >= 0L && acceptedSeekAtMs != null && acceptedSeekAtMs >= 0L
+            it >= 0L && acceptedSeekSequence != null && acceptedSeekSequence >= 0L
         }
         val useSeek = seek != null &&
-            (measured == null || measuredAtMs == null ||
-                acceptedSeekAtMs!! >= measuredAtMs)
+            (measured == null || measuredSequence == null ||
+                acceptedSeekSequence!! >= measuredSequence)
         return ApplePausedClockFallback(if (useSeek) seek else measured, useSeek)
     }
 

@@ -56,6 +56,8 @@ These changes address **verified code defects**, but are not equivalent to a suc
 | [#238](https://github.com/mpJFPIJ/HyperLyrics-Enhanced/actions/runs/44714448180) | Actual second pre-fix RED | **3,063 tests, 4 expected assertions failed, 5 skipped**: duplicate native reading overlay, single-syllable meaning exclusion, invented `溺れ` sound division, unverified syllable sweep. Other 3,059 tests passed. |
 | [#239](https://github.com/mpJFPIJ/HyperLyrics-Enhanced/actions/runs/44716655672) | Candidate GREEN | JVM tests, debug/release lint and signed Android APK build passed. This is **not** native-device A–I validation. |
 | [#240](https://github.com/mpJFPIJ/HyperLyrics-Enhanced/actions/runs/44740919918) | Paused-seek RED | 3,064 JVM tests, **one intentional `AssertionError`** in `explicitZeroSeekWithUnreadableClockMustNotReviveThePreviousLyric`, five previously skipped; reproduced on the original clock selector before any seek fix. |
+| [#241](https://github.com/mpJFPIJ/HyperLyrics-Enhanced/actions/runs/44743186542) | First paused-seek revision | JVM tests and Debug/Release lint passed. Workflow was **canceled by a newer push during the APK build**; this is not a green full build or host-device validation. The subsequent review found two further defects below. |
+| [#242](https://github.com/mpJFPIJ/HyperLyrics-Enhanced/actions/runs/44746171892) | Clock-event-gate RED | Failed in `:app:compileDebugUnitTestKotlin` with expected `Unresolved reference 'ApplePlaybackClockEventGate'` in the new delayed-read/seek-order tests. **This proves the guard was absent**, but unlike #240 this is a compile-level RED, not a behavioral assertion on the old implementation. |
 
 ## Continued seek investigation — source evidence, not a device claim
 
@@ -67,6 +69,16 @@ The source review after #239 identifies a **distinct, testable paused-seek clock
 4. The existing `ApplePausedPlaybackClockPolicyTest` covered `currentMs=0, explicitSeekToZero=true` but not the null-current boundary or post-expiration case. Explicit seek-to-nonzero with transient `currentMs=0` also lacked an event-scoped fallback test.
 
 These defects are confirmed by the control flow and reproducible unit-level inputs; the #234 silent footage **cannot** establish that a specific recorded seek exhibited them. The correct time provenance must distinguish the latest actual player sample from an accepted seek target, be scoped to the same Exo player and song, and prefer a later valid player observation. Arbitrary audio timing offsets or guessed syllable times are inappropriate. The paused MediaSession lyric anchor must also be refreshed when a valid seek occurs; the old code only published this on pause/play state transition. Retest on-device before marking the visible seeking/highlight bug solved.
+
+### Follow-up review of the first paused-seek correction
+
+An independent source review of the #241 candidate identified two further deterministic failure paths and one event-ordering hazard:
+
+1. In `ApplePlaybackHooks`, a newly accepted seek while paused was sent via `publishPlaybackAnchor` only. But `AppleDirectPlayer.setPlaybackState(PlaybackState)` forwards **only** the playing boolean to its lyric bridge; its `seekTo(position)` method is what calls `IAppleMusicLyricBridge.onSeekTo`. `CompositeRemotePlayer.seekTo` also relays explicit seek semantics to the Central provider. Thus a paused `PlaybackState` anchor is **not equivalent** to an explicit seek for either surface. The correction sends `remotePlayer.seekTo(position)` for every accepted native seek, whether the player is advancing or paused.
+2. The polling job ran `readPosition()` on a background dispatcher and published its result after the getter returned. `Job.cancel()` does not interrupt a synchronous, already-running getter, and the old code never checked whether a seek, pause, source switch or song switch occurred *during* that read. A late pre-seek read could therefore overwrite a newer seek in the bridge. A generation ticket now precedes each getter read; stale tickets and source/song mismatch discard that result. Remote position publications and explicit seek publications share a serialized clock gate so an earlier delivery cannot arrive after the accepted seek.
+3. Separate volatile fields for measured value, song and timestamp could be observed in mixed combinations, and `elapsedRealtime()` millisecond ties were an ambiguous ordering signal. An immutable `MeasuredClockSample` now carries the position, player identity, song, time and strictly monotonic event sequence. An explicit seek retains its separate provenance and sequence. The paused selector chooses by event order, not wall-clock tolerance.
+
+These are verified **source control-flow defects**, not proof that any particular frame in #234 suffered them. The new generation and ordering tests exercise delayed getter completion, invalidation and overlapping bridge dispatch; only a subsequent full CI and real device replay can validate their integrated behavior. Serializing remote lyric bridge calls also has a bounded IPC-performance risk requiring measurement on Apple Music hardware.
 
 ## Required handoff replay
 

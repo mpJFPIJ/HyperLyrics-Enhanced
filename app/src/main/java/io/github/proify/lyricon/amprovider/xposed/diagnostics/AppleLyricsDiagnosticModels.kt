@@ -23,6 +23,9 @@ internal data class AppleLyricsBindingDiagnosticContext(
     val translationEnabled: Boolean?,
     val pronunciationEnabled: Boolean?,
     val nestedForSameHolder: Boolean = false,
+    /** Real adapter object, not its potentially colliding identityHashCode.
+     * Held only within the short-lived native bind context. */
+    val adapterInstance: Any? = null,
 )
 
 /** Two- and three-parameter native bind methods often call each other. */

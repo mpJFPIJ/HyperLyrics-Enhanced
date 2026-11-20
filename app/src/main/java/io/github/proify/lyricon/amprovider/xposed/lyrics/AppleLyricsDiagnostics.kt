@@ -534,6 +534,7 @@ internal class AppleLyricsDiagnostics(
                                 holder = holder,
                                 adapterIdentity = adapterIdentity,
                             ),
+                            adapterInstance = adapter,
                         )
                         appleLyricsBindingDiagnosticContexts.push(context)
                         if (!context.nestedForSameHolder) {

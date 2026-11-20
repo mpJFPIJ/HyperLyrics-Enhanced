@@ -111,6 +111,7 @@ internal fun AppleLyricsSupplementHooks.hookAppleLyricTextGetter(clazz: Class<*>
                         translation = result,
                         revision = revision,
                         adapterPosition = timedContext?.position,
+                        adapterOwner = timedContext?.adapterInstance,
                     )
                     // This exact native getter executes inside its holder bind,
                     // so this is a verified adapter-row↔native-line time axis.
@@ -356,6 +357,7 @@ internal fun AppleLyricsSupplementHooks.bindLineWidePronunciation(
                 lineWidePronunciationRow.visibleNativeCellTexts(root).orEmpty()
             },
             holderAdapterPosition = context.position,
+            adapterOwner = context.adapterInstance,
             isCurrent = {
                 currentAppleLyricsSongId == songId &&
                     nativeOnlineTranslationStore.revision() == revision

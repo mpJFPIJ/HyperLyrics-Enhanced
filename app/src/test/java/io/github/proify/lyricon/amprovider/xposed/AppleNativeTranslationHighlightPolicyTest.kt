@@ -147,43 +147,104 @@ class AppleNativeTranslationHighlightPolicyTest {
             "song", "君の名は", 1_000L, 2_000L, "너의 이름은", 7L,
         )
         val unchangedCells = listOf("君", "の", "名は")
+        val adapter = Any()
         val policy = AppleNativeTranslationHighlightPolicy
 
         // A redundant bind of the same source/adapter row may retain the
         // painter while Apple's native translation getter catches up.
         assertTrue(policy.mayKeepPendingPainter(
-            first, 12, "song", 7L, 12, unchangedCells,
+            first, 12, "song", 7L, 12, unchangedCells, adapter, adapter,
         ))
         assertTrue(policy.mayKeepPendingPainter(
-            first, 12, "song", 7L, 12, emptyList(),
+            first, 12, "song", 7L, 12, emptyList(), adapter, adapter,
+        ))
+        assertTrue(policy.mayKeepPendingPainter(
+            first, 12, "song", 7L, 12, listOf("", ""), adapter, adapter,
         ))
 
         // A recycled holder can still display the *old* TextView text for a
         // moment. Equal song/revision and intact text are not enough: the
         // native adapter row is a different lyric, even in a repeated chorus.
         assertFalse(policy.mayKeepPendingPainter(
-            first, 12, "song", 7L, 13, unchangedCells,
+            first, 12, "song", 7L, 13, unchangedCells, adapter, adapter,
         ))
         assertFalse(policy.mayKeepPendingPainter(
             first, 12, "song", 7L, 12, listOf("別", "の", "歌", "다른 노래"),
+            adapter, adapter,
         ))
         // The native observer supplies only song_lyrics_word cells. A Latin
         // continuation is still original text, not proof of a Korean meaning.
         assertFalse(policy.mayKeepPendingPainter(
-            first, 12, "song", 7L, 12, unchangedCells + "LOVE",
+            first, 12, "song", 7L, 12, unchangedCells + "LOVE", adapter, adapter,
         ))
         assertFalse(policy.mayKeepPendingPainter(
-            first, 12, "song", 7L, null, unchangedCells,
+            first, 12, "song", 7L, null, unchangedCells, adapter, adapter,
         ))
         assertFalse(policy.mayKeepPendingPainter(
-            first, -1, "song", 7L, -1, unchangedCells,
+            first, -1, "song", 7L, -1, unchangedCells, adapter, adapter,
         ))
         assertFalse(policy.mayKeepPendingPainter(
-            first, 12, "other song", 7L, 12, unchangedCells,
+            first, 12, "other song", 7L, 12, unchangedCells, adapter, adapter,
         ))
         assertFalse(policy.mayKeepPendingPainter(
-            first, 12, "song", 8L, 12, unchangedCells,
+            first, 12, "song", 8L, 12, unchangedCells, adapter, adapter,
         ))
+        assertFalse(policy.mayKeepPendingPainter(
+            first, 12, "song", 7L, 12, unchangedCells, adapter, Any(),
+        ))
+    }
+
+    @Test fun adapterOwnedFallbackCannotCrossAnotherNativePresentation() {
+        // A host adapter may override equals/hashCode; row ownership must
+        // use object identity, not equals or a shared adapter row integer.
+        class EqualAdapter {
+            override fun equals(other: Any?): Boolean = other is EqualAdapter
+            override fun hashCode(): Int = 1
+        }
+        val firstAdapter = EqualAdapter()
+        val secondAdapter = EqualAdapter()
+        val first = AppleTranslationLineContext(
+            "song", "同じ歌詞", 1_000L, 2_000L, "같은 가사", 7L,
+        )
+        val repeated = first.copy(beginMs = 10_000L, endMs = 11_000L)
+        val index = AppleTranslationOccurrenceIndex()
+        val cells = listOf("同じ", "歌詞")
+        index.remember(first, firstAdapter, 12)
+
+        assertEquals(first, index.verifiedFallback("song", 7L, firstAdapter, 12, cells))
+        assertNull(index.verifiedFallback("song", 7L, secondAdapter, 12, cells))
+        assertNull(index.verifiedFallback("song", 7L, null, 12, cells))
+        index.remember(repeated, secondAdapter, 12)
+        assertEquals(repeated, index.verifiedFallback("song", 7L, secondAdapter, 12, cells))
+        assertEquals(first, index.verifiedFallback("song", 7L, firstAdapter, 12, cells))
+        index.remember(first.copy(revision = 8L), firstAdapter, 12)
+        assertNull(index.verifiedFallback("song", 8L, secondAdapter, 12, cells))
+    }
+
+    @Test fun sourceComparisonUsesDisplayedGlyphsAndIgnoresOpaqueChildren() {
+        val policy = AppleNativeTranslationHighlightPolicy
+        val adapter = Any()
+        val raw = AppleTranslationLineContext(
+            "song", "愛", 1_000L, 2_000L, "사랑", 7L,
+        )
+        // Native raw line text is traditional, while supported Simplified
+        // view-getter conversion displays the dictionary-proven glyph 爱.
+        assertFalse(policy.sourceCellsMatchExactly("愛", listOf("爱")))
+        assertTrue(policy.sourceCellsMatchExactly("愛", listOf("爱"), "爱"))
+        assertTrue(policy.mayKeepPendingPainter(
+            raw, 2, "song", 7L, 2, listOf("爱"), adapter, adapter, "爱",
+        ))
+        val index = AppleTranslationOccurrenceIndex()
+        index.remember(raw, adapter, 2)
+        assertNull(index.verifiedFallback("song", 7L, adapter, 2, listOf("爱")))
+        assertEquals(raw, index.verifiedFallback(
+            "song", 7L, adapter, 2, listOf("爱"),
+            displaySource = { if (it == "愛") "爱" else it },
+        ))
+        assertFalse(policy.sourceCellsMatchExactly("愛", listOf(""), "爱"))
+        assertFalse(policy.sourceCellsMatchExactly("君", listOf("君", "LOVE")))
+        assertFalse(policy.sourceCellsHaveReadableText(listOf("", "", "")))
+        assertTrue(policy.sourceCellsHaveReadableText(listOf("", "君", "")))
     }
 
     @Test fun cachedSourceWithoutTheSameVerifiedAdapterRowNeverOwnsAnotherMeaning() {
@@ -229,19 +290,20 @@ class AppleNativeTranslationHighlightPolicyTest {
         )
         val second = first.copy(sourceText = "次", beginMs = 2_000L,
             endMs = 3_000L, translation = "다음")
+        val adapter = Any()
         val policy = AppleNativeTranslationHighlightPolicy
 
         assertTrue(policy.mustStopPendingForContext(
-            first, second, 12, "song", 7L, 12, listOf("最初"),
+            first, second, 12, "song", 7L, 12, listOf("最初"), adapter, adapter,
         ))
         assertFalse(policy.mustStopPendingForContext(
-            first, first.copy(), 12, "song", 7L, 12, listOf("最初"),
+            first, first.copy(), 12, "song", 7L, 12, listOf("最初"), adapter, adapter,
         ))
         assertTrue(policy.mustStopPendingForContext(
-            first, first, 12, "song", 7L, 13, listOf("最初"),
+            first, first, 12, "song", 7L, 13, listOf("最初"), adapter, adapter,
         ))
         assertTrue(policy.mustStopPendingForContext(
-            first, first, 12, "song", 7L, 12, listOf("次"),
+            first, first, 12, "song", 7L, 12, listOf("次"), adapter, adapter,
         ))
     }
 

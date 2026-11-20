@@ -16,56 +16,6 @@ class AppleLineWidePronunciationRowPolicyTest {
         })
     }
 
-    @Test fun nativeHangulOverlayNeverBorrowsSourceOrTranslationCells() {
-        assertTrue(AppleNativeHangulWordPaintPolicy.eligible(
-            hangul = true, underPronunciation = true, underTranslation = false,
-            injectedReading = false, measured = true,
-        ))
-        assertFalse(AppleNativeHangulWordPaintPolicy.eligible(
-            hangul = true, underPronunciation = false, underTranslation = false,
-            injectedReading = false, measured = true,
-        ))
-        assertFalse(AppleNativeHangulWordPaintPolicy.eligible(
-            hangul = true, underPronunciation = true, underTranslation = true,
-            injectedReading = false, measured = true,
-        ))
-        assertFalse(AppleNativeHangulWordPaintPolicy.eligible(
-            hangul = false, underPronunciation = true, underTranslation = false,
-            injectedReading = false, measured = true,
-        ))
-        assertFalse(AppleNativeHangulWordPaintPolicy.eligible(
-            hangul = true, underPronunciation = true, underTranslation = false,
-            injectedReading = true, measured = true,
-        ))
-        assertFalse(AppleNativeHangulWordPaintPolicy.eligible(
-            hangul = true, underPronunciation = true, underTranslation = false,
-            injectedReading = false, measured = false,
-        ))
-    }
-
-    @Test fun nativeWordOverlayKeepsOriginalWordOpacityAndThrottlesInvisibleRows() {
-        assertTrue(AppleNativeHangulWordPaintPolicy.focusedRow(
-            playbackAdapterPosition = 6, holderAdapterPosition = 6,
-        ))
-        assertFalse(AppleNativeHangulWordPaintPolicy.focusedRow(
-            playbackAdapterPosition = 6, holderAdapterPosition = 5,
-        ))
-        assertFalse(AppleNativeHangulWordPaintPolicy.focusedRow(
-            playbackAdapterPosition = null, holderAdapterPosition = 6,
-        ))
-        assertEquals(0.36f, AppleNativeHangulWordPaintPolicy.opacity(
-            childAlpha = 0.6f, ancestorAlphas = listOf(0.75f, 0.8f),
-        ), 0.001f)
-        assertEquals(0f, AppleNativeHangulWordPaintPolicy.opacity(
-            childAlpha = 0f, ancestorAlphas = listOf(1f),
-        ), 0.001f)
-        assertEquals(80L, AppleNativeHangulWordPaintPolicy.nextRefreshMs(visible = true))
-        assertEquals(180L, AppleNativeHangulWordPaintPolicy.nextRefreshMs(
-            visible = true, focused = false,
-        ))
-        assertEquals(600L, AppleNativeHangulWordPaintPolicy.nextRefreshMs(visible = false))
-    }
-
     @Test fun repeatedChorusRequiresAnExactHolderNotASourceTextGuess() {
         val repeated = AppleLineWidePronunciationPayload(
             songId = "s", lineKey = "repeat", sourceText = "好き", pronunciation = "스키",
@@ -77,6 +27,23 @@ class AppleLineWidePronunciationRowPolicyTest {
         assertTrue(AppleLineWidePronunciationRowPolicy.safeSourceFallback(
             repeated.copy(repeatTimings = emptyList()),
         ))
+        val firstWindow = AppleLineWidePronunciationRowPolicy.lineWindowForVariant(repeated.copy(
+            lineBeginMs = 1_000L, lineEndMs = 1_900L,
+        ), 0)
+        assertEquals(1_000L to 1_900L, firstWindow)
+        val repeatedWindow = AppleLineWidePronunciationRowPolicy.lineWindowForVariant(repeated.copy(
+            lineBeginMs = 1_000L, lineEndMs = 1_900L,
+        ), 1)
+        assertEquals(null to null, repeatedWindow)
+        val later = AppleTimedPronunciationHighlightPolicy.units(
+            sourceText = repeated.sourceText,
+            pronunciation = repeated.pronunciation,
+            timedWords = repeated.repeatTimings.single(),
+            lineBeginMs = repeatedWindow.first,
+            lineEndMs = repeatedWindow.second,
+        )
+        assertEquals(9_000L, later.single().beginMs)
+        assertEquals(9_900L, later.single().endMs)
     }
 
     @Test fun `reading uses exactly one outer paint owner after layout`() {

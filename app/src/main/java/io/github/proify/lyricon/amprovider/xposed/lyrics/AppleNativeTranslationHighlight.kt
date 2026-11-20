@@ -181,8 +181,13 @@ internal object AppleNativeTranslationHighlightPolicy {
         candidate: String,
     ): Boolean {
         val normalizedId = viewId.orEmpty()
-        if (normalizedId == "lyrics_translation_line")
-            return fragmentMatches(translation, candidate)
+        if (normalizedId == "lyrics_translation_line") {
+            val expected = compact(translation)
+            val actual = compact(candidate)
+            // The native ID supplies the missing ownership proof. A real
+            // one-syllable meaning (e.g. "나") must not lose its focus.
+            return actual.isNotEmpty() && expected.contains(actual)
+        }
         return normalizedId.isEmpty() &&
             compact(candidate).length >= 2 &&
             compact(candidate) == compact(translation)

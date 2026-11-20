@@ -38,6 +38,14 @@ internal object AppleLineWidePronunciationRowPolicy {
     fun safeSourceFallback(payload: AppleLineWidePronunciationPayload): Boolean =
         payload.repeatTimings.isEmpty()
 
+    /** The holder's line clock belongs only to its first occurrence. Repeated
+     * chorus variants have distinct native word clocks, not this line clock. */
+    fun lineWindowForVariant(
+        payload: AppleLineWidePronunciationPayload,
+        variantIndex: Int,
+    ): Pair<Long?, Long?> = if (variantIndex == 0)
+        payload.lineBeginMs to payload.lineEndMs else null to null
+
     fun canReuseReading(
         boundPayload: AppleLineWidePronunciationPayload?,
         requestedPayload: AppleLineWidePronunciationPayload,
@@ -130,8 +138,6 @@ internal object AppleReadingPulsePolicy {
  * Only observed Apple Music 6.5.3 view anchors are accepted; unfamiliar hosts fail closed.
  */
 internal class AppleLineWidePronunciationRow {
-    private val nativeHangulOverlay = AppleNativeHangulWordOverlayManager()
-
     /** A single styled Hangul syllable, dim until its own Apple-timed interval. */
     private class KaraokeSyllableStyle : CharacterStyle(), UpdateAppearance {
         var progress = 0f
@@ -345,11 +351,8 @@ internal class AppleLineWidePronunciationRow {
     /** Size only Apple-native Hangul readings; never resize Japanese source or
      * translated meaning. The pronunciation container belongs to Apple's own
      * word-level karaoke hierarchy, preserving its highlight animation. */
-    fun fitNativeHangulSize(root: View?, focused: () -> Boolean = { false }): Int {
-        val parent = anchor(root) ?: run {
-            nativeHangulOverlay.bind(root, emptyList())
-            return 0
-        }
+    fun fitNativeHangulSize(root: View?): Int {
+        val parent = anchor(root) ?: return 0
         val views = mutableListOf<TextView>()
         fun collect(view: View?, depth: Int) {
             if (view == null || depth > 8 || view is ReadingView) return
@@ -374,17 +377,10 @@ internal class AppleLineWidePronunciationRow {
                         c in '\uF900'..'\uFAFF'
                 }
         }
-        val sourceSize = japaneseSource.maxOfOrNull { it.textSize } ?: run {
-            nativeHangulOverlay.bind(root, emptyList())
-            return 0
-        }
+        val sourceSize = japaneseSource.maxOfOrNull { it.textSize } ?: return 0
         val targetSize = AppleLineWidePronunciationRowPolicy.readingTextPx(sourceSize)
-        if (targetSize <= 0f) {
-            nativeHangulOverlay.bind(root, emptyList())
-            return 0
-        }
+        if (targetSize <= 0f) return 0
         var adjusted = 0
-        val nativeHangulViews = mutableListOf<TextView>()
         var nativeHangulCount = 0
         var nativeFontPaddingAdded = 0
         var nativeShaderCells = 0
@@ -393,7 +389,6 @@ internal class AppleLineWidePronunciationRow {
             if (!isUnder(view, "pronunciation") || isUnder(view, "translation") ||
                 !view.text.any { it in '가'..'힣' }
             ) continue
-            nativeHangulViews += view
             nativeHangulCount++
             if (view.paint.shader != null) nativeShaderCells++
             if (view.layout == null || view.height <= 0) nativeUnmeasuredCells++
@@ -418,10 +413,11 @@ internal class AppleLineWidePronunciationRow {
                 }) 1 else 0}",
             root,
         )
-        // The verified word-aligned path never instantiates ReadingView.
-        // Its measured native TextViews now receive an unmasked paint pass
-        // while continuing to own all their original karaoke word timings.
-        nativeHangulOverlay.bind(root, nativeHangulViews, focused)
+        // Only Apple's own native word cells paint the verified Hangul path.
+        // A second foreground pass bypassed the parent karaoke gradient,
+        // caused focused/inactive colors to diverge, and polled each row.
+        // Font padding remains measured by Apple; the uncertain line-wide
+        // path still uses its exclusive ReadingView paint owner.
         // setTextSize() already requests measurement from the native parent.
         // Forcing an additional parent.requestLayout() and a second
         // root.postOnAnimation(requestLayout) after bind created a two-frame
@@ -526,14 +522,17 @@ internal class AppleLineWidePronunciationRow {
             }
             setTimedText(
                 text,
-                (listOf(payload!!.timedWords) + payload.repeatTimings).map { native ->
+                (listOf(payload!!.timedWords) + payload.repeatTimings).mapIndexed { index, native ->
+                    val (begin, end) = AppleLineWidePronunciationRowPolicy.lineWindowForVariant(
+                        payload, index,
+                    )
                     AppleTimedPronunciationHighlightPolicy.units(
                         sourceText = payload.sourceText,
                         pronunciation = text,
                         timedWords = native,
                         phoneticSpans = payload.phoneticSpans,
-                        lineBeginMs = payload.lineBeginMs,
-                        lineEndMs = payload.lineEndMs,
+                        lineBeginMs = begin,
+                        lineEndMs = end,
                     )
                 },
             )

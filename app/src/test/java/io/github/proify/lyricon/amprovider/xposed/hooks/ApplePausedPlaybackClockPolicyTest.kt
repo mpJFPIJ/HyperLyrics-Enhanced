@@ -51,6 +51,10 @@ class ApplePausedPlaybackClockPolicyTest {
             timelineAdvancing = false, explicitSeekToZero = true,
             lastValidAgeMs = 500L,
         ))
+        assertEquals(0L, ApplePausedPlaybackClockPolicy.select(
+            currentMs = null, lastValidMs = null,
+            timelineAdvancing = false, explicitSeekToZero = true,
+        ))
     }
 
     @Test fun acceptedSeekSampleRemainsValidAfterTheDiagnosticSeekWindowExpires() {

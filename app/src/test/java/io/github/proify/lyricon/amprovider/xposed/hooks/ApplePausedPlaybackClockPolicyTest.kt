@@ -44,4 +44,27 @@ class ApplePausedPlaybackClockPolicyTest {
             currentMs = null, lastValidMs = null,
             timelineAdvancing = false, explicitSeekToZero = false))
     }
+
+    @Test fun explicitZeroSeekWithUnreadableClockMustNotReviveThePreviousLyric() {
+        assertEquals(0L, ApplePausedPlaybackClockPolicy.select(
+            currentMs = null, lastValidMs = 21_370L,
+            timelineAdvancing = false, explicitSeekToZero = true,
+            lastValidAgeMs = 500L,
+        ))
+    }
+
+    @Test fun acceptedSeekSampleRemainsValidAfterTheDiagnosticSeekWindowExpires() {
+        // The Exo seek callback must replace the fallback sample, not rely on
+        // the 2.5 s diagnostic marker that expires while playback is paused.
+        assertEquals(0L, ApplePausedPlaybackClockPolicy.select(
+            currentMs = 0L, lastValidMs = 0L,
+            timelineAdvancing = false, explicitSeekToZero = false,
+            lastValidAgeMs = 9_000L,
+        ))
+        assertEquals(77_000L, ApplePausedPlaybackClockPolicy.select(
+            currentMs = null, lastValidMs = 77_000L,
+            timelineAdvancing = false, explicitSeekToZero = false,
+            lastValidAgeMs = 9_000L,
+        ))
+    }
 }

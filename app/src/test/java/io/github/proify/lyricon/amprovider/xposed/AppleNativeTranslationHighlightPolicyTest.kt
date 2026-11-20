@@ -448,6 +448,60 @@ class AppleNativeTranslationHighlightPolicyTest {
         ))
     }
 
+    @Test fun delayedOrDuplicatedMeaningFragmentsCannotBorrowNewSourceClock() {
+        val policy = AppleNativeTranslationHighlightPolicy
+        // New Japanese source and timestamp are already correct, but the
+        // native Korean TextView can still contain the previous line's 나.
+        assertFalse(policy.verifiedCompleteMeaning("나는", listOf("나")))
+        assertTrue(policy.verifiedCompleteMeaning("나는", listOf("나는")))
+        assertTrue(policy.verifiedCompleteMeaning("나는", listOf("나", "는")))
+        assertTrue(policy.verifiedCompleteMeaning("나", listOf("나")))
+        assertFalse(policy.verifiedCompleteMeaning("나는", listOf("나는", "나는")))
+        assertFalse(policy.verifiedCompleteMeaning("나는", emptyList()))
+        assertTrue(policy.verifiedCompleteMeaning(
+            "아무리 말해도, 널 사랑해!", listOf("아무리 말해도,", " 널 사랑해!"),
+        ))
+        assertFalse(policy.verifiedCompleteMeaning(
+            "아무리 말해도, 널 사랑해!", listOf("널 사랑해!"),
+        ))
+    }
+
+    @Test fun meaningCoverageUsesOnlyVisibleCellsAndAllVisibleNativeMeaningIds() {
+        val policy = AppleNativeTranslationHighlightPolicy
+        fun named(text: String, shown: Boolean = true) =
+            AppleMeaningCellCandidate("lyrics_translation_line", text, shown)
+        fun chosen(translation: String, rows: List<AppleMeaningCellCandidate>): List<String> =
+            policy.selectMeaningCellIndices(translation, rows).map { rows[it].text }
+
+        val completeWithHiddenDuplicate = listOf(named("나는"), named("나는", false))
+        assertEquals(listOf("나는"), chosen("나는", completeWithHiddenDuplicate))
+        assertTrue(policy.verifiedCompleteMeaning(
+            "나는", chosen("나는", completeWithHiddenDuplicate),
+        ))
+
+        val missingVisibleSuffix = listOf(named("나"), named("는", false))
+        assertEquals(listOf("나"), chosen("나는", missingVisibleSuffix))
+        assertFalse(policy.verifiedCompleteMeaning(
+            "나는", chosen("나는", missingVisibleSuffix),
+        ))
+
+        val staleVisibleNativeCell = listOf(named("너"), named("나는"))
+        assertEquals(listOf("너", "나는"), chosen("나는", staleVisibleNativeCell))
+        assertFalse(policy.verifiedCompleteMeaning(
+            "나는", chosen("나는", staleVisibleNativeCell),
+        ))
+
+        val hiddenNamedWithVisibleAnonymous = listOf(
+            named("예전", false), AppleMeaningCellCandidate(null, "나는", true),
+        )
+        assertEquals(listOf("나는"), chosen("나는", hiddenNamedWithVisibleAnonymous))
+        val nativeIdWinsOverAnonymous = listOf(
+            AppleMeaningCellCandidate(null, "나는", true), named("나는"),
+        )
+        assertEquals(listOf("나는"), chosen("나는", nativeIdWinsOverAnonymous))
+        assertEquals(listOf(1), policy.selectMeaningCellIndices("나는", nativeIdWinsOverAnonymous))
+    }
+
     @Test fun wrappedKoreanTranslationMustHaveOneNativeLineActiveWindow() {
         assertFalse(AppleNativeTranslationHighlightPolicy.lineActive(999L, 1000L, 2000L))
         assertTrue(AppleNativeTranslationHighlightPolicy.lineActive(1000L, 1000L, 2000L))

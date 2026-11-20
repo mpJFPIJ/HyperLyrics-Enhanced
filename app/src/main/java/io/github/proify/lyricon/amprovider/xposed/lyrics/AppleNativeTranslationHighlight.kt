@@ -33,6 +33,14 @@ internal data class AppleTranslationFocusCandidate(
     val endMs: Long,
 )
 
+/** Visibility is relative to the bound holder, not window attachment or
+ * alpha: the foreground itself intentionally sets native alpha to zero. */
+internal data class AppleMeaningCellCandidate(
+    val viewId: String?,
+    val text: String,
+    val visibleInHolder: Boolean,
+)
+
 /** NPatch loads Apple's AndroidX RecyclerView from the host classloader;
  * `view is RecyclerView` with the module class identity is always false. */
 internal object AppleTranslationRecyclerOwnerPolicy {
@@ -299,6 +307,37 @@ internal object AppleNativeTranslationHighlightPolicy {
         return normalizedId.isEmpty() &&
             compact(candidate).length >= 2 &&
             compact(candidate) == compact(translation)
+    }
+
+    /** Candidate fragments are only hints for locating the native meaning
+     * cells. Before assigning the new source clock, their COMPLETE ordered
+     * text must equal its expected meaning. Substring matches alone can
+     * attach an old cell ("나") to a new line ("나는"). */
+    fun verifiedCompleteMeaning(
+        translation: String,
+        orderedMeaningFragments: List<String>,
+    ): Boolean {
+        val expected = compact(translation)
+        if (expected.isEmpty() || orderedMeaningFragments.isEmpty()) return false
+        return compact(orderedMeaningFragments.joinToString(separator = "")) == expected
+    }
+
+    /** An explicit native meaning ID is more trustworthy than substring
+     * filtering: include ALL visible ID-owned cells, including stale ones,
+     * so incomplete or duplicated transitions cannot pass coverage. Only
+     * when no named meaning exists may an exact anonymous cell stand in. */
+    fun selectMeaningCellIndices(
+        translation: String,
+        candidates: List<AppleMeaningCellCandidate>,
+    ): List<Int> {
+        val shown = candidates.indices.filter { candidates[it].visibleInHolder }
+        val named = shown.filter { candidates[it].viewId == "lyrics_translation_line" }
+        if (named.isNotEmpty()) return named
+        return shown.filter { index ->
+            candidates[index].viewId.isNullOrEmpty() && shouldRenderTranslationCell(
+                null, translation, candidates[index].text,
+            )
+        }
     }
 
     fun fragmentMatches(translation: String, candidate: String): Boolean {
@@ -584,20 +623,44 @@ internal class AppleNativeTranslationHighlight(
             retryAfterLayout()
             return false
         }
+        fun idName(view: View): String? = runCatching {
+            view.resources.getResourceEntryName(view.id)
+        }.getOrNull()
+        fun visibleMeaningPath(cell: View): Boolean {
+            var parent: View? = cell
+            while (parent != null) {
+                // Ignore alpha and window attachment: a prefetched row may
+                // be detached, and our own pulse sets native alpha to 0.
+                if (parent.visibility != View.VISIBLE) return false
+                if (parent !== cell && idName(parent).orEmpty()
+                        .contains("pronunciation", ignoreCase = true)
+                ) return false
+                if (parent === root) return true
+                parent = parent.parent as? View
+            }
+            return false
+        }
         val texts = mutableListOf<TextView>()
+        val meaningCandidates = mutableListOf<AppleMeaningCellCandidate>()
         fun scan(view: View, depth: Int) {
             if (depth > 12) return
             if (view is TextView) {
                 // The injected Hangul ReadingView is not a Korean meaning
                 // line, even if its text happens to occur in the translation.
-                val entry = runCatching {
-                    view.resources.getResourceEntryName(view.id)
-                }.getOrNull()
-                if (view.javaClass.simpleName != "ReadingView" &&
-                    AppleNativeTranslationHighlightPolicy.shouldRenderTranslationCell(
-                        entry, ctx.translation, view.text.toString(),
-                    )
-                ) texts.add(view)
+                if (view.javaClass.simpleName == "ReadingView") return
+                val entry = idName(view)
+                val content = view.text.toString()
+                if (entry == "lyrics_translation_line" ||
+                    (entry.isNullOrEmpty() &&
+                        AppleNativeTranslationHighlightPolicy.shouldRenderTranslationCell(
+                            null, ctx.translation, content,
+                        ))
+                ) {
+                    texts.add(view)
+                    meaningCandidates.add(AppleMeaningCellCandidate(
+                        entry, content, visibleMeaningPath(view),
+                    ))
+                }
             } else if (view is ViewGroup) {
                 for (i in 0 until view.childCount) scan(view.getChildAt(i), depth + 1)
             }
@@ -614,25 +677,30 @@ internal class AppleNativeTranslationHighlight(
             return false
         }
 
-        // Exclude Hangul source-reading cells even when a short phonetic token
-        // accidentally matches part of a translated word.
-        val translationView = texts.filter { view ->
-            var parent: View? = view
-            var readingContainer = false
-            while (parent != null && parent !== root) {
-                val id = runCatching {
-                    parent.resources.getResourceEntryName(parent.id)
-                }.getOrNull().orEmpty()
-                if (id.contains("pronunciation", ignoreCase = true)) {
-                    readingContainer = true
-                    break
-                }
-                parent = parent.parent as? View
-            }
-            !readingContainer
-        }
+        // Named native meaning cells take precedence. Inspect *all* named
+        // visible fragments, including old ones whose text differs, so no
+        // partial selection can be mistaken for complete new translation.
+        val translationView = AppleNativeTranslationHighlightPolicy.selectMeaningCellIndices(
+            ctx.translation, meaningCandidates,
+        ).map(texts::get)
         if (translationView.isEmpty()) {
             stopOldPulse()
+            retryAfterLayout()
+            return false
+        }
+        if (!AppleNativeTranslationHighlightPolicy.verifiedCompleteMeaning(
+                ctx.translation, translationView.map { it.text.toString() },
+            )
+        ) {
+            // A newly arriving translated line can share a prefix with the
+            // previous one. Do not paint an incomplete/duplicated native
+            // meaning using the new Japanese lyric's time window.
+            stopOldPulse(force = true)
+            AppleLyricUiRuntimeProbe.record(
+                "translation_cells_incomplete",
+                "matchedCells=${translationView.size} retry=$retry",
+                root,
+            )
             retryAfterLayout()
             return false
         }

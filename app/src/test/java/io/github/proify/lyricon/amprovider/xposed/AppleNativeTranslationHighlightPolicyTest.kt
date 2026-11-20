@@ -18,16 +18,17 @@ class AppleNativeTranslationHighlightPolicyTest {
         ))
     }
 
-    @Test fun nativeActiveRowWinsWhenClockIsStaleOrMissing() {
+    @Test fun actualPlaybackClockRejectsStaleOrFutureNativeActiveRows() {
         val rows = listOf(
             AppleTranslationFocusCandidate(4, 1_000L, 2_100L),
             AppleTranslationFocusCandidate(5, 2_000L, 2_800L),
             AppleTranslationFocusCandidate(7, 3_000L, 3_900L),
         )
-        assertEquals(1, AppleTranslationFocusPolicy.select(rows, setOf(5), 1_600L))
+        assertEquals(0, AppleTranslationFocusPolicy.select(rows, setOf(5), 1_600L))
         assertEquals(1, AppleTranslationFocusPolicy.select(rows, setOf(5), null))
-        assertNull(AppleTranslationFocusPolicy.select(rows, setOf(9), 2_300L))
-        assertNull(AppleTranslationFocusPolicy.select(rows, emptySet(), 2_300L))
+        assertEquals(1, AppleTranslationFocusPolicy.select(rows, setOf(9), 2_300L))
+        assertEquals(1, AppleTranslationFocusPolicy.select(rows, emptySet(), 2_300L))
+        assertNull(AppleTranslationFocusPolicy.select(rows, setOf(5), 2_900L))
     }
 
     @Test fun twoNativeActiveRowsHaveOnlyOneMeaningMatchedToSourceClock() {
@@ -37,9 +38,31 @@ class AppleNativeTranslationHighlightPolicyTest {
         )
         assertEquals(0, AppleTranslationFocusPolicy.select(rows, setOf(4, 5), 1_950L))
         assertEquals(1, AppleTranslationFocusPolicy.select(rows, setOf(4, 5), 2_250L))
-        assertEquals(1, AppleTranslationFocusPolicy.select(rows, setOf(4, 5), null))
+        assertNull(AppleTranslationFocusPolicy.select(rows, setOf(4, 5), null))
         assertEquals(0, AppleTranslationFocusPolicy.select(rows, null, 1_950L))
         assertNull(AppleTranslationFocusPolicy.select(rows, null, null))
+    }
+
+    @Test fun seekImmediatelyMovesMeaningEvenBeforeHostActiveSetRefreshes() {
+        val rows = listOf(
+            AppleTranslationFocusCandidate(11, 1_000L, 1_800L),
+            AppleTranslationFocusCandidate(12, 2_000L, 2_800L),
+        )
+        assertEquals(1, AppleTranslationFocusPolicy.select(rows, setOf(11), 2_100L))
+        assertEquals(0, AppleTranslationFocusPolicy.select(rows, setOf(12), 1_100L))
+        assertEquals(0, AppleTranslationFocusPolicy.select(rows, emptySet(), 1_100L))
+        assertEquals(0, AppleTranslationFocusPolicy.select(rows, setOf(11), 1_100L))
+    }
+
+    @Test fun nativeFocusBreaksTieOnlyForTrulyOverlappingTimedRows() {
+        val rows = listOf(
+            AppleTranslationFocusCandidate(11, 1_000L, 2_200L),
+            AppleTranslationFocusCandidate(12, 2_000L, 2_800L),
+        )
+        assertEquals(0, AppleTranslationFocusPolicy.select(rows, setOf(11), 2_100L))
+        assertEquals(1, AppleTranslationFocusPolicy.select(rows, setOf(12), 2_100L))
+        assertEquals(1, AppleTranslationFocusPolicy.select(rows, emptySet(), 2_100L))
+        assertNull(AppleTranslationFocusPolicy.select(rows, emptySet(), null))
     }
 
     @Test fun unknownHolderPositionCannotBorrowOtherNativeLineHighlight() {

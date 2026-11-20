@@ -62,7 +62,7 @@ class AppleNativeReadingProjectionTest {
             AppleNativeReadingProjection.EMPTY_PRONUNCIATION_CELL, "",
         ))
     }
-    @Test fun groupedJapaneseMorphemeCanFollowNativeWordClock() {
+    @Test fun groupedJapaneseMorphemeCannotInventAWordClockBoundary() {
         val result = AppleNativeReadingProjection.project(
             "駄目脳みそ", listOf("駄", "目", "脳", "みそ"),
             listOf(
@@ -71,8 +71,36 @@ class AppleNativeReadingProjectionTest {
                 SourceReadingSpan(3, 5, "みそ", "ミソ", "미소"),
             ), "다메노미소",
         )
-        assertTrue(result?.approximate == true)
-        assertEquals(listOf("다", "메", "노", "미소"), result?.words?.map { it.hangul })
+        // 駄目 is one verified sound. Neither 駄 nor 目 provides a verified
+        // pronunciation breakpoint, even when Apple times the two glyphs.
+        assertNull(result)
+    }
+    @Test fun oboreCannotLeaveItsFinalSyllableInTheNextNativeCell() {
+        val result = AppleNativeReadingProjection.project(
+            original = "溺れ死にそう",
+            appleWords = listOf("溺", "れ", "死に", "そう"),
+            spans = listOf(
+                SourceReadingSpan(0, 2, "溺れ", "オボレ", "오보레"),
+                SourceReadingSpan(2, 6, "死にそう", "シニソウ", "시니소"),
+            ),
+            expectedHangul = "오보레시니소",
+        )
+        // The whole line can be rendered, but the separate word cells have
+        // no trustworthy place to divide 오보레 or 시니소.
+        assertNull(result)
+    }
+    @Test fun repeatedVerifiedMorphemesRetainEverySoundAndCellIdentity() {
+        val result = AppleNativeReadingProjection.project(
+            original = "駄目駄目",
+            appleWords = listOf("駄目", "駄目"),
+            spans = listOf(
+                SourceReadingSpan(0, 2, "駄目", "ダメ", "다메"),
+                SourceReadingSpan(2, 4, "駄目", "ダメ", "다메"),
+            ),
+            expectedHangul = "다메다메",
+        )
+        assertEquals(listOf("다메", "다메"), result?.words?.map { it.hangul })
+        assertFalse(result?.approximate ?: true)
     }
     @Test fun neverProjectsUnverifiedSourceSound() {
         assertNull(AppleNativeReadingProjection.project(

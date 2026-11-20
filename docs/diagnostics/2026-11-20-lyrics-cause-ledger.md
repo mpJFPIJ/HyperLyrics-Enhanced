@@ -58,6 +58,8 @@ These changes address **verified code defects**, but are not equivalent to a suc
 | [#240](https://github.com/mpJFPIJ/HyperLyrics-Enhanced/actions/runs/44740919918) | Paused-seek RED | 3,064 JVM tests, **one intentional `AssertionError`** in `explicitZeroSeekWithUnreadableClockMustNotReviveThePreviousLyric`, five previously skipped; reproduced on the original clock selector before any seek fix. |
 | [#241](https://github.com/mpJFPIJ/HyperLyrics-Enhanced/actions/runs/44743186542) | First paused-seek revision | JVM tests and Debug/Release lint passed. Workflow was **canceled by a newer push during the APK build**; this is not a green full build or host-device validation. The subsequent review found two further defects below. |
 | [#242](https://github.com/mpJFPIJ/HyperLyrics-Enhanced/actions/runs/44746171892) | Clock-event-gate RED | Failed in `:app:compileDebugUnitTestKotlin` with expected `Unresolved reference 'ApplePlaybackClockEventGate'` in the new delayed-read/seek-order tests. **This proves the guard was absent**, but unlike #240 this is a compile-level RED, not a behavioral assertion on the old implementation. |
+| [#243](https://github.com/mpJFPIJ/HyperLyrics-Enhanced/actions/runs/44748049375) | Integrated clock-event GREEN | **3,071 JVM tests: 3,066 passed, 0 failed, 5 skipped**, Debug/Release lint, ABI, signed APK build and uploaded-APK byte-for-byte/hash verification all passed. This does not verify host-device lyric rendering. |
+| [#244](https://github.com/mpJFPIJ/HyperLyrics-Enhanced/actions/runs/44755693987) | Pending-meaning row ownership RED | Failed in `:app:compileDebugUnitTestKotlin`: expected `Unresolved reference 'mayKeepPendingPainter'` in the new same-song holder-recycle cases. This is an absent-policy compile RED, not proof of the specific #234 double-painted frame. |
 
 ## Continued seek investigation — source evidence, not a device claim
 
@@ -79,6 +81,16 @@ An independent source review of the #241 candidate identified two further determ
 3. Separate volatile fields for measured value, song and timestamp could be observed in mixed combinations, and `elapsedRealtime()` millisecond ties were an ambiguous ordering signal. An immutable `MeasuredClockSample` now carries the position, player identity, song, time and strictly monotonic event sequence. An explicit seek retains its separate provenance and sequence. The paused selector chooses by event order, not wall-clock tolerance.
 
 These are verified **source control-flow defects**, not proof that any particular frame in #234 suffered them. The new generation and ordering tests exercise delayed getter completion, invalidation and overlapping bridge dispatch; only a subsequent full CI and real device replay can validate their integrated behavior. Serializing remote lyric bridge calls also has a bounded IPC-performance risk requiring measurement on Apple Music hardware.
+
+### Same-song recycled holder can retain an old translation foreground
+
+The follow-up source audit found another independently testable ownership error in `AppleNativeTranslationHighlight.bind`:
+
+1. `beginHolderBinding` invalidates the prior holder-specific translation context, yet keeps the existing `Pulse` to avoid a flash if the bind is genuinely redundant.
+2. When the next native translation getter has not completed (`ctx == null`), the old `Pulse.isSafeFor` tested only song ID, translation revision and whether the previous TextView text object remained unchanged. It did **not** check the actual native adapter position or new source cells. Those identity inputs are available in `AppleLyricsBindingDiagnosticContext.position` and `observedSourceCells`. Apple can reuse the same holder for a *different lyric within the same song/revision* before new translated text arrives. Therefore the old foreground could remain attached to the wrong row despite all previous checks passing.
+3. If a later retry finally observed the new source, the old `stopOldPulse` refused to stop the painter when `retry > 0`, prolonging the mismatch. A source/adapter mismatch now forces detachment even during a delayed retry.
+
+The repair retains the old foreground only when the native adapter position is known and unchanged and any observed source cells agree with the old Japanese source. Unknown/mismatched identity fails closed; an unchanged row can still reuse its painter across redundant binds. A bounded `translation_pending_rebind_rejected` trace records non-text identity facts. This prevents one **verified code-level stale-owner path**, but does not establish that this was the sole cause of double translation in the silent #234 video. Actual TextView geometry, external host alpha animation and device frame times remain unmeasured.
 
 ## Required handoff replay
 

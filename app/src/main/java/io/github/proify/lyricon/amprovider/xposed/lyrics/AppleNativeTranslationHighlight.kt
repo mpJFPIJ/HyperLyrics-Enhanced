@@ -144,6 +144,28 @@ internal object AppleNativeTranslationHighlightPolicy {
         controlledTextsIntact: Boolean,
     ): Boolean = existingContext == requestedContext && sameViews && controlledTextsIntact
 
+    /** A pending translation has no new getter context yet. A recycled holder
+     * must not keep its previous meaning merely because the song and cache
+     * revision still match. A stable native adapter position is the minimum
+     * proof of row identity; observed Japanese cells must also agree when
+     * available. Unknown positions fail closed, including repeated choruses. */
+    fun mayKeepPendingPainter(
+        pending: AppleTranslationLineContext,
+        boundAdapterPosition: Int?,
+        currentSongId: String?,
+        currentRevision: Long,
+        currentAdapterPosition: Int?,
+        observedSourceCells: List<String>,
+    ): Boolean {
+        if (pending.songId != currentSongId || pending.revision != currentRevision ||
+            boundAdapterPosition == null || currentAdapterPosition != boundAdapterPosition
+        ) return false
+        return observedSourceCells.isEmpty() ||
+            AppleLineWidePronunciationRowPolicy.verifiedInsertionIndex(
+                pending.sourceText, observedSourceCells,
+            ) != null
+    }
+
     fun eligibleKoreanMeaning(translationVisible: Boolean, koreanTargetSelected: Boolean): Boolean =
         translationVisible && koreanTargetSelected
 
@@ -323,8 +345,8 @@ internal class AppleNativeTranslationHighlight(
         // Keep an identical live row's foreground across repeated native
         // onBind callbacks. Restoring its old text and alpha on every bind
         // caused a one-frame white flash at the translation boundary.
-        fun stopOldPulse() {
-            if (retry == 0) {
+        fun stopOldPulse(force: Boolean = false) {
+            if (retry == 0 || force) {
                 pulses.remove(root)?.get()?.stop()
                 bindingLifecycle[root]?.painterStopped()
             }
@@ -367,8 +389,23 @@ internal class AppleNativeTranslationHighlight(
             // Keep the existing painter only while the same host text is intact.
             val pending = pulseAt(root)
             val keepPending = enabled &&
-                pending?.isSafeFor(currentSongId, revision) == true
-            if (!keepPending) stopOldPulse()
+                pending?.isSafeFor(
+                    currentSongId, revision, holderAdapterPosition, observedSourceCells,
+                ) == true
+            if (!keepPending) {
+                // A later retry can first observe the recycled native source
+                // after the initial pass saw no cells. Never preserve the
+                // previous row's foreground just because retry > 0.
+                if (pending != null) AppleLyricUiRuntimeProbe.record(
+                    "translation_pending_rebind_rejected",
+                    "oldAdapterKnown=${if (pending.adapterPosition != null) 1 else 0} " +
+                        "newAdapterKnown=${if (holderAdapterPosition != null) 1 else 0} " +
+                        "samePosition=${if (pending.adapterPosition == holderAdapterPosition) 1 else 0} " +
+                        "sourceCells=${observedSourceCells.size} retry=$retry",
+                    root,
+                )
+                stopOldPulse(force = true)
+            }
             AppleLyricUiRuntimeProbe.record(
                 "translation_context_missing",
                 "holderPresent=${if (holder != null) 1 else 0} " +
@@ -603,8 +640,20 @@ internal class AppleNativeTranslationHighlight(
             )
         }
 
-        fun isSafeFor(songId: String?, revision: Long): Boolean =
-            running && ctx.songId == songId && ctx.revision == revision && textsIntact()
+        fun isSafeFor(
+            songId: String?,
+            revision: Long,
+            currentAdapterPosition: Int?,
+            observedSourceCells: List<String>,
+        ): Boolean = running && textsIntact() &&
+            AppleNativeTranslationHighlightPolicy.mayKeepPendingPainter(
+                pending = ctx,
+                boundAdapterPosition = adapterPosition,
+                currentSongId = songId,
+                currentRevision = revision,
+                currentAdapterPosition = currentAdapterPosition,
+                observedSourceCells = observedSourceCells,
+            )
 
         private fun attachForeground(color: Int): Boolean {
             // If any wrapped cell has no measurable layout yet, keep Apple's

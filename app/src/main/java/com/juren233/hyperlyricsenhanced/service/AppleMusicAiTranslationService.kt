@@ -235,19 +235,24 @@ class AppleMusicAiTranslationService : Service() {
                         }
                         val hasMissingTranslation = song.lyrics.orEmpty()
                             .any { it.translation.isNullOrBlank() }
+                        val hasPronunciationWork =
+                            com.juren233.hyperlyricsenhanced.root.aitrans.AIPronunciationPolicy
+                                .shouldEnrich(song)
                         if (!AppleMusicAiTranslationPolicy.shouldTranslate(
                                 enabled = enabled,
                                 hasLyrics = !song.lyrics.isNullOrEmpty(),
                                 hasMissingTranslation = hasMissingTranslation,
                                 skipExisting = skipExisting,
                                 forceOverride = forceOverride,
+                                hasPronunciationWork = hasPronunciationWork,
                             )
                         ) {
                             sendProgress(serial, requestKey, AiTranslationProgress("skipped"))
                             LogManager.i(
                                 TAG, "stage=request_skipped enabled=$enabled " +
                                     "hasLyrics=${!song.lyrics.isNullOrEmpty()} " +
-                                    "hasMissingTranslation=$hasMissingTranslation skipExisting=$skipExisting"
+                                    "hasMissingTranslation=$hasMissingTranslation " +
+                                    "hasPronunciationWork=$hasPronunciationWork skipExisting=$skipExisting"
                             )
                             return@launch
                         }

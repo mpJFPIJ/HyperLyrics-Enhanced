@@ -49,4 +49,15 @@ class AppleMusicAiTranslationPolicyTest {
             skipExisting = false, forceOverride = false,
         ))
     }
+
+    @Test fun existingTranslationsNeverSuppressIndependentPronunciationEnrichment() {
+        assertTrue(AppleMusicAiTranslationPolicy.shouldTranslate(
+            enabled = true, hasLyrics = true, hasMissingTranslation = false,
+            skipExisting = true, forceOverride = false, hasPronunciationWork = true,
+        ))
+        assertFalse(AppleMusicAiTranslationPolicy.shouldTranslate(
+            enabled = false, hasLyrics = true, hasMissingTranslation = false,
+            skipExisting = true, forceOverride = false, hasPronunciationWork = true,
+        ))
+    }
 }

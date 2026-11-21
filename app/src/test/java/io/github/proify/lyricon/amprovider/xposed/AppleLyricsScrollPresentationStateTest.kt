@@ -222,7 +222,7 @@ class AppleLyricsScrollPresentationStateTest {
     }
 
     @Test
-    fun `stop invalidates only the applied row so a queued turn can still finish`() {
+    fun `stop invalidates applied row including a real no active lyrics gap`() {
         val posted = mutableListOf<Pair<Runnable, Long>>()
         var updates = 0
         val controller = AppleLyricsActiveLineUpdateController(
@@ -235,7 +235,13 @@ class AppleLyricsScrollPresentationStateTest {
         assertEquals(4, controller.lastAppliedIndex())
 
         controller.stop()
+        // -1 is now the legitimate no-active-line state; the reset sentinel
+        // must be distinct so the next update will actually clear stale rows.
+        assertEquals(Int.MIN_VALUE, controller.lastAppliedIndex())
+        controller.markApplied(-1)
         assertEquals(-1, controller.lastAppliedIndex())
+        controller.stop()
+        assertEquals(Int.MIN_VALUE, controller.lastAppliedIndex())
         // The already queued callback is not cancelled by the original contract.
         posted.single().first.run()
         assertEquals(1, updates)

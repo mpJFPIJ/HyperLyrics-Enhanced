@@ -154,6 +154,7 @@ private fun AppleLyricsSupplementHooks.detachPendingAppleLyricsScrollRestore(
     runCatching {
         recycler.viewTreeObserver.removeOnPreDrawListener(pending.listener)
     }
+    pending.attachListener?.let(recycler::removeOnAttachStateChangeListener)
 }
 
 internal fun AppleLyricsSupplementHooks.captureAppleLyricsScrollSnapshot(recycler: ViewGroup, songId: String) {
@@ -251,6 +252,7 @@ internal fun AppleLyricsSupplementHooks.restoreAppleLyricsScrollSnapshot(fragmen
     var cachedPlaybackMappedPosition: Int? = null
     val attemptGate = AppleLyricsRestoreAttemptGate()
     lateinit var listener: ViewTreeObserver.OnPreDrawListener
+    lateinit var attachListener: View.OnAttachStateChangeListener
 
     fun resolveRestoreTarget(): AppleLyricsScrollPresentationState.ResolvedRestoreTarget? {
         val layoutManager = runCatching {
@@ -324,9 +326,13 @@ internal fun AppleLyricsSupplementHooks.restoreAppleLyricsScrollSnapshot(fragmen
         runCatching {
             recycler.viewTreeObserver.removeOnPreDrawListener(listener)
         }
-        scrollPresentationState.clearPendingRestoreIf(listener)
-        if (!success) scrollPresentationState.markRestoreFailed(songId)
-        scrollPresentationState.finishPresentation()
+        recycler.removeOnAttachStateChangeListener(attachListener)
+        // A newer restore may already own this state. Never let the detached
+        // older listener clear its presentation gate or preserved anchor.
+        if (scrollPresentationState.clearPendingRestoreIf(listener)) {
+            if (!success) scrollPresentationState.markRestoreFailed(songId)
+            scrollPresentationState.finishPresentation()
+        }
     }
 
     // R2/I2 clears all RecyclerView children before the first layout of the new source.
@@ -447,13 +453,31 @@ internal fun AppleLyricsSupplementHooks.restoreAppleLyricsScrollSnapshot(fragmen
         if (attempts >= 8) finishRestore()
         true
     }
-    scrollPresentationState.setPendingRestore(recycler, listener)
+    attachListener = object : View.OnAttachStateChangeListener {
+        override fun onViewAttachedToWindow(view: View) = Unit
+
+        override fun onViewDetachedFromWindow(view: View) {
+            // A detached RecyclerView need not receive another PreDraw. Release
+            // its listener immediately rather than retaining the whole host tree.
+            finishRestore()
+        }
+    }
+    scrollPresentationState.setPendingRestore(recycler, listener, attachListener)
+    recycler.addOnAttachStateChangeListener(attachListener)
     recycler.viewTreeObserver.addOnPreDrawListener(listener)
     recycler.postOnAnimation {
         if (!recycler.isAttachedToWindow && !completed) {
             finishRestore()
         }
     }
+    // A RecyclerView registered before its first attach need not run either
+    // PreDraw or a View-posted callback. The main Handler always runs; expire
+    // only this exact restore, never a newer one for the same host.
+    mainHandler.postDelayed({
+        if (!completed && scrollPresentationState.ownsPendingRestore(listener)) {
+            finishRestore()
+        }
+    }, 2_000L)
 }
 
 internal fun AppleLyricsSupplementHooks.scheduleSupplementActiveLineUpdate() {
@@ -504,8 +528,7 @@ internal fun AppleLyricsSupplementHooks.updateSupplementActiveLine() {
         stopSupplementActiveLineUpdate()
         return
     }
-    val lineIndex = lines.indexOfLast { line -> line.begin <= position }
-        .coerceAtLeast(0)
+    val lineIndex = activeSupplementLineIndex(lines, position) ?: -1
     if (lineIndex == activeLineUpdateController.lastAppliedIndex()) {
         return scheduleSupplementActiveLineUpdate()
     }
@@ -521,7 +544,7 @@ internal fun AppleLyricsSupplementHooks.updateSupplementActiveLine() {
         AppleReflection.call(
             adapter,
             methodName,
-            listOf(lineIndex),
+            if (lineIndex >= 0) listOf(lineIndex) else emptyList<Int>(),
             -1,
             emptyPairs,
         )

@@ -56,6 +56,28 @@ class SourceReadingSpanTest {
         assertNull(result.text)
         assertEquals(LineReadingStatus.MISSING_UNSUPPORTED, result.status)
     }
+
+    @Test fun `failed later morphology passes cannot discard a previously verified source anchor`() {
+        val result = SourceReadingAssembler.retryModes("花未知", 3) { mode ->
+            when (mode) {
+                0 -> listOf(RawReadingToken(0, 1, "ハナ"), RawReadingToken(1, 3, "*"))
+                1 -> listOf(RawReadingToken(0, 3, "*"))
+                else -> emptyList()
+            }
+        }
+        assertNull(result.text)
+        assertEquals(LineReadingStatus.MISSING_UNSUPPORTED, result.status)
+        assertEquals(listOf("花"), result.spans.map { it.sourceText })
+        assertEquals(listOf("하나"), result.spans.map { it.hangul })
+    }
+
+    @Test fun `equal verified coverage prefers the first Sudachi mode`() {
+        val result = SourceReadingAssembler.retryModes("花未知", 2) { mode ->
+            listOf(RawReadingToken(0, 1, if (mode == 0) "ハナ" else "カ"),
+                RawReadingToken(1, 3, "*"))
+        }
+        assertEquals("하나", result.spans.single().hangul)
+    }
     @Test fun repeatedJapaneseWordsKeepOriginalSourceOffsets() {
         val reading = SourceReadingAssembler.assemble(
             "駄目駄目",

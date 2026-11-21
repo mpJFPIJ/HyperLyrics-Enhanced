@@ -9,6 +9,22 @@ import com.juren233.hyperlyricsenhanced.lyric.model.Song
 import com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation
 import com.juren233.hyperlyricsenhanced.lyric.model.LyricPronunciationSpan
 
+/** Checks a receipt's declared provider against the latest explicit song selection. */
+internal fun shouldAcceptAppleOnlineSourceReceipt(
+    songId: String?,
+    incomingSource: String?,
+    pendingSongId: String?,
+    pendingTargetSource: String?,
+    confirmedSongId: String?,
+    confirmedSource: String?,
+): Boolean {
+    val expected = pendingTargetSource.takeIf { pendingSongId == songId }
+        ?: confirmedSource.takeIf { confirmedSongId == songId }
+    // Older or standalone providers may not declare a source. Such payloads
+    // cannot be proven stale by source identity alone; retain old behavior.
+    return incomingSource.isNullOrBlank() || expected.isNullOrBlank() || incomingSource == expected
+}
+
 internal class AppleNativeOnlineTranslationStore {
     private data class TimingKey(
         val begin: Long,

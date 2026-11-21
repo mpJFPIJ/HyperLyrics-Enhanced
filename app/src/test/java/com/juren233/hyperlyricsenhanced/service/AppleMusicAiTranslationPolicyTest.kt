@@ -22,27 +22,31 @@ class AppleMusicAiTranslationPolicyTest {
 
     @Test fun neverTranslatesWhenDisabledOrLyricsMissing() {
         assertFalse(AppleMusicAiTranslationPolicy.shouldTranslate(
-            enabled = false, hasLyrics = true, hasExistingTranslation = false,
+            enabled = false, hasLyrics = true, hasMissingTranslation = true,
             skipExisting = false, forceOverride = false,
         ))
         assertFalse(AppleMusicAiTranslationPolicy.shouldTranslate(
-            enabled = true, hasLyrics = false, hasExistingTranslation = false,
+            enabled = true, hasLyrics = false, hasMissingTranslation = true,
             skipExisting = false, forceOverride = false,
         ))
     }
 
-    @Test fun skipsExistingTranslationsUnlessForced() {
+    @Test fun skipsOnlyWhenAllLinesHaveTranslationsUnlessForced() {
         assertFalse(AppleMusicAiTranslationPolicy.shouldTranslate(
-            enabled = true, hasLyrics = true, hasExistingTranslation = true,
+            enabled = true, hasLyrics = true, hasMissingTranslation = false,
             skipExisting = true, forceOverride = false,
         ))
         assertTrue(AppleMusicAiTranslationPolicy.shouldTranslate(
-            enabled = true, hasLyrics = true, hasExistingTranslation = true,
+            enabled = true, hasLyrics = true, hasMissingTranslation = false,
             skipExisting = true, forceOverride = true,
         ))
         assertTrue(AppleMusicAiTranslationPolicy.shouldTranslate(
-            enabled = true, hasLyrics = true, hasExistingTranslation = false,
+            enabled = true, hasLyrics = true, hasMissingTranslation = true,
             skipExisting = true, forceOverride = false,
+        ))
+        assertTrue(AppleMusicAiTranslationPolicy.shouldTranslate(
+            enabled = true, hasLyrics = true, hasMissingTranslation = false,
+            skipExisting = false, forceOverride = false,
         ))
     }
 }

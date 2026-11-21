@@ -70,4 +70,16 @@ class AppleLyricsRefreshBurstGateTest {
         assertEquals(nextGeneration, queue.consume(nextGeneration))
         assertEquals(first, queue.consume(first))
     }
+
+    @Test fun `layout retries are bounded and retain newest coalesced revision`() {
+        val queue = AppleLyricsFrameRefreshQueue()
+        assertTrue(queue.offer(first.copy(revision = 10L)))
+        assertFalse(queue.offer(first.copy(revision = 13L)))
+        assertEquals(13L, queue.peek(first)?.revision)
+        assertTrue(AppleLyricsRefreshRetryPolicy.shouldRetry(0))
+        assertTrue(AppleLyricsRefreshRetryPolicy.shouldRetry(7))
+        assertFalse(AppleLyricsRefreshRetryPolicy.shouldRetry(8))
+        assertEquals(13L, queue.consume(first)?.revision)
+        assertTrue(queue.offer(first))
+    }
 }

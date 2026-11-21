@@ -99,21 +99,54 @@ import kotlin.math.roundToInt
 internal fun AppleMusicProviderOrchestrator.startHooks() {
     val userDiagnostics = BuildConfig.DEBUG && BuildConfig.HLE_BUILD_RUN == "local"
     val costs = if (userDiagnostics) mutableListOf<StartupHookModuleCost>() else null
-    hookModules().asSequence()
-        .filter { hookModule -> !hookModule.debugOnly || userDiagnostics }
-        .forEach { hookModule ->
+    val failures = installIndependentAppleHookModules(
+        modules = hookModules().filter { hookModule -> !hookModule.debugOnly || userDiagnostics },
+        install = { hookModule ->
             val startNs = if (costs != null) System.nanoTime() else 0L
-            hookRegistrar.withModule(hookModule.id, hookModule::installHooks)
-            costs?.add(
-                StartupHookModuleCost(
-                    id = hookModule.id,
-                    debugOnly = hookModule.debugOnly,
-                    wallNs = System.nanoTime() - startNs,
-                    installed = hookRegistrar.installCost.snapshot(hookModule.id),
+            try {
+                hookRegistrar.withModule(hookModule.id, hookModule::installHooks)
+            } finally {
+                costs?.add(
+                    StartupHookModuleCost(
+                        id = hookModule.id,
+                        debugOnly = hookModule.debugOnly,
+                        wallNs = System.nanoTime() - startNs,
+                        installed = hookRegistrar.installCost.snapshot(hookModule.id),
+                    )
                 )
-            )
-        }
+            }
+        },
+        onFailure = { moduleId, failure ->
+            ProviderLogger.error("Apple Music Hook 模块安装失败，继续其他模块: id=$moduleId", failure)
+        },
+    )
     costs?.let(::logStartupHookCosts)
+    if (failures.isNotEmpty()) {
+        ProviderLogger.info("Apple Music Hook 部分模块安装失败: count=${failures.size}, ids=$failures")
+    }
+}
+
+/** One missing host signature must not abort unrelated already-selected hooks. */
+internal fun installIndependentAppleHookModules(
+    modules: Iterable<io.github.proify.lyricon.amprovider.xposed.hooks.AppleMusicHookModule>,
+    install: (io.github.proify.lyricon.amprovider.xposed.hooks.AppleMusicHookModule) -> Unit,
+    onFailure: (String, Throwable) -> Unit,
+): List<String> {
+    val failed = mutableListOf<String>()
+    modules.forEach { hookModule ->
+        try {
+            install(hookModule)
+        } catch (failure: Throwable) {
+            if (failure is VirtualMachineError || failure is ThreadDeath) throw failure
+            if (failure is InterruptedException) {
+                Thread.currentThread().interrupt()
+                throw failure
+            }
+            failed += hookModule.id
+            onFailure(hookModule.id, failure)
+        }
+    }
+    return failed
 }
 
 private class StartupHookModuleCost(

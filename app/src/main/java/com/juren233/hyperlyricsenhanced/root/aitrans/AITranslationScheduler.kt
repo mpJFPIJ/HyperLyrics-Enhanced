@@ -175,7 +175,8 @@ internal class AITranslationScheduler(
             if (job.state == TranslationJobState.CANCELLED) return
             if (!apiResults.isNullOrEmpty() && job.generation == generation.get()) {
                 val saved = cache.saveToDb(
-                    job.key, apiResults, job.song, job.originalLines, expectedEpoch = epoch,
+                    job.key, apiResults, job.song, job.originalLines,
+                    expectedEpoch = epoch, expectedGeneration = job.generation,
                 )
                 HookLogger.d(TAG, "翻译任务完成: song=${job.songName}, cached=$saved")
             }

@@ -33,6 +33,38 @@ import org.junit.Test
 class AppleMissingLyricsStoreTest {
 
     @Test
+    fun `supplement active line honors line endings pauses and overlapping intervals`() {
+        val lines = listOf(
+            AppleMissingLyricsLine(begin = 100, end = 250, text = "첫째", words = emptyList(), translation = null),
+            AppleMissingLyricsLine(begin = 300, end = 500, text = "둘째", words = emptyList(), translation = null),
+            AppleMissingLyricsLine(begin = 420, end = 550, text = "셋째", words = emptyList(), translation = null),
+        )
+        assertNull(activeSupplementLineIndex(lines, 99L))
+        assertEquals(0, activeSupplementLineIndex(lines, 100L))
+        assertNull(activeSupplementLineIndex(lines, 250L))
+        assertNull(activeSupplementLineIndex(lines, 299L))
+        assertEquals(1, activeSupplementLineIndex(lines, 300L))
+        assertEquals(2, activeSupplementLineIndex(lines, 420L))
+        assertEquals(2, activeSupplementLineIndex(lines, 500L))
+        assertNull(activeSupplementLineIndex(lines, 550L))
+    }
+
+    @Test
+    fun `out of order supplement input is ordered and duration uses latest ending`() {
+        val store = AppleMissingLyricsStore()
+        assertTrue(store.update(Song(
+            id = "out-of-order", duration = 100L,
+            lyrics = listOf(
+                line(200L, 300L, "후반"),
+                line(0L, 500L, "긴 소절"),
+                line(100L, 150L, "중간"),
+            ),
+        )))
+        assertEquals(listOf(0L, 100L, 200L), store.lines("out-of-order").map { it.begin })
+        assertEquals(500L, store.durationMs("out-of-order"))
+    }
+
+    @Test
     fun `LunaBeat remains preferred when Apple native timing is unknown`() {
         assertTrue(
             shouldUseLunaBeatOverAppleNativeLyrics(

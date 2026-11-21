@@ -6,6 +6,7 @@
 package io.github.proify.lyricon.amprovider.xposed
 
 import android.view.ViewTreeObserver
+import android.view.View
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -132,6 +133,8 @@ class AppleLyricsScrollPresentationStateTest {
 
         state.setPendingRestore(host, first)
         assertTrue(state.isRestorePending())
+        assertTrue(state.ownsPendingRestore(first))
+        assertFalse(state.ownsPendingRestore(second))
         assertSame(first, state.takePendingRestore()?.listener)
         assertFalse(state.isRestorePending())
         assertNull(state.takePendingRestore())
@@ -145,6 +148,21 @@ class AppleLyricsScrollPresentationStateTest {
     }
 
     @Test
+    fun `pending restore owns its detach cleanup listener for explicit cancellation`() {
+        val state = AppleLyricsScrollPresentationState()
+        val host = Any()
+        val preDraw = Listener()
+        val onDetach = object : View.OnAttachStateChangeListener {
+            override fun onViewAttachedToWindow(view: View) = Unit
+            override fun onViewDetachedFromWindow(view: View) = Unit
+        }
+        state.setPendingRestore(host, preDraw, onDetach)
+        val pending = requireNotNull(state.takePendingRestore())
+        assertSame(preDraw, pending.listener)
+        assertSame(onDetach, pending.attachListener)
+    }
+
+    @Test
     fun `a newer restore replaces the previously pending one`() {
         val state = AppleLyricsScrollPresentationState()
         val host = Any()
@@ -153,6 +171,8 @@ class AppleLyricsScrollPresentationStateTest {
 
         state.setPendingRestore(host, first)
         state.setPendingRestore(host, second)
+        assertFalse(state.ownsPendingRestore(first))
+        assertTrue(state.ownsPendingRestore(second))
         // The older listener no longer owns the pending entry.
         assertFalse(state.clearPendingRestoreIf(first))
         assertTrue(state.isRestorePending())

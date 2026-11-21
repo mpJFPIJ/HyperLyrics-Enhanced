@@ -175,25 +175,7 @@ internal fun AppleLyricsBlurHooks.appleLyricsFirstLineBeginMs(adapter: Any): Lon
 internal fun AppleLyricsBlurHooks.appleLyricsAdapterPositionForPlayback(
     adapter: Any,
     playbackPositionMs: Long,
-): Int? = runCatching {
-    val lyrics = AppleReflection.call(
-        adapter,
-        lyricsAdapterMember(adapter, AppleMusicRuntimeMember.LYRICS_ADAPTER_LYRICS_METHOD),
-    ) ?: return@runCatching null
-    val lineCount = (AppleReflection.call(
-        lyrics,
-        lyricsAdapterMember(adapter, AppleMusicRuntimeMember.LYRICS_ADAPTER_LINE_COUNT_METHOD),
-    ) as? Number)?.toInt() ?: return@runCatching null
-    if (lineCount <= 0) return@runCatching null
-    val itemCount = appleRecyclerAdapterItemCount(adapter)
-    selectAppleLyricsPlaybackAdapterPosition(
-        lineBeginsMs = (0 until lineCount).map { lineIndex ->
-            appleLyricsLineBeginMs(adapter, lyrics, lineIndex)
-        },
-        playbackPositionMs = playbackPositionMs,
-        itemCount = itemCount,
-    )
-}.getOrNull()
+): Int? = verifiedAdapterPositionForPlayback(adapter, playbackPositionMs)
 
 /**
  * Returns a compact, debug-only view of the adapter's lyric time axis and the

@@ -6,6 +6,7 @@
 package io.github.proify.lyricon.amprovider.xposed
 
 import android.view.ViewTreeObserver
+import android.view.View
 import java.lang.ref.WeakReference
 import java.util.Collections
 import java.util.WeakHashMap
@@ -32,6 +33,7 @@ internal class AppleLyricsScrollPresentationState {
     internal data class PendingRestore(
         val host: WeakReference<Any>,
         val listener: ViewTreeObserver.OnPreDrawListener,
+        val attachListener: View.OnAttachStateChangeListener? = null,
     )
 
     internal data class ResolvedRestoreTarget(
@@ -73,6 +75,10 @@ internal class AppleLyricsScrollPresentationState {
     fun isRestorePending(): Boolean = pendingRestore?.host?.get() != null
 
     @Synchronized
+    fun ownsPendingRestore(listener: ViewTreeObserver.OnPreDrawListener): Boolean =
+        pendingRestore?.listener === listener
+
+    @Synchronized
     fun snapshotFor(songId: String): ScrollSnapshot? =
         snapshot?.takeIf { snapshotSongId == songId }
 
@@ -106,8 +112,12 @@ internal class AppleLyricsScrollPresentationState {
     }
 
     @Synchronized
-    fun setPendingRestore(host: Any, listener: ViewTreeObserver.OnPreDrawListener) {
-        pendingRestore = PendingRestore(WeakReference(host), listener)
+    fun setPendingRestore(
+        host: Any,
+        listener: ViewTreeObserver.OnPreDrawListener,
+        attachListener: View.OnAttachStateChangeListener? = null,
+    ) {
+        pendingRestore = PendingRestore(WeakReference(host), listener, attachListener)
     }
 
     @Synchronized
@@ -135,7 +145,9 @@ internal class AppleLyricsActiveLineUpdateController(
     private val update: () -> Unit,
 ) {
     private var scheduled = false
-    private var lastAppliedIndex = -1
+    // -1 is a real, applied "no active lyrics" state; use a distinct initial
+    // sentinel so a gap first observed after a song change clears stale state.
+    private var lastAppliedIndex = Int.MIN_VALUE
     private val runnable = Runnable {
         synchronized(this) {
             scheduled = false
@@ -160,7 +172,7 @@ internal class AppleLyricsActiveLineUpdateController(
 
     @Synchronized
     fun stop() {
-        lastAppliedIndex = -1
+        lastAppliedIndex = Int.MIN_VALUE
     }
 }
 

@@ -29,6 +29,7 @@ internal class AITranslationCache(
 
     private val dbMutex = Mutex()
     private val groupEpochs = AiCacheGroupEpochs()
+    private val clearGate = AiCacheClearGate()
     private var dbHelper: DatabaseHelper? = null
 
     private val memory: MutableMap<String, List<TranslationItem>> =
@@ -51,13 +52,15 @@ internal class AITranslationCache(
         }
     }
 
-    fun getFromMemory(key: String): List<TranslationItem>? = memory[key]
+    fun getFromMemory(key: String): List<TranslationItem>? =
+        memory[key].takeIf { clearGate.mayServeCache() }
 
     fun putMemory(key: String, items: List<TranslationItem>) {
-        memory[key] = items
+        if (clearGate.mayServeCache()) memory[key] = items
     }
 
     suspend fun getFromDb(key: String): List<TranslationItem>? = dbMutex.withLock {
+        if (!clearGate.mayReadDatabase()) return@withLock null
         val db = dbHelper?.readableDatabase ?: return null
         return runCatching {
             db.query(
@@ -70,10 +73,9 @@ internal class AITranslationCache(
                 if (cursor.moveToFirst()) {
                     val jsonData =
                         cursor.getString(cursor.getColumnIndexOrThrow(DatabaseHelper.COLUMN_DATA))
-                    json.decodeFromString<List<TranslationItem>>(jsonData).also {
-                        // Keep the RAM mirror consistent with deletion under dbMutex.
-                        memory[key] = it
-                    }
+                    json.decodeFromString<List<TranslationItem>>(jsonData)
+                        .takeIf { clearGate.mayReadDatabase() }
+                        ?.also { memory[key] = it }
                 } else null
             }
         }.getOrElse {
@@ -88,11 +90,15 @@ internal class AITranslationCache(
         song: Song? = null,
         originalLines: List<String> = emptyList(),
         expectedEpoch: Long? = null,
+        expectedGeneration: Int? = null,
     ): Boolean {
         val jsonData = items.toJson()
         val groupId = song?.let { AiCachedSongCatalog.groupId(it.name, it.artist, originalLines) }
         return dbMutex.withLock {
             val db = dbHelper?.writableDatabase ?: return@withLock false
+            if (!clearGate.mayReadDatabase() ||
+                (expectedGeneration != null && generation.get() != expectedGeneration)
+            ) return@withLock false
             if (expectedEpoch != null && (groupId == null ||
                     !groupEpochs.isCurrent(groupId, expectedEpoch))) return@withLock false
             val saved = runCatching {
@@ -204,17 +210,33 @@ internal class AITranslationCache(
     }
 
     fun clear(callback: () -> Unit) {
+        clearGate.beginClear()
         generation.incrementAndGet()
         memory.clear()
         scope.launch(Dispatchers.IO) {
-            dbMutex.withLock {
-                runCatching {
-                    dbHelper?.writableDatabase?.delete(DatabaseHelper.TABLE_NAME, null, null)
-                    HookLogger.d(TAG, "翻译缓存数据库已清空")
-                    withContext(Dispatchers.Main) { callback() }
-                }.onFailure {
-                    HookLogger.e(TAG, "清空翻译缓存数据库失败", it)
+            var cleared = false
+            try {
+                dbMutex.withLock {
+                    cleared = runCatching {
+                        dbHelper?.writableDatabase?.delete(DatabaseHelper.TABLE_NAME, null, null)
+                        true
+                    }.getOrElse {
+                        HookLogger.e(TAG, "清空翻译缓存数据库失败", it)
+                        false
+                    }
+                    // Readers that completed just before the delete acquired the
+                    // mutex might have re-populated RAM after the first clear.
+                    memory.clear()
+                    if (cleared) {
+                        HookLogger.d(TAG, "翻译缓存数据库已清空")
+                    }
                 }
+            } finally {
+                clearGate.finishClear(cleared)
+            }
+            if (cleared) {
+                runCatching { withContext(Dispatchers.Main) { callback() } }
+                    .onFailure { HookLogger.e(TAG, "翻译缓存清理完成回调失败", it) }
             }
         }
     }

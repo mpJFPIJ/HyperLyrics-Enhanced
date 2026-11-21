@@ -12,6 +12,7 @@ import com.juren233.hyperlyricsenhanced.root.island.IslandSlotContentAssembler
 import com.juren233.hyperlyricsenhanced.root.island.renderer.IslandRenderer
 import com.juren233.hyperlyricsenhanced.root.mediacard.notification.NotificationMediaAodLyricHooker
 import com.juren233.hyperlyricsenhanced.root.aitrans.AITranslator
+import com.juren233.hyperlyricsenhanced.root.aitrans.AIPronunciationPolicy
 import com.juren233.hyperlyricsenhanced.root.utils.HookLogger
 import com.juren233.hyperlyricsenhanced.root.utils.MediaCardDiagnosticLogger
 import com.juren233.hyperlyricsenhanced.common.RootConstants
@@ -361,9 +362,11 @@ class RootLyricSink(
                 )
                 val forceOverride = configuredForceOverride && !preserveExistingTranslations
                 if (skipExisting && !forceOverride) {
-                    val hasTranslation = song.lyrics?.any { !it.translation.isNullOrBlank() } == true
-                    if (hasTranslation) {
-                        HookLogger.d("RootLyricSink", "歌曲 ${song.name} 已有翻译，跳过AI翻译")
+                    val hasMissingTranslation = song.lyrics?.any {
+                        it.translation.isNullOrBlank()
+                    } == true
+                    if (!hasMissingTranslation && !AIPronunciationPolicy.shouldEnrich(song)) {
+                        HookLogger.d("RootLyricSink", "歌曲 ${song.name} 无缺失翻译或发音，跳过AI翻译")
                         return@launch
                     }
                 }
@@ -387,7 +390,8 @@ class RootLyricSink(
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
-            } catch (_: Exception) {
+            } catch (failure: Exception) {
+                HookLogger.e("RootLyricSink", "歌曲AI翻译处理失败", failure)
             }
         }
     }

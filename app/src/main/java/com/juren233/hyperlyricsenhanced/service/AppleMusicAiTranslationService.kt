@@ -233,21 +233,26 @@ class AppleMusicAiTranslationService : Service() {
                             LogManager.i(TAG, "stage=korean_original_skipped")
                             return@launch
                         }
-                        val hasExisting = song.lyrics.orEmpty()
-                            .any { !it.translation.isNullOrBlank() }
+                        val hasMissingTranslation = song.lyrics.orEmpty()
+                            .any { it.translation.isNullOrBlank() }
+                        val hasPronunciationWork =
+                            com.juren233.hyperlyricsenhanced.root.aitrans.AIPronunciationPolicy
+                                .shouldEnrich(song)
                         if (!AppleMusicAiTranslationPolicy.shouldTranslate(
                                 enabled = enabled,
                                 hasLyrics = !song.lyrics.isNullOrEmpty(),
-                                hasExistingTranslation = hasExisting,
+                                hasMissingTranslation = hasMissingTranslation,
                                 skipExisting = skipExisting,
                                 forceOverride = forceOverride,
+                                hasPronunciationWork = hasPronunciationWork,
                             )
                         ) {
                             sendProgress(serial, requestKey, AiTranslationProgress("skipped"))
                             LogManager.i(
                                 TAG, "stage=request_skipped enabled=$enabled " +
                                     "hasLyrics=${!song.lyrics.isNullOrEmpty()} " +
-                                    "hasExisting=$hasExisting skipExisting=$skipExisting"
+                                    "hasMissingTranslation=$hasMissingTranslation " +
+                                    "hasPronunciationWork=$hasPronunciationWork skipExisting=$skipExisting"
                             )
                             return@launch
                         }

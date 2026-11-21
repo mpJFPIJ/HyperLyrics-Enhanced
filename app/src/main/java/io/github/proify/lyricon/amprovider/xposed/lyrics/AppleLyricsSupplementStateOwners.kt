@@ -218,17 +218,17 @@ internal class AppleLyricsPronunciationState {
 
 /**
  * Owns the "已处理过该 View" identity sets used by the loading-overlay and translation-button
- * suppression paths. Identity semantics rely on View not overriding equals/hashCode.
+ * suppression paths. Views belong to Apple's lifecycle: de-duplication must not keep them alive.
  */
 internal class AppleLyricsViewTracking {
-    private val suppressedLoadingViews =
-        Collections.newSetFromMap(IdentityHashMap<Any, Boolean>())
-    private val forcedTranslationButtons =
-        Collections.newSetFromMap(IdentityHashMap<Any, Boolean>())
+    private val suppressedLoadingViews = WeakIdentityMap<Any, Unit>()
+    private val forcedTranslationButtons = WeakIdentityMap<Any, Unit>()
 
-    fun markLoadingViewSuppressedIfNew(view: Any): Boolean = suppressedLoadingViews.add(view)
+    fun markLoadingViewSuppressedIfNew(view: Any): Boolean =
+        suppressedLoadingViews.putIfAbsent(view, Unit)
 
-    fun markTranslationButtonForcedIfNew(view: Any): Boolean = forcedTranslationButtons.add(view)
+    fun markTranslationButtonForcedIfNew(view: Any): Boolean =
+        forcedTranslationButtons.putIfAbsent(view, Unit)
 }
 
 /**

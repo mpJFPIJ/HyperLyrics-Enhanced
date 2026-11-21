@@ -231,9 +231,10 @@ internal fun AppleLyricsSupplementHooks.dismissAppleLyricsLoadingOverlay(fragmen
                             oldRight: Int,
                             oldBottom: Int,
                         ) {
-                            val currentSong = currentAppleLyricsSongId ?: currentPlaybackQueueMediaId()
-                            val hasSupplement = currentSong != null && missingLyricsSupplement().hasSupplementContent(currentSong)
-                            if (hasSupplement && changedView.visibility != View.GONE) {
+                            val currentSong = currentMissingLyricsSupplementSong(
+                                currentAppleLyricsSongId, currentPlaybackQueueMediaId(),
+                            ) { missingLyricsSupplement().hasSupplementContent(it) }
+                            if (currentSong != null && changedView.visibility != View.GONE) {
                                 changedView.visibility = View.GONE
                                 changedView.isClickable = false
                                 ProviderLogger.debug(
@@ -267,10 +268,9 @@ internal fun AppleLyricsSupplementHooks.dismissAppleLyricsLoadingOverlay(fragmen
  */
 internal fun AppleLyricsSupplementHooks.ensureMissingLyricsTranslationButtonVisible(fragment: Any?) {
     fragment ?: return
-    val songId = currentAppleLyricsSongId
-        ?: currentPlaybackQueueMediaId()
-        ?: return
-    if (!missingLyricsSupplement().hasSupplementContent(songId)) return
+    val songId = currentMissingLyricsSupplementSong(
+        currentAppleLyricsSongId, currentPlaybackQueueMediaId(),
+    ) { missingLyricsSupplement().hasSupplementContent(it) } ?: return
     val root = runCatching {
         AppleReflection.call(
             fragment,
@@ -306,10 +306,11 @@ internal fun AppleLyricsSupplementHooks.ensureMissingLyricsTranslationButtonVisi
                             oldRight: Int,
                             oldBottom: Int,
                         ) {
-                            if (
-                                missingLyricsSupplement()
-                                    .hasSupplementContent(songId) &&
-                                changedView.visibility != View.VISIBLE
+                            val currentSong = currentMissingLyricsSupplementSong(
+                                currentAppleLyricsSongId, currentPlaybackQueueMediaId(),
+                            ) { missingLyricsSupplement().hasSupplementContent(it) }
+                            if (currentSong != null &&
+                                (changedView.visibility != View.VISIBLE || !changedView.isEnabled)
                             ) {
                                 changedView.visibility = View.VISIBLE
                                 changedView.isEnabled = true

@@ -46,11 +46,19 @@ internal object SourceReadingAssembler {
     ): LineReadingResult {
         if (source.isBlank()) return LineReadingResult(null, emptyList(), LineReadingStatus.EMPTY)
         var failure = LineReadingResult(null, emptyList(), LineReadingStatus.MISSING_UNSUPPORTED)
+        var bestVerifiedCoverage = -1
         for (mode in 0 until modeCount) {
             val analyzed = runCatching { assemble(source, tokenize(mode)) }.getOrNull()
                 ?: continue
             if (analyzed.status == LineReadingStatus.COMPLETE) return analyzed
-            failure = analyzed
+            // Never let the last, worse dictionary split destroy earlier *verified*
+            // source anchors. These spans are not a full-line pronunciation and
+            // must still be presented only through the explicitly partial path.
+            val verifiedCoverage = analyzed.spans.sumOf { it.sourceEnd - it.sourceStart }
+            if (verifiedCoverage > bestVerifiedCoverage) {
+                failure = analyzed
+                bestVerifiedCoverage = verifiedCoverage
+            }
         }
         return failure
     }

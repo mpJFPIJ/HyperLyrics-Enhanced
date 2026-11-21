@@ -15,6 +15,8 @@ import com.juren233.hyperlyricsenhanced.common.lyric.LyricMetadataKeys
 import com.juren233.hyperlyricsenhanced.common.lyric.OnlineTranslationMatchStat
 import com.juren233.hyperlyricsenhanced.common.lyric.OnlineTranslationMatchStatsCodec
 import java.security.MessageDigest
+import java.util.Collections
+import java.util.IdentityHashMap
 
 internal data class AppleMissingLyricsWord(
     val begin: Long,
@@ -29,6 +31,22 @@ internal data class AppleMissingLyricsLine(
     val words: List<AppleMissingLyricsWord>,
     val translation: String? = null,
 )
+
+/** End is exclusive; silent gaps must not inherit the preceding line's highlight. */
+internal fun activeSupplementLineIndex(
+    lines: List<AppleMissingLyricsLine>,
+    playbackMs: Long,
+): Int? {
+    var candidate: Int? = null
+    lines.forEachIndexed { index, line ->
+        if (line.begin <= playbackMs && playbackMs < line.end &&
+            (candidate == null || line.begin >= lines[requireNotNull(candidate)].begin)
+        ) {
+            candidate = index
+        }
+    }
+    return candidate
+}
 
 internal data class AppleMissingLyricsPlaybackIdentity(
     val contentSongId: String,
@@ -112,6 +130,8 @@ internal class AppleMissingLyricsStore {
      * 这些指针保留到 Apple Music 进程结束，由进程生命周期统一回收。
      */
     private val retainedNativePointers = ArrayList<Any>()
+    private val retainedNativePointerIdentities =
+        Collections.newSetFromMap(IdentityHashMap<Any, Boolean>())
 
     /** Native-model revision deliberately does not advance for translation-only updates. */
     data class Receipt(
@@ -206,13 +226,13 @@ internal class AppleMissingLyricsStore {
                 translation = line.translation?.trim()?.takeIf(String::isNotEmpty)
                     ?: matchingPreviousTranslation(previousLines, line.begin, line.end, text),
             )
-        }
+        }.sortedWith(compareBy<AppleMissingLyricsLine> { it.begin }.thenBy { it.end })
         if (lines.isEmpty()) {
             return AppleMissingLyricsUpdateResult(AppleMissingLyricsUpdateKind.INVALID)
         }
         val updated = Content(
             songId = songId,
-            durationMs = song.duration.coerceAtLeast(lines.last().end),
+            durationMs = song.duration.coerceAtLeast(lines.maxOf { it.end }),
             lines = lines,
             sourceInfo = sourceInfo,
             rawAppleTtml = rawAppleTtml,
@@ -541,9 +561,10 @@ internal class AppleMissingLyricsStore {
      */
     @Synchronized
     fun knownNativeSongInfoPointers(): List<Any> = buildList {
-        nativeModel?.pointer?.let(::add)
+        val currentPointer = nativeModel?.pointer
+        currentPointer?.let(::add)
         retainedNativePointers.forEach { retained ->
-            if (none { it === retained }) add(retained)
+            if (retained !== currentPointer) add(retained)
         }
     }
 
@@ -568,7 +589,7 @@ internal class AppleMissingLyricsStore {
 
     /** 将已经暴露给 Apple 的旧指针转入进程级保留集，避免异步回调读取悬空地址。 */
     private fun retainNativePointerLocked(pointer: Any) {
-        if (retainedNativePointers.any { it === pointer }) return
+        if (!retainedNativePointerIdentities.add(pointer)) return
         retainedNativePointers += pointer
         ProviderLogger.debug(
             "Apple Music 补充歌词旧原生指针进入保留集: count=${retainedNativePointers.size}"

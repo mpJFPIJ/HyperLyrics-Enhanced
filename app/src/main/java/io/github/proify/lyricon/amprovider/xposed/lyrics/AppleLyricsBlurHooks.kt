@@ -120,6 +120,13 @@ internal class AppleLyricsBlurHooks(
         )
     }
 
+    /** Restore may use only a host-bound row↔clock mapping corroborated by
+     * Apple's current active set. Logical lyric indexes are not adapter rows. */
+    internal fun verifiedAdapterPositionForPlayback(adapter: Any, playbackPositionMs: Long): Int? =
+        verifiedNativeWindows.focus(
+            currentSongId(), appleLyricsActiveAdapterPositions(adapter), playbackPositionMs,
+        )
+
     /** Adapter positions are sourced from Apple's host classloader. When two
      * outgoing/incoming rows are both marked active, use the genuine holder
      * binding windows; unknown focus never promotes a native reading. */

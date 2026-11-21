@@ -241,6 +241,39 @@ internal fun AppleLyricsSupplementHooks.receiveNativeOnlineTranslation(compresse
 internal fun AppleLyricsSupplementHooks.receiveStandaloneAiTranslation(compressedSong: ByteArray) =
     receiveNativeOnlineTranslationPayload(compressedSong, preserveExistingPronunciation = true)
 
+/** Called on the main thread beside source-menu selection state. */
+private fun AppleLyricsSupplementHooks.acceptsSelectedOnlineSources(song: LocalSong): Boolean {
+    val songId = song.id ?: return true
+    val menu = onlineSourceMenuHooks()
+    val declarations = listOf(
+        "translation" to (song.metadata?.getString(LyricMetadataKeys.ONLINE_TRANSLATION_SOURCE)
+            .takeIf { song.lyrics.orEmpty().any { line -> !line.translation.isNullOrBlank() } }),
+        "pronunciation" to (song.metadata?.getString(LyricMetadataKeys.ONLINE_PRONUNCIATION_SOURCE)
+            .takeIf { song.lyrics.orEmpty().any { line -> !line.roma.isNullOrBlank() } }),
+    )
+    declarations.forEach { (type, incoming) ->
+        val pending = menu.pendingSwitches[type]
+        val confirmed = menu.confirmedSelections[type]
+        if (!shouldAcceptAppleOnlineSourceReceipt(
+                songId = songId,
+                incomingSource = incoming,
+                pendingSongId = pending?.songId,
+                pendingTargetSource = pending?.targetSource,
+                confirmedSongId = confirmed?.songId,
+                confirmedSource = confirmed?.source,
+            )
+        ) {
+            ProviderLogger.diagnostic(
+                "忽略过期 Apple Music 在线内容载荷: songId=$songId, " +
+                    "contentType=$type, payloadSource=$incoming, " +
+                    "pending=${pending?.targetSource}, confirmed=${confirmed?.source}"
+            )
+            return false
+        }
+    }
+    return true
+}
+
 private fun AppleLyricsSupplementHooks.receiveNativeOnlineTranslationPayload(
     compressedSong: ByteArray,
     preserveExistingPronunciation: Boolean,
@@ -312,7 +345,12 @@ private fun AppleLyricsSupplementHooks.receiveNativeOnlineTranslationPayload(
                         missingLyricsSupplement().hasKnownNativeLyricsFor(it)
                     } == true},visiblePageIsSupplement=$visiblePageIsSupplement",
             )
-            missingLyricsSupplement().receiveSupplement(song)
+            mainHandler.post {
+                if (!preserveExistingPronunciation && !acceptsSelectedOnlineSources(song)) {
+                    return@post
+                }
+                missingLyricsSupplement().receiveSupplement(song)
+            }
             return@launch
         }
 
@@ -334,6 +372,9 @@ private fun AppleLyricsSupplementHooks.receiveNativeOnlineTranslationPayload(
                         "featureEnabled=${isNativeOnlineTranslationEnabled()}",
                 )
                 if (!isNativeOnlineTranslationEnabled()) return@post
+                if (!preserveExistingPronunciation && !acceptsSelectedOnlineSources(song)) {
+                    return@post
+                }
                 val storeStartedAtNanos = SystemClock.elapsedRealtimeNanos()
                 AppleSourceSwitchPerformanceDiagnostics.stageForSong(
                     songId = song.id,

@@ -46,7 +46,11 @@ internal class AppleKoreanTranslationForeground(
             ) continue
             val save = canvas.save()
             try {
-                canvas.clipRect(local)
+                // A tightly measured native TextView does not necessarily
+                // include the ink overhang of its first/last glyph. Clip to
+                // this lyric holder, as the Hangul-reading foreground does,
+                // so no ascender/descender is cut at the TextView border.
+                canvas.clipRect(0, 0, holderRoot.width, holderRoot.height)
                 canvas.translate(
                     (local.left + text.compoundPaddingLeft - text.scrollX).toFloat(),
                     (local.top + text.totalPaddingTop - text.scrollY).toFloat(),

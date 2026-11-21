@@ -56,6 +56,7 @@ object AITranslator {
         forceOverride: Boolean = false,
         onProgress: ((AiTranslationProgress) -> Unit)? = null,
     ): Song {
+        val startingGeneration = cacheGeneration.get()
         // Do not re-translate Korean songs or restore stale Korean-to-Korean AI caches.
         if (KoreanSongTranslationPolicy.isKoreanTarget(configs.targetLanguage) &&
             KoreanSongTranslationPolicy.isKoreanSong(
@@ -79,13 +80,14 @@ object AITranslator {
                 AIPronunciationPolicy.shouldEnrich(song)
             ) GroqMultiModelClient.enrichMissingPronunciation(configs, song, request, local)
             else local
+            if (cacheGeneration.get() != startingGeneration) return song
             return AITranslationApplicator.apply(song, recovered, forceOverride)
         }
         if (song.lyrics.isNullOrEmpty()) return song
 
         HookLogger.d("AITranslator", "正在翻译：${song.name}（共 ${song.lyrics?.size ?: 0} 行）")
         return try {
-            translateSong(song, configs, forceOverride, onProgress)
+            translateSong(song, configs, forceOverride, startingGeneration, onProgress)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -129,7 +131,9 @@ object AITranslator {
 
     fun clearCache(callback: () -> Unit) {
         HookLogger.d("AITranslator", "清理记录：正在清空所有本地翻译记录（内存+数据库）")
-        scheduler.cancelPending()
+        // A running request from before Clear must not be reused by the next
+        // translation of the same key after its cache generation changes.
+        scheduler.cancelAll()
         cache.clear(callback)
     }
 
@@ -146,6 +150,7 @@ object AITranslator {
         song: Song,
         configs: AiTranslationConfigs,
         forceOverride: Boolean,
+        startingGeneration: Int,
         onProgress: ((AiTranslationProgress) -> Unit)? = null,
     ): Song {
         val currentLyrics = song.lyrics ?: return song
@@ -154,7 +159,9 @@ object AITranslator {
         val groupId = AiCachedSongCatalog.groupId(song.name, song.artist, originalLines)
         val startingEpoch = cache.currentGroupEpoch(groupId)
         if (includePronunciation) onProgress?.invoke(AiTranslationProgress("pronouncing"))
-        val locallyRead = loadLocalPronunciation(song, originalLines, includePronunciation, startingEpoch)
+        val locallyRead = loadLocalPronunciation(
+            song, originalLines, includePronunciation, startingEpoch, startingGeneration,
+        )
         val songContentId = AITranslationKey.calculate(
             configs, song, originalLines, includePronunciation = includePronunciation,
         )
@@ -181,9 +188,10 @@ object AITranslator {
             HookLogger.d("AITranslator", "缓存命中：从内存加载了 ${song.name} 的翻译")
             val restored = maybeRepairCachedPhonetics(
                 songContentId, configs, song, originalLines, includePronunciation,
-                AiLyricComposition.merge(it, locallyRead), startingEpoch,
+                AiLyricComposition.merge(it, locallyRead), startingEpoch, startingGeneration,
             )
-            if (cache.currentGroupEpoch(groupId) != startingEpoch) return song
+            if (cache.currentGroupEpoch(groupId) != startingEpoch ||
+                cacheGeneration.get() != startingGeneration) return song
             return AITranslationApplicator.apply(
                 song, AiLyricComposition.merge(
                     mergeWithLegacyTranslations(legacyResults, restored), locallyRead,
@@ -196,9 +204,10 @@ object AITranslator {
             HookLogger.d("AITranslator", "记录命中：从本地存储加载了 ${song.name} 的翻译")
             val restored = maybeRepairCachedPhonetics(
                 songContentId, configs, song, originalLines, includePronunciation,
-                AiLyricComposition.merge(it, locallyRead), startingEpoch,
+                AiLyricComposition.merge(it, locallyRead), startingEpoch, startingGeneration,
             )
-            if (cache.currentGroupEpoch(groupId) != startingEpoch) return song
+            if (cache.currentGroupEpoch(groupId) != startingEpoch ||
+                cacheGeneration.get() != startingGeneration) return song
             return AITranslationApplicator.apply(
                 song, AiLyricComposition.merge(
                     mergeWithLegacyTranslations(legacyResults, restored), locallyRead,
@@ -210,7 +219,8 @@ object AITranslator {
         val apiResults = scheduler.getOrEnqueue(
             songContentId, configs, song, originalLines, onProgress,
         ).await()
-        if (cache.currentGroupEpoch(groupId) != startingEpoch) return song
+        if (cache.currentGroupEpoch(groupId) != startingEpoch ||
+            cacheGeneration.get() != startingGeneration) return song
         if (apiResults.isNullOrEmpty()) {
             HookLogger.w("AITranslator", "翻译失败：未能获取到 ${song.name} 的 AI 翻译")
             // A translation network error should never suppress pronunciation
@@ -218,9 +228,10 @@ object AITranslator {
             val previous = AiLyricComposition.merge(legacyResults.orEmpty(), locallyRead)
             val recovered = maybeRepairCachedPhonetics(
                 songContentId, configs, song, originalLines, includePronunciation,
-                previous, startingEpoch,
+                previous, startingEpoch, startingGeneration,
             )
-            if (cache.currentGroupEpoch(groupId) != startingEpoch) return song
+            if (cache.currentGroupEpoch(groupId) != startingEpoch ||
+                cacheGeneration.get() != startingGeneration) return song
             return AITranslationApplicator.apply(song, recovered, forceOverride)
         }
         val composed = AiLyricComposition.merge(
@@ -231,9 +242,10 @@ object AITranslator {
         // rather than leaving it permanently blank just because most lines passed.
         val completed = maybeRepairCachedPhonetics(
             songContentId, configs, song, originalLines, includePronunciation,
-            composed, startingEpoch,
+            composed, startingEpoch, startingGeneration,
         )
-        if (cache.currentGroupEpoch(groupId) != startingEpoch) return song
+        if (cache.currentGroupEpoch(groupId) != startingEpoch ||
+            cacheGeneration.get() != startingGeneration) return song
         return AITranslationApplicator.apply(song, completed, forceOverride)
     }
 
@@ -247,6 +259,7 @@ object AITranslator {
         lines: List<String>,
         includePronunciation: Boolean,
         epoch: Long,
+        startingGeneration: Int,
     ): List<TranslationItem> {
         if (!includePronunciation) return emptyList()
         val key = AITranslationKey.pronunciation(song, lines)
@@ -262,7 +275,10 @@ object AITranslator {
             .filterNot { it.index in knownIndices }
         if (fresh.isEmpty()) return cached
         val combined = AiLyricComposition.merge(cached, fresh)
-        cache.saveToDb(key, combined, song, lines, expectedEpoch = epoch)
+        cache.saveToDb(
+            key, combined, song, lines, expectedEpoch = epoch,
+            expectedGeneration = startingGeneration,
+        )
         return combined
     }
 
@@ -279,6 +295,7 @@ object AITranslator {
         includePronunciation: Boolean,
         cached: List<TranslationItem>,
         expectedEpoch: Long,
+        startingGeneration: Int,
     ): List<TranslationItem> {
         if (!includePronunciation ||
             AIPronunciationPolicy.missingReadingIndices(
@@ -304,7 +321,10 @@ object AITranslator {
             configs, song, request, groqPatched,
         ) else groqPatched
         if (patched != cached) {
-            cache.saveToDb(key, patched, song, originalLines, expectedEpoch = expectedEpoch)
+            cache.saveToDb(
+                key, patched, song, originalLines, expectedEpoch = expectedEpoch,
+                expectedGeneration = startingGeneration,
+            )
         }
         return patched
     }

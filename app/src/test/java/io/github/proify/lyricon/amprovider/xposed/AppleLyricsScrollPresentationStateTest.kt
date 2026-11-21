@@ -6,6 +6,7 @@
 package io.github.proify.lyricon.amprovider.xposed
 
 import android.view.ViewTreeObserver
+import android.view.View
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -132,6 +133,8 @@ class AppleLyricsScrollPresentationStateTest {
 
         state.setPendingRestore(host, first)
         assertTrue(state.isRestorePending())
+        assertTrue(state.ownsPendingRestore(first))
+        assertFalse(state.ownsPendingRestore(second))
         assertSame(first, state.takePendingRestore()?.listener)
         assertFalse(state.isRestorePending())
         assertNull(state.takePendingRestore())
@@ -145,6 +148,21 @@ class AppleLyricsScrollPresentationStateTest {
     }
 
     @Test
+    fun `pending restore owns its detach cleanup listener for explicit cancellation`() {
+        val state = AppleLyricsScrollPresentationState()
+        val host = Any()
+        val preDraw = Listener()
+        val onDetach = object : View.OnAttachStateChangeListener {
+            override fun onViewAttachedToWindow(view: View) = Unit
+            override fun onViewDetachedFromWindow(view: View) = Unit
+        }
+        state.setPendingRestore(host, preDraw, onDetach)
+        val pending = requireNotNull(state.takePendingRestore())
+        assertSame(preDraw, pending.listener)
+        assertSame(onDetach, pending.attachListener)
+    }
+
+    @Test
     fun `a newer restore replaces the previously pending one`() {
         val state = AppleLyricsScrollPresentationState()
         val host = Any()
@@ -153,6 +171,8 @@ class AppleLyricsScrollPresentationStateTest {
 
         state.setPendingRestore(host, first)
         state.setPendingRestore(host, second)
+        assertFalse(state.ownsPendingRestore(first))
+        assertTrue(state.ownsPendingRestore(second))
         // The older listener no longer owns the pending entry.
         assertFalse(state.clearPendingRestoreIf(first))
         assertTrue(state.isRestorePending())
@@ -202,7 +222,7 @@ class AppleLyricsScrollPresentationStateTest {
     }
 
     @Test
-    fun `stop invalidates only the applied row so a queued turn can still finish`() {
+    fun `stop invalidates applied row including a real no active lyrics gap`() {
         val posted = mutableListOf<Pair<Runnable, Long>>()
         var updates = 0
         val controller = AppleLyricsActiveLineUpdateController(
@@ -215,7 +235,13 @@ class AppleLyricsScrollPresentationStateTest {
         assertEquals(4, controller.lastAppliedIndex())
 
         controller.stop()
+        // -1 is now the legitimate no-active-line state; the reset sentinel
+        // must be distinct so the next update will actually clear stale rows.
+        assertEquals(Int.MIN_VALUE, controller.lastAppliedIndex())
+        controller.markApplied(-1)
         assertEquals(-1, controller.lastAppliedIndex())
+        controller.stop()
+        assertEquals(Int.MIN_VALUE, controller.lastAppliedIndex())
         // The already queued callback is not cancelled by the original contract.
         posted.single().first.run()
         assertEquals(1, updates)

@@ -763,9 +763,29 @@ internal class AppleLyricsSupplementHooks(
                 AppleReflection.call(recyclerView, "isComputingLayout") as? Boolean
             }.getOrNull() == true
 
-        fun rebindAllRows(stage: String) {
+        fun rebindAllRows(stage: String, layoutRetries: Int = 0) {
+            val queuedRequest = queue.peek(key) ?: return
+            if (!isRefreshCurrent(queuedRequest)) {
+                queue.consume(key)
+                return
+            }
             if (isComputingLayout()) {
-                recyclerViewAsView.postOnAnimation { rebindAllRows(stage) }
+                if (!AppleLyricsRefreshRetryPolicy.shouldRetry(layoutRetries)) {
+                    queue.consume(key)
+                    ProviderLogger.error(
+                        "Apple Music 歌词列表布局持续占用，取消本轮重绑: " +
+                            "id=$expectedSongId, attempts=$layoutRetries"
+                    )
+                    return
+                }
+                runCatching {
+                    recyclerViewAsView.postOnAnimation {
+                        rebindAllRows(stage, layoutRetries + 1)
+                    }
+                }.onFailure {
+                    queue.consume(key)
+                    ProviderLogger.error("Apple Music 歌词列表重绑帧调度失败", it)
+                }
                 return
             }
             val request = queue.consume(key) ?: return

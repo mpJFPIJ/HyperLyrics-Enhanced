@@ -196,6 +196,39 @@ class AppleLineWidePronunciationRowPolicyTest {
         ))
     }
 
+    @Test fun aSeekOnlyWakesTheCurrentVisibleAttachedSongReading() {
+        assertTrue(AppleReadingSeekWakePolicy.shouldWake(
+            boundSongId = "song-a", seekSongId = "song-a",
+            boundRevision = 3L, currentRevision = 3L,
+            attached = true, onScreen = true,
+        ))
+        assertFalse(AppleReadingSeekWakePolicy.shouldWake(
+            boundSongId = "song-a", seekSongId = "song-b",
+            boundRevision = 3L, currentRevision = 3L,
+            attached = true, onScreen = true,
+        ))
+        assertFalse(AppleReadingSeekWakePolicy.shouldWake(
+            boundSongId = "song-a", seekSongId = null,
+            boundRevision = 3L, currentRevision = 3L,
+            attached = true, onScreen = true,
+        ))
+        assertFalse(AppleReadingSeekWakePolicy.shouldWake(
+            boundSongId = "song-a", seekSongId = "song-a",
+            boundRevision = 2L, currentRevision = 3L,
+            attached = true, onScreen = true,
+        ))
+        assertFalse(AppleReadingSeekWakePolicy.shouldWake(
+            boundSongId = "song-a", seekSongId = "song-a",
+            boundRevision = 3L, currentRevision = 3L,
+            attached = false, onScreen = true,
+        ))
+        assertFalse(AppleReadingSeekWakePolicy.shouldWake(
+            boundSongId = "song-a", seekSongId = "song-a",
+            boundRevision = 3L, currentRevision = 3L,
+            attached = true, onScreen = false,
+        ))
+    }
+
     @Test
     fun `verified native source can have Japanese translation following it`() {
         val cells = listOf("君", "の", "名は", "あなたの名前は")

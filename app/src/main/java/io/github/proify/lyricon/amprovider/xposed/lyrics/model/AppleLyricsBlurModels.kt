@@ -19,7 +19,10 @@ internal data class AppleLyricsBlurRuntimeState(
     var adapterRef: WeakReference<Any>? = null,
     var recyclerHeight: Int = 0,
     var settledAnchorTopY: Float? = null,
+    /** Persistent user browsing / pending host recenter, not all native motion. */
     var suspendedForScroll: Boolean = false,
+    /** Clear blur once per motion period without mistaking auto-follow for browsing. */
+    var motionBlurCleared: Boolean = false,
     var pendingProgrammaticRecenterPosition: Int? = null,
     var lastActivePositions: Set<Int> = emptySet(),
     var lastFocusedActivePosition: Int? = null,
@@ -33,3 +36,25 @@ internal data class AppleLyricsBlurRuntimeState(
     var targetBlurRadius: Float = 0f,
     var blurAnimator: ValueAnimator? = null,
 )
+
+/** `onScrolled` and SETTLING also occur during Apple's own auto-follow.
+ * Only an explicit DRAGGING state proves that the listener is browsing. */
+internal object AppleLyricsScrollIntentPolicy {
+    private const val SCROLL_STATE_DRAGGING = 1
+
+    /** True once per motion period when existing native blur needs clearing. */
+    fun recordMovement(state: AppleLyricsBlurRuntimeState, scrollState: Int): Boolean {
+        if (scrollState == SCROLL_STATE_DRAGGING) {
+            state.suspendedForScroll = true
+            state.pendingProgrammaticRecenterPosition = null
+        }
+        if (state.motionBlurCleared) return false
+        state.motionBlurCleared = true
+        return true
+    }
+
+    /** Idle clears only motion blur; user browsing still blocks forced recovery. */
+    fun endMotion(state: AppleLyricsBlurRuntimeState) {
+        state.motionBlurCleared = false
+    }
+}

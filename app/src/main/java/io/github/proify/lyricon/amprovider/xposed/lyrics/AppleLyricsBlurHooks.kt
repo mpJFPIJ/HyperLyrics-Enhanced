@@ -299,23 +299,21 @@ internal class AppleLyricsBlurHooks(
         scheduleAppleLyricsBlur(recyclerViewAsView)
     }
 
-    private fun suspendAppleLyricsBlurForScroll(recyclerView: Any?) {
+    private fun recordAppleLyricsScrollMotion(recyclerView: Any?, scrollState: Int) {
         val recyclerViewAsView = recyclerView as? View ?: return
-        val becameSuspended = blurState.withRuntimeState(recyclerViewAsView) { state ->
-            state.pendingProgrammaticRecenterPosition = null
-            if (state.suspendedForScroll) {
-                false
-            } else {
-                state.suspendedForScroll = true
-                true
-            }
+        var beganUserBrowse = false
+        val shouldClearBlur = blurState.withRuntimeState(recyclerViewAsView) { state ->
+            val previouslyBrowsing = state.suspendedForScroll
+            val clear = AppleLyricsScrollIntentPolicy.recordMovement(state, scrollState)
+            beganUserBrowse = !previouslyBrowsing && state.suspendedForScroll
+            clear
         }
-        if (becameSuspended) {
-            if (BuildConfig.DEBUG) {
-                ProviderLogger.debug(
-                    "[LyricsScrollDiag] suspendAppleLyricsBlurForScroll: recycler=${System.identityHashCode(recyclerViewAsView)}"
-                )
-            }
+        if (beganUserBrowse && BuildConfig.DEBUG) {
+            ProviderLogger.debug(
+                "[LyricsScrollDiag] user_browse_started: recycler=${System.identityHashCode(recyclerViewAsView)}"
+            )
+        }
+        if (shouldClearBlur) {
             clearAppleLyricsBlurForRecycler(recyclerViewAsView)
         }
     }
@@ -412,8 +410,11 @@ internal class AppleLyricsBlurHooks(
             )
         }
         if (scrollState != APPLE_LYRICS_SCROLL_STATE_IDLE) {
-            suspendAppleLyricsBlurForScroll(recyclerView)
+            recordAppleLyricsScrollMotion(recyclerView, scrollState)
             return
+        }
+        (recyclerView as? View)?.let { view ->
+            blurState.withRuntimeState(view, AppleLyricsScrollIntentPolicy::endMotion)
         }
         scheduleAppleLyricsBlur(
             recyclerView = recyclerView,
@@ -586,6 +587,7 @@ internal class AppleLyricsBlurHooks(
                 currentState.adapterRef = WeakReference(adapter)
                 currentState.settledAnchorTopY = null
                 currentState.suspendedForScroll = false
+                currentState.motionBlurCleared = false
                 currentState.pendingProgrammaticRecenterPosition = null
                 currentState.lastActivePositions = emptySet()
                 currentState.lastFocusedActivePosition = null
@@ -600,15 +602,15 @@ internal class AppleLyricsBlurHooks(
                 currentState.recyclerHeight = recyclerView.height
                 currentState.settledAnchorTopY = null
                 currentState.suspendedForScroll = false
+                currentState.motionBlurCleared = false
                 currentState.pendingProgrammaticRecenterPosition = null
                 currentState.pendingOutgoingPositions = emptySet()
                 currentState.outgoingZoneTopByPosition = emptyMap()
             }
         }
-        if (appleLyricsRecyclerScrollState(recyclerView) != APPLE_LYRICS_SCROLL_STATE_IDLE) {
-            state.suspendedForScroll = true
-            state.pendingProgrammaticRecenterPosition = null
-            clearAppleLyricsBlurForRecycler(recyclerView)
+        val scrollState = appleLyricsRecyclerScrollState(recyclerView)
+        if (scrollState != APPLE_LYRICS_SCROLL_STATE_IDLE) {
+            recordAppleLyricsScrollMotion(recyclerView, scrollState)
             logAppleLyricsBlurDiagnostic(
                 recyclerView = recyclerView,
                 state = state,
@@ -618,6 +620,7 @@ internal class AppleLyricsBlurHooks(
             )
             return
         }
+        AppleLyricsScrollIntentPolicy.endMotion(state)
 
         val children = buildList {
             repeat(container.childCount) { index ->
@@ -952,7 +955,9 @@ internal class AppleLyricsBlurHooks(
                     chain.thisObject
                         ?.takeIf(::isAppleLyricsRecyclerView)
                         ?.let { recyclerView ->
-                            suspendAppleLyricsBlurForScroll(recyclerView)
+                            recordAppleLyricsScrollMotion(
+                                recyclerView, appleLyricsRecyclerScrollState(recyclerView),
+                            )
                             scheduleAppleLyricsBlur(
                                 recyclerView = recyclerView,
                                 delayMs = APPLE_LYRICS_IDLE_RECHECK_DELAY_MS,

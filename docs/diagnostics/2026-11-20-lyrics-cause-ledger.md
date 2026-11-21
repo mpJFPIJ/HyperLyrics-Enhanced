@@ -178,14 +178,49 @@ failed as intended at `:app:compileDebugUnitTestKotlin` with five
 This is a **compile-level** RED proving the helper was absent, not a
 behavioral failure from running the old scheduler. The source trace and the
 550→700→950 ms schedule calculation above independently establish the old
-code path. Full GREEN/build verification remains pending. Device clips and
-frame-time/GC evidence remain outstanding.
+code path. [Run #252](https://github.com/mpJFPIJ/HyperLyrics-Enhanced/actions/runs/44856191709)
+subsequently passed 3,084 JVM tests (3,079 passed, 0 failed, 5 skipped),
+debug/release lint, APK, release ABI, signing and hosted-APK byte comparison;
+signed APK SHA-256:
+`4700a5a34d3add294ae2f77f07826ada1cb0530643a77e313c74a968f5f42c1e`.
+This is a code/CI check only. Device clips and frame-time/GC evidence remain
+outstanding.
+
+### Accepted native seek must wake a dormant fallback reading
+
+The independent read-only review of #252 found another code-level scheduling
+gap: outside a word interval, `ReadingView.highlightPulse` deliberately polls
+at most every 400 ms, but the Exo seek hook previously sent an accepted
+discontinuous position only to the lyric bridges. It never notified the
+line-wide reading view. An immediate seek into a different lyric/word could
+therefore leave a still-visible Hangul reading painted for the old interval
+until its scheduled idle callback, even when the native Japanese source had
+already updated. This is a **possible 400-ms stale presentation path**, not
+proof that a specific #234 tap used the fallback UI.
+
+The corrective event path is `EXO_SEEK_METHOD` →
+`ApplePlaybackClockEventGate.acceptSeek` → accepted-only main-thread callback
+→ current-song/current-translation-revision check → visible, attached,
+weakly tracked `ReadingView` → cancel pending pulse and post an immediate
+player-clock re-sample. Rejected seeks, obsolete songs, old revisions,
+detached and offscreen holders do not get a fast-poll wake. A bounded
+`linewide_seek_wake tracked=… woken=…` trace can confirm the actual native
+hook path on NPatch. The weak holder registry prevents retention of recycled
+lyrics views. An extra text-free geometry sample now counts TextViews with
+internal source wrapping, not only distinct source top coordinates.
+
+**RED observed:** [run #253](https://github.com/mpJFPIJ/HyperLyrics-Enhanced/actions/runs/44857470129)
+failed with six test compile errors for the deliberately missing
+`AppleReadingSeekWakePolicy`; this is compile-level TDD, not a runtime seek
+reproduction. Final integrated GREEN CI and device replay for the accepted-seek
+change are still required.
 
 ## Required handoff replay
 
 - Install the final CI APK with compatible NPatch and Apple Music; record audio or player-position telemetry alongside the screen.
 - Exercise user time markers 8 s, 32–37 s, 38–40 s, 44–47 s, 49–64 s and 83–90 s, plus pause/resume, repeated taps/seeks, song changes, toggles, wrap/small-screen/large-font.
 - Capture `native_reading_paint_path`, `linewide_measured_geometry`, `translation_cells_bound`, `translation_painter_active/inactive`, `translation_context_missing` with the new build hash (do not reuse the older 1119 log).
+- Capture `linewide_seek_wake` during an accepted click seek; `tracked=0` or `woken=0` means the fallback path was absent or not an eligible visible reading, not a successful wake.
 - Trace main-thread frame durations and GC in the same run. An APK-only CI result cannot establish absence of stutter, clipping, duplicate draw, or actual sync offset.
 
 ## Ground rules for status

@@ -48,6 +48,7 @@ internal class ApplePlaybackHooks(
     private val isAodLyricsEnabled: () -> Boolean,
     private val currentMetadataId: () -> String?,
     private val currentLyricsSongId: () -> String?,
+    private val onAcceptedSeek: (String?) -> Unit,
     private val queueItemMediaId: (Any) -> String?,
     private val refreshCurrentQueueItem: (Any?, String) -> Unit,
     private val isNetworkAutoSkipPreventionEnabled: () -> Boolean,
@@ -232,6 +233,9 @@ internal class ApplePlaybackHooks(
                 // no position through AppleDirectPlayer and is not a seek.
                 remotePlayer?.seekTo(position)
             }
+            // Notify only for accepted native seeks, outside the clock gate's
+            // lock. Rejected or stale callbacks must not wake old lyric rows.
+            if (delivered) onAcceptedSeek(accepted.songId)
             if (delivered && BuildConfig.DEBUG) {
                 ProviderLogger.diagnostic(
                     "Timing seek: requested=$position, callbackPlayer=" +

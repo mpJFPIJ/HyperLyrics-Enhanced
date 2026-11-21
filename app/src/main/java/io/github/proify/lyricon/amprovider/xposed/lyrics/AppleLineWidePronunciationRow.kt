@@ -170,12 +170,28 @@ internal object AppleReadingPulsePolicy {
     }
 }
 
+/** An accepted native Exo seek may jump past the slow off-interval poll.
+ * Wake only the same song/revision's attached, visible fallback reading. */
+internal object AppleReadingSeekWakePolicy {
+    fun shouldWake(
+        boundSongId: String?, seekSongId: String?,
+        boundRevision: Long, currentRevision: Long,
+        attached: Boolean, onScreen: Boolean,
+    ): Boolean = !seekSongId.isNullOrBlank() && boundSongId == seekSongId &&
+        boundRevision == currentRevision && attached && onScreen
+}
+
 /**
  * Attached to Apple's measured karaoke_line_flexbox, not to any timed native word.
  * The flexbox wraps this full-width child below the intact native Japanese line.
  * Only observed Apple Music 6.5.3 view anchors are accepted; unfamiliar hosts fail closed.
  */
 internal class AppleLineWidePronunciationRow {
+    /** Weak keys: an old RecyclerView holder must not stay alive via the hook. */
+    private val readingViews = java.util.Collections.newSetFromMap(
+        java.util.WeakHashMap<ReadingView, Boolean>(),
+    )
+
     /** A single styled Hangul syllable, dim until its own Apple-timed interval. */
     private class KaraokeSyllableStyle : CharacterStyle(), UpdateAppearance {
         var progress = 0f
@@ -226,6 +242,25 @@ internal class AppleLineWidePronunciationRow {
                     variants = timedVariants,
                 ))
             }
+        }
+
+        fun refreshForAcceptedSeek(songId: String?, currentRevision: Long): Boolean {
+            val onScreen = isAttachedToWindow && isShown &&
+                getGlobalVisibleRect(visibleBounds)
+            if (!AppleReadingSeekWakePolicy.shouldWake(
+                    boundSongId = boundPayload?.songId,
+                    seekSongId = songId,
+                    boundRevision = boundPayload?.revision ?: -1L,
+                    currentRevision = currentRevision,
+                    attached = isAttachedToWindow,
+                    onScreen = onScreen,
+            )) return false
+            // Coalesce consecutive seeks and cancel a stale idle pulse. The
+            // pulse samples the accepted player clock rather than inventing
+            // a position from the clicked row's timestamps.
+            removeCallbacks(highlightPulse)
+            post(highlightPulse)
+            return true
         }
 
         fun setTimedText(value: String, variants: List<List<AppleTimedReadingUnit>>) {
@@ -321,12 +356,16 @@ internal class AppleLineWidePronunciationRow {
                             layout!!.getLineBaseline(lines - 1) + fm.bottom else null
                     val sourceTopSpan = if (sourceTops.isNotEmpty())
                         sourceTops.max() - sourceTops.min() else -1
+                    val sourceLineCounts = sourceWords.map { it.layout?.lineCount ?: 0 }
+                    val wrappedSourceViews = sourceLineCounts.count { it > 1 }
+                    val maxSourceLineCount = sourceLineCounts.maxOrNull() ?: 0
                     "hostW=${root.width} hostH=${root.height} " +
                         "flexW=${(parent as? View)?.width ?: -1} " +
                         "readingW=$width readingH=$height readingTop=${if (positioned) readingRect.top else -1} " +
                         "readingLines=$lines firstInkTop=${firstInkTop ?: -1} " +
                         "lastInkBottom=${lastInkBottom ?: -1} " +
-                        "sourceWords=${sourceWords.size} sourceTopSpan=$sourceTopSpan"
+                        "sourceWords=${sourceWords.size} sourceTopSpan=$sourceTopSpan " +
+                        "wrappedSourceViews=$wrappedSourceViews maxSourceLines=$maxSourceLineCount"
                 }
                 outerForeground?.invalidateSelf()
             }
@@ -500,10 +539,23 @@ internal class AppleLineWidePronunciationRow {
     fun clear(root: View?) {
         val anchor = anchor(root) ?: return
         for (index in anchor.childCount - 1 downTo 0) {
-            if (anchor.getChildAt(index) is ReadingView) {
+            val reading = anchor.getChildAt(index) as? ReadingView
+            if (reading != null) {
+                readingViews.remove(reading)
                 anchor.removeViewAt(index)
             }
         }
+    }
+
+    /** Called on the UI thread after Exo accepts a song-scoped seek. */
+    fun refreshVisibleForAcceptedSeek(songId: String?, currentRevision: Long): Int {
+        if (songId.isNullOrBlank()) return 0
+        val count = readingViews.size
+        val woken = readingViews.count { it.refreshForAcceptedSeek(songId, currentRevision) }
+        AppleLyricUiRuntimeProbe.record(
+            "linewide_seek_wake", "tracked=$count woken=$woken",
+        )
+        return woken
     }
 
     fun bind(
@@ -560,6 +612,7 @@ internal class AppleLineWidePronunciationRow {
         ) {
             existing.playbackPositionMs = playbackPositionMs
             existing.bindPaintRoot(root)
+            readingViews.add(existing)
             return true
         }
         clear(root)
@@ -616,6 +669,7 @@ internal class AppleLineWidePronunciationRow {
                 ViewGroup.LayoutParams.WRAP_CONTENT,
             ),
         )
+        readingViews.add(reading)
         return true
     }
 

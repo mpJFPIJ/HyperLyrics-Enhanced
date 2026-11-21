@@ -121,6 +121,37 @@ class AppleLineWidePronunciationRowPolicyTest {
         ))
     }
 
+    @Test fun upcomingVerifiedWordAfterAnInternalTimingGapIsNotMissed() {
+        // The next line-wide variant began at 100 ms, but the next *timed
+        // word* begins at 700 ms. At 550 ms there is no active reading unit.
+        // Looking up only variant start times would return null and sleep
+        // for 400 ms, waking *after* the Japanese word starts.
+        val variants = listOf(listOf(
+            AppleTimedReadingUnit(0, 1, 100, 200),
+            AppleTimedReadingUnit(2, 3, 700, 900),
+        ))
+        val next = AppleReadingPulsePolicy.nextUpcomingBeginMs(550, variants)
+        assertEquals(700L, next)
+        assertEquals(60L, AppleReadingPulsePolicy.nextDelayMs(
+            onScreen = true, positionMs = 550, nextBeginMs = next,
+            active = false,
+        ))
+        assertNull(AppleReadingPulsePolicy.nextUpcomingBeginMs(901, variants))
+    }
+
+    @Test fun upcomingReadingWakeUsesActualWordsAcrossRepeatedChorusVariants() {
+        val variants = listOf(
+            listOf(AppleTimedReadingUnit(0, 2, 10_000, 10_200)),
+            listOf(
+                AppleTimedReadingUnit(0, 1, 1_000, 1_300),
+                AppleTimedReadingUnit(2, 3, 1_800, 2_100),
+            ),
+        )
+        assertEquals(1_800L, AppleReadingPulsePolicy.nextUpcomingBeginMs(1_600, variants))
+        assertEquals(10_000L, AppleReadingPulsePolicy.nextUpcomingBeginMs(2_200, variants))
+        assertEquals(1_000L, AppleReadingPulsePolicy.nextUpcomingBeginMs(0, variants))
+    }
+
     @Test
     fun `verified native source can have Japanese translation following it`() {
         val cells = listOf("君", "の", "名は", "あなたの名前は")

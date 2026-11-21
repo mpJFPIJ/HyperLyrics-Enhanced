@@ -152,6 +152,50 @@ class AppleLineWidePronunciationRowPolicyTest {
         assertEquals(1_000L, AppleReadingPulsePolicy.nextUpcomingBeginMs(0, variants))
     }
 
+    @Test fun offscreenReadingDoesNotPollPlayerClockOrScanFastTimers() {
+        val variants = listOf(listOf(AppleTimedReadingUnit(0, 1, 1_000, 1_200)))
+        var playbackPolls = 0
+        val playbackClock: () -> Long? = { playbackPolls++; 1_010L }
+        val offscreen = AppleReadingPulsePolicy.playbackSample(false, playbackClock)
+        assertNull(offscreen)
+        assertEquals(400L, AppleReadingPulsePolicy.nextDelayForReading(
+            onScreen = false,
+            positionMs = offscreen,
+            variants = variants,
+        ))
+        assertEquals(0, playbackPolls)
+        val onscreen = AppleReadingPulsePolicy.playbackSample(true, playbackClock)
+        assertEquals(60L, AppleReadingPulsePolicy.nextDelayForReading(
+            onScreen = true,
+            positionMs = onscreen,
+            variants = variants,
+        ))
+        // The one sampled clock value is also the one supplied to the paint.
+        assertEquals(1, playbackPolls)
+    }
+
+    @Test fun visibleReadingWakesForTheNextRealUnitAfterAnInternalGap() {
+        val variants = listOf(listOf(
+            AppleTimedReadingUnit(0, 1, 100, 200),
+            AppleTimedReadingUnit(2, 3, 700, 900),
+        ))
+        assertEquals(60L, AppleReadingPulsePolicy.nextDelayForReading(
+            onScreen = true,
+            positionMs = 550L,
+            variants = variants,
+        ))
+        assertEquals(400L, AppleReadingPulsePolicy.nextDelayForReading(
+            onScreen = true,
+            positionMs = 901L,
+            variants = variants,
+        ))
+        assertEquals(400L, AppleReadingPulsePolicy.nextDelayForReading(
+            onScreen = true,
+            positionMs = null,
+            variants = variants,
+        ))
+    }
+
     @Test
     fun `verified native source can have Japanese translation following it`() {
         val cells = listOf("君", "の", "名は", "あなたの名前は")

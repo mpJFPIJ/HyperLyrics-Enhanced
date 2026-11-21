@@ -133,11 +133,59 @@ The subsequent candidate checks **ordered, complete normalized meaning coverage*
 
 The next focused review caught a related view-selection mismatch: the first completeness check counted `GONE`/`INVISIBLE` translation descendants even though the foreground drawable skips hidden views, and it filtered out visible **named native meaning cells** whose old text did not match the expected translation. Both behaviors could admit partial painting or reject a correct row. The final source candidate selects visible-in-holder native `lyrics_translation_line` cells **without prefiltering their text** and verifies the entire selected text; an exact-text anonymous fallback is considered only if there is no visible named native meaning cell. Visibility walks the child-to-holder ancestor chain, deliberately ignoring native alpha (the pulse sets alpha to zero itself) and temporary window detachment (prefetched holders). Regression tests cover a hidden duplicate, hidden suffix, visible stale named cell, fallback selection, complete one-glyph and multi-cell meanings. Review found no remaining Critical/Important issue in this selection path; real-device painting and post-bind visibility transitions remain unverified.
 
+## 2026-11-21 continuation — fallback reading wake at internal word gaps
+
+The line-wide fallback had a separate, deterministic scheduler defect that
+survived the build #250 corrections. `ReadingView.setTimedText` cached only
+the **first** begin timestamp of each pronunciation variant. Its on-screen
+`highlightPulse` looked up future starts exclusively in that array. Consider
+one verified line with real native units `[100, 200)` and `[700, 900)` ms.
+At playback position `550` ms, neither unit is active and the only cached
+variant start (`100` ms) is already past. The previous scheduler chose a
+`400` ms delay, so under uninterrupted playback the next reading refresh
+could occur at `950` ms, **250 ms after the second native word began**. Apple
+Music's own Japanese word renderer has a separate clock and need not wait
+for this Hangul fallback callback. This proves a *possible reading paint lag*
+for sparse verified units, not a real recorded audio-clock offset or proof
+that #234's particular frame used the fallback path.
+
+The candidate correction finds the next start among **all real timed reading
+units**, including repeated-chorus variants. A visible gap within `450` ms of
+the next known word now uses the existing `60` ms pulse, without inventing
+intermediate syllable timestamps. It also obtains one Exo clock sample per
+visible reading pulse and shares that sample between paint and scheduling;
+previously the pulse queried the clock separately for both. Off-screen
+fallback rows no longer query the playback clock on their `400` ms idle
+callback. None of these changes removes karaoke highlighting or masks a
+font crop. JVM regressions cover the internal gap, repeats, disabled screen
+polling, unavailable clock and the same-sample scheduling policy.
+
+For the still-unproven **D/E** cases, a new, six-sample-only
+`linewide_measured_geometry` NPatch trace records real holder/flex/reading
+sizes, reading line count, source word vertical spread, and the first/last
+font-metric ink bounds relative to the holder. It never logs lyric text.
+Geometry is evaluated lazily only for the initial measured overlay samples,
+not on every lyric frame. A future device trace can distinguish multiple
+wrapped source rows in one holder from separate holder rows and test whether
+the fallback glyph would overrun the measured holder. It is **diagnostics**,
+not evidence that any clipping or grouping issue is already solved.
+
+**RED observed:** the draft CI-only PR #12 targets `main` to exercise the
+Android workflow while keeping reviewable stacked PR #11 untouched.
+[Run #251](https://github.com/mpJFPIJ/HyperLyrics-Enhanced/actions/runs/44855159424)
+failed as intended at `:app:compileDebugUnitTestKotlin` with five
+`Unresolved reference 'nextUpcomingBeginMs'` errors in the newly added tests.
+This is a **compile-level** RED proving the helper was absent, not a
+behavioral failure from running the old scheduler. The source trace and the
+550→700→950 ms schedule calculation above independently establish the old
+code path. Full GREEN/build verification remains pending. Device clips and
+frame-time/GC evidence remain outstanding.
+
 ## Required handoff replay
 
 - Install the final CI APK with compatible NPatch and Apple Music; record audio or player-position telemetry alongside the screen.
 - Exercise user time markers 8 s, 32–37 s, 38–40 s, 44–47 s, 49–64 s and 83–90 s, plus pause/resume, repeated taps/seeks, song changes, toggles, wrap/small-screen/large-font.
-- Capture `native_reading_paint_path`, `translation_cells_bound`, `translation_painter_active/inactive`, `translation_context_missing` with the new build hash (do not reuse the older 1119 log).
+- Capture `native_reading_paint_path`, `linewide_measured_geometry`, `translation_cells_bound`, `translation_painter_active/inactive`, `translation_context_missing` with the new build hash (do not reuse the older 1119 log).
 - Trace main-thread frame durations and GC in the same run. An APK-only CI result cannot establish absence of stutter, clipping, duplicate draw, or actual sync offset.
 
 ## Ground rules for status

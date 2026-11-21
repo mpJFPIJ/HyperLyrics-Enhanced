@@ -122,6 +122,24 @@ internal object AppleLineWidePronunciationRowPolicy {
 
 /** Pre-wake only the visible upcoming lyric, keeping unrelated rows at low rate. */
 internal object AppleReadingPulsePolicy {
+    /** The next *word* may begin after a real gap within an already-started
+     * line. Looking only at each variant's first timestamp misses that wake,
+     * leaving the Korean reading behind the native Japanese karaoke paint.
+     * This scans only verified native unit starts; no time is interpolated. */
+    fun nextUpcomingBeginMs(
+        positionMs: Long,
+        variants: List<List<AppleTimedReadingUnit>>,
+    ): Long? {
+        var nearest: Long? = null
+        for (variant in variants) for (unit in variant) {
+            val start = unit.beginMs
+            if (start >= positionMs && (nearest == null || start < nearest)) {
+                nearest = start
+            }
+        }
+        return nearest
+    }
+
     fun nextDelayMs(
         onScreen: Boolean,
         positionMs: Long?,
@@ -130,6 +148,26 @@ internal object AppleReadingPulsePolicy {
     ): Long = if (onScreen && (active ||
             (positionMs != null && nextBeginMs != null &&
                 nextBeginMs - positionMs in 0L..450L))) 60L else 400L
+
+    /** Off-screen holders must not query Exo's playback clock. The caller
+     * reuses this one sample for its paint and next scheduler wake. */
+    fun playbackSample(onScreen: Boolean, clock: (() -> Long?)?): Long? =
+        if (onScreen) clock?.invoke() else null
+
+    /** The same player position drives both highlight and scheduler wake. */
+    fun nextDelayForReading(
+        onScreen: Boolean,
+        positionMs: Long?,
+        variants: List<List<AppleTimedReadingUnit>>,
+    ): Long {
+        if (!onScreen) return 400L
+        val position = positionMs ?: return 400L
+        val active = AppleTimedPronunciationHighlightPolicy.activeVariant(
+            position, variants,
+        ) != null
+        val upcoming = if (active) null else nextUpcomingBeginMs(position, variants)
+        return nextDelayMs(onScreen, position, upcoming, active)
+    }
 }
 
 /**
@@ -167,30 +205,25 @@ internal class AppleLineWidePronunciationRow {
         private var timedStyles: List<Pair<Int, KaraokeSyllableStyle>> = emptyList()
         private var timedVariants: List<List<AppleTimedReadingUnit>> = emptyList()
         private var timedVariantLookups: List<Map<Int, AppleTimedReadingUnit>> = emptyList()
-        private var variantBeginTimes = longArrayOf()
         private val visibleBounds = Rect()
         private val highlightPulse = object : Runnable {
             override fun run() {
                 if (!isAttachedToWindow) return
                 syncPaintLayer()
                 val onScreen = isShown && getGlobalVisibleRect(visibleBounds)
-                if (onScreen) syncTimedHighlight()
+                val position = AppleReadingPulsePolicy.playbackSample(
+                    onScreen, playbackPositionMs,
+                )
+                if (onScreen) syncTimedHighlight(position)
                 // Apple's karaoke line may animate from its own RenderNode.
                 // Refresh the per-syllable paint from the actual playback clock.
                 // Never poll unrelated/off-screen lines at animation rate.
                 // Native word cells own fast karaoke animation; this fallback
                 // is only a last-resort line-wide display.
-                val position = playbackPositionMs?.invoke()
-                postDelayed(this, AppleReadingPulsePolicy.nextDelayMs(
+                postDelayed(this, AppleReadingPulsePolicy.nextDelayForReading(
                     onScreen = onScreen,
                     positionMs = position,
-                    nextBeginMs = position?.let { now ->
-                        variantBeginTimes.firstOrNull { begin -> begin >= now }
-                    },
-                    active = position != null &&
-                        AppleTimedPronunciationHighlightPolicy.activeVariant(
-                            position, timedVariants,
-                        ) != null,
+                    variants = timedVariants,
                 ))
             }
         }
@@ -200,10 +233,6 @@ internal class AppleLineWidePronunciationRow {
             timedVariants = variants.map { units ->
                 units.filter { it.start >= 0 && it.end <= value.length && it.start < it.end }
             }
-            variantBeginTimes = timedVariants.mapNotNull { units ->
-                units.minOfOrNull(AppleTimedReadingUnit::beginMs)
-                    ?.takeIf { it >= 0L }
-            }.sorted().toLongArray()
             timedVariantLookups = timedVariants.map { it.associateBy(AppleTimedReadingUnit::start) }
             timedStyles = timedVariants.flatten().distinctBy(AppleTimedReadingUnit::start)
                 .map { unit ->
@@ -261,7 +290,46 @@ internal class AppleLineWidePronunciationRow {
             if (kotlin.math.abs(alpha - targetAlpha) > 0.01f) alpha = targetAlpha
             // Only timing-style changes and an initial attach require paint.
             // Invalidating the same overlay on every idle poll causes jank.
-            if (newForeground) outerForeground?.invalidateSelf()
+            if (newForeground) {
+                // A bounded, text-free sample of the *actual measured host*
+                // geometry. #234 shows Japanese visual wraps followed by a
+                // block of readings, but a silent video cannot distinguish
+                // one wrapped holder from several independently bound rows.
+                // These positions and font metrics allow a future NPatch log
+                // to discriminate that without guessing Japanese↔Hangul cuts.
+                AppleLyricUiRuntimeProbe.recordLazy("linewide_measured_geometry", root) {
+                    val readingRect = Rect(0, 0, width, height)
+                    val positioned = runCatching {
+                        root.offsetDescendantRectToMyCoords(this, readingRect)
+                    }.isSuccess
+                    val sourceTops = sourceWords.mapNotNull { word ->
+                        if (!word.isAttachedToWindow || word.width <= 0 || word.height <= 0)
+                            return@mapNotNull null
+                        val rect = Rect(0, 0, word.width, word.height)
+                        if (runCatching {
+                                root.offsetDescendantRectToMyCoords(word, rect)
+                            }.isSuccess
+                        ) rect.top else null
+                    }
+                    val lines = layout?.lineCount ?: 0
+                    val fm = paint.fontMetricsInt
+                    val firstInkTop = if (positioned && lines > 0)
+                        readingRect.top + totalPaddingTop +
+                            layout!!.getLineBaseline(0) + fm.top else null
+                    val lastInkBottom = if (positioned && lines > 0)
+                        readingRect.top + totalPaddingTop +
+                            layout!!.getLineBaseline(lines - 1) + fm.bottom else null
+                    val sourceTopSpan = if (sourceTops.isNotEmpty())
+                        sourceTops.max() - sourceTops.min() else -1
+                    "hostW=${root.width} hostH=${root.height} " +
+                        "flexW=${(parent as? View)?.width ?: -1} " +
+                        "readingW=$width readingH=$height readingTop=${if (positioned) readingRect.top else -1} " +
+                        "readingLines=$lines firstInkTop=${firstInkTop ?: -1} " +
+                        "lastInkBottom=${lastInkBottom ?: -1} " +
+                        "sourceWords=${sourceWords.size} sourceTopSpan=$sourceTopSpan"
+                }
+                outerForeground?.invalidateSelf()
+            }
         }
 
         override fun onAttachedToWindow() {
@@ -287,7 +355,9 @@ internal class AppleLineWidePronunciationRow {
             super.onDetachedFromWindow()
         }
 
-        private fun syncTimedHighlight() {
+        private fun syncTimedHighlight(
+            positionMs: Long? = playbackPositionMs?.invoke(),
+        ) {
             // The source line's view opacity also fades as Apple Music scrolls.
             // Share that line-level fade without copying any word's *single*
             // highlight color onto the entire Korean sentence.
@@ -312,15 +382,14 @@ internal class AppleLineWidePronunciationRow {
                 .maxOfOrNull { it.first * it.second } ?: 1f
             // The native flexbox measures this view but an outer holder
             // foreground paints its Layout outside the host's alpha mask.
-            val position = playbackPositionMs?.invoke()
-            val activeVariantIndex = position?.let {
+            val activeVariantIndex = positionMs?.let {
                 AppleTimedPronunciationHighlightPolicy.activeVariant(it, timedVariants)
             }
             val activeVariant = activeVariantIndex?.let(timedVariantLookups::get)
             var changed = false
             timedStyles.forEach { (offset, style) ->
                 val nativeWord = activeVariant?.get(offset)
-                val next = position?.let { now ->
+                val next = positionMs?.let { now ->
                     nativeWord?.let { unit ->
                         AppleTimedPronunciationHighlightPolicy.progress(now, unit)
                     }

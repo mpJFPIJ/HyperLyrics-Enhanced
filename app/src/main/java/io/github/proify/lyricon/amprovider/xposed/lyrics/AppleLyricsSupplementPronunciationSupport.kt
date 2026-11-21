@@ -102,14 +102,49 @@ internal fun AppleLyricsSupplementHooks.hookAppleLyricTextGetter(clazz: Class<*>
                     lineEnd != null && lineEnd > lineBegin && result.isNotBlank()
                 ) {
                     val revision = nativeOnlineTranslationStore.revision()
+                    val rawSource = nativeOriginalLineText(chain.thisObject)
+                    val hasNativeContextConsumer = timedContext?.holder != null ||
+                        (timedContext?.adapterInstance != null &&
+                            timedContext?.position?.let { it >= 0 } == true)
+                    val displayedNativeSource = if (
+                        rawSource != null && hasNativeContextConsumer &&
+                        AppleLyricTextTransform.isTransformEnabled()
+                    ) {
+                        // The host transforms each real native word getter,
+                        // not the whole line. A dictionary phrase may cross
+                        // word boundaries (反 + 覆 must remain 反覆).
+                        val rawNativeWords = AppleLyricTextTransform.withRawReads {
+                            runCatching {
+                                nativeVectorItems(
+                                    lyricsNativeCall(
+                                        chain.thisObject,
+                                        AppleMusicRuntimeMember.LYRICS_NATIVE_WORDS_METHOD,
+                                    ),
+                                    limit = 256,
+                                ).mapNotNull { word ->
+                                    lyricsNativeCall(
+                                        word, AppleMusicRuntimeMember.LYRICS_NATIVE_LINE_TEXT_METHOD,
+                                    ) as? String
+                                }
+                            }.getOrNull().orEmpty()
+                        }
+                        AppleNativeTranslationHighlightPolicy.displayedNativeWordSource(
+                            originalLine = rawSource,
+                            rawWords = rawNativeWords,
+                            displayWord = { AppleLyricTextTransform.transform(it) ?: it },
+                        )
+                    } else null
                     translationLineHighlight.remember(
                         holder = timedContext?.holder,
                         songId = currentAppleLyricsSongId,
-                        sourceText = nativeOriginalLineText(chain.thisObject),
+                        sourceText = rawSource,
                         beginMs = lineBegin,
                         endMs = lineEnd,
                         translation = result,
                         revision = revision,
+                        adapterPosition = timedContext?.position,
+                        adapterOwner = timedContext?.adapterInstance,
+                        displayedSourceText = displayedNativeSource,
                     )
                     // This exact native getter executes inside its holder bind,
                     // so this is a verified adapter-row↔native-line time axis.
@@ -338,24 +373,7 @@ internal fun AppleLyricsSupplementHooks.bindLineWidePronunciation(
     )
     // The built-in Apple pronunciation text is often much smaller than the
     // Japanese text. Keep its native position and timing, scale text only.
-    val holderPosition = context.position
-    lineWidePronunciationRow.fitNativeHangulSize(root) {
-        if (shown || currentAppleLyricsSongId != songId ||
-            nativeOnlineTranslationStore.revision() != revision ||
-            !requestedAppleLyricsRowVisibility().pronunciation ||
-            !showHangulSupplementPronunciation() || shouldHideMandarinPronunciation()
-        ) false else {
-            val nativeRecycler = generateSequence(root) { view -> view.parent as? View }
-                .firstOrNull(AppleTranslationRecyclerOwnerPolicy::isNativeRecyclerView)
-            val adapter = nativeRecycler?.let { appleRecyclerAdapter(it) }
-            AppleNativeHangulWordPaintPolicy.focusedRow(
-                playbackAdapterPosition = adapter?.let {
-                    blurHooks.currentNativeFocusedAdapterPosition(it)
-                },
-                holderAdapterPosition = holderPosition,
-            )
-        }
-    }
+    lineWidePronunciationRow.fitNativeHangulSize(root)
     if (retry == 0) {
         translationLineHighlight.bind(
             holder = context.holder,
@@ -368,7 +386,11 @@ internal fun AppleLyricsSupplementHooks.bindLineWidePronunciation(
             ),
             playbackPositionMs = { appleLyricsCurrentPlaybackPositionMs() },
             observedSourceCells = observedCells,
+            observeSourceCells = {
+                lineWidePronunciationRow.visibleNativeCellTexts(root).orEmpty()
+            },
             holderAdapterPosition = context.position,
+            adapterOwner = context.adapterInstance,
             isCurrent = {
                 currentAppleLyricsSongId == songId &&
                     nativeOnlineTranslationStore.revision() == revision

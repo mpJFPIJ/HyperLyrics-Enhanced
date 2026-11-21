@@ -326,6 +326,15 @@ internal class AppleLyricsSupplementHooks(
 
     fun currentSongId(): String? = currentAppleLyricsSongId
 
+    /** Exo accepted a discontinuous seek; do not wait for the fallback row's
+     * next 400ms idle poll to discover a newly active reading. */
+    internal fun onAcceptedPlaybackSeek(songId: String?) {
+        if (songId.isNullOrBlank() || currentAppleLyricsSongId != songId) return
+        lineWidePronunciationRow.refreshVisibleForAcceptedSeek(
+            songId, nativeOnlineTranslationStore.revision(),
+        )
+    }
+
     internal fun installSourceSwitchPresentationPerformanceHook(
         method: Method,
         stagePrefix: String,

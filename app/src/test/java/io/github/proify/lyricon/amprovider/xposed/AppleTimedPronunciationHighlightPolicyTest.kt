@@ -6,7 +6,38 @@ import org.junit.Assert.assertFalse
 import org.junit.Test
 
 class AppleTimedPronunciationHighlightPolicyTest {
-    @org.junit.Test fun `eachHangulSyllableTracksItsOwnOriginalAppleWordRatherThanBrightestWord`() {
+    @Test fun noVerifiedSourcePhoneticsMeansOneHonestLineWindowNotGuessedSyllables() {
+        val units = AppleTimedPronunciationHighlightPolicy.units(
+            sourceText = "溺れ",
+            pronunciation = "오보레",
+            timedWords = listOf(AppleTimedSourceWord("溺れ", 1_000L, 1_800L)),
+        )
+        assertEquals(1, units.size)
+        assertEquals(0, units.single().start)
+        assertEquals("오보레".length, units.single().end)
+        assertEquals(-1, units.single().sourceWordIndex)
+        assertEquals(1_000L, units.single().beginMs)
+        assertEquals(1_800L, units.single().endMs)
+    }
+
+    @Test fun verifiedWholeMorphemeCrossingNativeCellsRetainsItsOneSoundGroup() {
+        val units = AppleTimedPronunciationHighlightPolicy.units(
+            sourceText = "溺れ",
+            pronunciation = "오보레",
+            timedWords = listOf(
+                AppleTimedSourceWord("溺", 1_000L, 1_400L),
+                AppleTimedSourceWord("れ", 1_400L, 1_800L),
+            ),
+            phoneticSpans = listOf(ApplePronunciationSourceToken(0, 2, "오보레", "溺れ")),
+        )
+        assertEquals(1, units.size)
+        assertEquals("오보레", "오보레".substring(units.single().start, units.single().end))
+        assertEquals(1_000L, units.single().beginMs)
+        assertEquals(1_800L, units.single().endMs)
+        assertEquals(-1, units.single().sourceWordIndex)
+    }
+
+    @Test fun `no phonetic map only reveals full line at real line bounds`() {
         val timed = listOf(
             AppleTimedSourceWord("みその中", 1_000L, 2_000L),
             AppleTimedSourceWord("から", 2_000L, 2_400L),
@@ -16,11 +47,13 @@ class AppleTimedPronunciationHighlightPolicyTest {
             pronunciation = "미소노나카카라",
             timedWords = timed,
         )
-        org.junit.Assert.assertEquals("미소노나카카라".length, units.size)
-        org.junit.Assert.assertEquals(0, units.first().sourceWordIndex)
-        org.junit.Assert.assertEquals(1, units.last().sourceWordIndex)
-        org.junit.Assert.assertEquals(1f, AppleTimedPronunciationHighlightPolicy.progress(
-            2_400L, units.last()), 0.001f)
+        assertEquals(1, units.size)
+        assertEquals("미소노나카카라".length, units.single().end)
+        assertEquals(-1, units.single().sourceWordIndex)
+        assertEquals(1_000L, units.single().beginMs)
+        assertEquals(2_400L, units.single().endMs)
+        assertEquals(1f, AppleTimedPronunciationHighlightPolicy.progress(
+            2_400L, units.single()), 0.001f)
     }
 
     @Test
@@ -37,7 +70,24 @@ class AppleTimedPronunciationHighlightPolicyTest {
     }
 
     @Test
-    fun `hangul syllables highlight individually using real native word timings`() {
+    fun `gap between trusted native word clocks is not itself a playing interval`() {
+        val units = listOf(
+            AppleTimedReadingUnit(0, 1, 1_000L, 1_200L),
+            AppleTimedReadingUnit(2, 3, 1_600L, 1_800L),
+        )
+        assertEquals(0, AppleTimedPronunciationHighlightPolicy.activeVariant(
+            1_100L, listOf(units),
+        ))
+        assertEquals(null, AppleTimedPronunciationHighlightPolicy.activeVariant(
+            1_400L, listOf(units),
+        ))
+        assertEquals(0, AppleTimedPronunciationHighlightPolicy.activeVariant(
+            1_700L, listOf(units),
+        ))
+    }
+
+    @Test
+    fun `verified phonetic morphemes keep their exact original Apple word windows`() {
         val segments = AppleTimedPronunciationHighlightPolicy.units(
             sourceText = "駄目脳",
             pronunciation = "다메 노",
@@ -50,18 +100,17 @@ class AppleTimedPronunciationHighlightPolicyTest {
                 ApplePronunciationSourceToken(2, 3, "노"),
             ),
         )
-        assertEquals(listOf("다", "메", "노"), segments.map { "다메 노".substring(it.start, it.end) })
-        assertEquals(listOf(1000L, 1400L, 2000L), segments.map { it.beginMs })
-        assertEquals(listOf(1400L, 1800L, 2400L), segments.map { it.endMs })
-        assertEquals(1f, AppleTimedPronunciationHighlightPolicy.progress(1600L, segments[0]), 0.001f)
-        assertEquals(0.5f, AppleTimedPronunciationHighlightPolicy.progress(1600L, segments[1]), 0.001f)
-        assertEquals(0f, AppleTimedPronunciationHighlightPolicy.progress(1600L, segments[2]), 0.001f)
-        // Seeking backward must dim the syllables again.
-        assertEquals(0f, AppleTimedPronunciationHighlightPolicy.progress(1100L, segments[1]), 0.001f)
+        assertEquals(listOf("다메", "노"), segments.map { "다메 노".substring(it.start, it.end) })
+        assertEquals(listOf(1000L, 2000L), segments.map { it.beginMs })
+        assertEquals(listOf(1800L, 2400L), segments.map { it.endMs })
+        assertEquals(0.75f, AppleTimedPronunciationHighlightPolicy.progress(1600L, segments[0]), 0.001f)
+        assertEquals(0f, AppleTimedPronunciationHighlightPolicy.progress(1600L, segments[1]), 0.001f)
+        // Seeking backward must rewind the *whole corresponding sound group*.
+        assertEquals(0.125f, AppleTimedPronunciationHighlightPolicy.progress(1100L, segments[0]), 0.001f)
     }
 
     @Test
-    fun `spans crossing multiple Apple karaoke cells keep syllables on the same clock`() {
+    fun `spans crossing multiple Apple karaoke cells keep each sound group intact`() {
         val segments = AppleTimedPronunciationHighlightPolicy.units(
             sourceText = "ダーリンベイビー",
             pronunciation = "다아린 베이비",
@@ -75,14 +124,16 @@ class AppleTimedPronunciationHighlightPolicyTest {
                 ApplePronunciationSourceToken(4, 8, "베이비"),
             ),
         )
-        assertEquals(6, segments.size)
+        assertEquals(2, segments.size)
+        assertEquals(listOf("다아린", "베이비"),
+            segments.map { "다아린 베이비".substring(it.start, it.end) })
         assertTrue(segments.zipWithNext().all { (a, b) -> a.beginMs <= b.beginMs })
-        assertTrue(segments.take(3).all { it.beginMs >= 1000 && it.endMs <= 1600 })
-        assertTrue(segments.drop(3).all { it.beginMs >= 1900 && it.endMs <= 2500 })
+        assertEquals(listOf(1000L, 1900L), segments.map { it.beginMs })
+        assertEquals(listOf(1600L, 2500L), segments.map { it.endMs })
     }
 
     @Test
-    fun `missing token spans still show a timed progressive sweep and no whole line flash`() {
+    fun `missing token spans use one documented native whole line window`() {
         val units = AppleTimedPronunciationHighlightPolicy.units(
             sourceText = "みその中から", pronunciation = "미소노 나카카라",
             timedWords = listOf(
@@ -91,10 +142,10 @@ class AppleTimedPronunciationHighlightPolicyTest {
                 AppleTimedSourceWord("中から", 1200, 2000),
             ),
         )
-        assertEquals("미소노나카카라".length, units.size)
-        assertTrue(units.zipWithNext().any { (a, b) -> a.beginMs != b.beginMs })
-        assertTrue(units.any { AppleTimedPronunciationHighlightPolicy.progress(1050L, it) == 0f })
-        assertTrue(units.any { AppleTimedPronunciationHighlightPolicy.progress(1050L, it) > 0f })
+        assertEquals(1, units.size)
+        assertEquals(500L, units.single().beginMs)
+        assertEquals(2000L, units.single().endMs)
+        assertEquals(-1, units.single().sourceWordIndex)
     }
 
     @Test
@@ -116,13 +167,14 @@ class AppleTimedPronunciationHighlightPolicyTest {
     }
 
     @Test
-    fun `a genuine line begin and end can drive approximate syllable sweep without word data`() {
+    fun `a genuine line begin and end never invent per syllable boundaries`() {
         val derivedLineWindow = AppleTimedSourceWord("だめ", 1000, 1800)
         val units = AppleTimedPronunciationHighlightPolicy.units(
             sourceText = "だめ", pronunciation = "다메", timedWords = listOf(derivedLineWindow),
         )
-        assertEquals(listOf(1000L, 1400L), units.map { it.beginMs })
-        assertEquals(listOf(1400L, 1800L), units.map { it.endMs })
+        assertEquals(1, units.size)
+        assertEquals(1000L, units.single().beginMs)
+        assertEquals(1800L, units.single().endMs)
     }
 
     @Test
@@ -132,7 +184,7 @@ class AppleTimedPronunciationHighlightPolicyTest {
             timedWords = listOf(AppleTimedSourceWord("みその中から", 1000, 2000)),
             phoneticSpans = listOf(ApplePronunciationSourceToken(0, 2, "바보")),
         )
-        assertEquals("미소노나카카라".length, units.size)
+        assertEquals(1, units.size)
         assertFalse(units.any { it.start >= it.end })
     }
 
@@ -164,7 +216,7 @@ class AppleTimedPronunciationHighlightPolicyTest {
         }
     }
     @Test
-    fun `partial Apple word times keep real anchors and animate missing syllables`() {
+    fun `partial native word time plus real line bounds cannot invent missing syllable clocks`() {
         val units = AppleTimedPronunciationHighlightPolicy.units(
             sourceText = "ABC", pronunciation = "가나다",
             timedWords = listOf(
@@ -173,11 +225,11 @@ class AppleTimedPronunciationHighlightPolicyTest {
             ),
             lineBeginMs = 50, lineEndMs = 850,
         )
-        assertEquals(3, units.size)
-        assertEquals(listOf(100L, 200L, 700L), units.map { it.beginMs })
-        assertEquals(listOf(200L, 700L, 800L), units.map { it.endMs })
-        assertEquals(0.5f, AppleTimedPronunciationHighlightPolicy.progress(450, units[1]), 0.001f)
-        assertEquals(0f, AppleTimedPronunciationHighlightPolicy.progress(450, units[2]), 0.001f)
+        assertEquals(1, units.size)
+        assertEquals(50L, units.single().beginMs)
+        assertEquals(850L, units.single().endMs)
+        assertEquals(-1, units.single().sourceWordIndex)
+        assertEquals(0.5f, AppleTimedPronunciationHighlightPolicy.progress(450, units.single()), 0.001f)
     }
 
     @Test
@@ -186,7 +238,7 @@ class AppleTimedPronunciationHighlightPolicyTest {
             sourceText = "ありがとう", pronunciation = "아리가토",
             timedWords = emptyList(), lineBeginMs = 1000, lineEndMs = 1800,
         )
-        assertEquals(4, units.size)
+        assertEquals(1, units.size)
         assertTrue(units.all { it.endMs > it.beginMs })
         assertEquals(1000L, units.first().beginMs)
         assertEquals(1800L, units.last().endMs)
@@ -223,7 +275,7 @@ class AppleTimedPronunciationHighlightPolicyTest {
     }
 
     @Test
-    fun `unknownReadingBetweenVerifiedAnchorsIsOnlyApproximateWithRealLineWindow`() {
+    fun `unknownReadingBetweenVerifiedAnchorsRemainsUnanimatedEvenWithLineWindow`() {
         val units = AppleTimedPronunciationHighlightPolicy.units(
             sourceText = "A中CDE",
             pronunciation = "가나다",
@@ -239,12 +291,11 @@ class AppleTimedPronunciationHighlightPolicyTest {
             lineBeginMs = 50,
             lineEndMs = 1100,
         )
-        assertEquals(3, units.size)
-        assertEquals(listOf(100L, 700L), listOf(units[0].beginMs, units[2].beginMs))
-        assertEquals(listOf(200L, 1000L), listOf(units[0].endMs, units[2].endMs))
-        assertEquals(listOf(0, -1, 2), units.map { it.sourceWordIndex })
-        assertTrue(units[1].beginMs >= 50 && units[1].endMs <= 1100)
-        assertTrue(units[1].endMs > units[1].beginMs)
+        assertEquals(2, units.size)
+        assertEquals(listOf("가", "다"), units.map { "가나다".substring(it.start, it.end) })
+        assertEquals(listOf(100L, 700L), units.map { it.beginMs })
+        assertEquals(listOf(200L, 1000L), units.map { it.endMs })
+        assertEquals(listOf(0, 2), units.map { it.sourceWordIndex })
     }
 
 }

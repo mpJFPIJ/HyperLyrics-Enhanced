@@ -30,16 +30,15 @@ class ApplePronunciationPolicyTest {
     }
 
     @Test
-    fun `verified projected split morpheme is timed by original Apple source cells`() {
+    fun `verified sound without a native cell boundary remains line wide`() {
         val projection = com.juren233.hyperlyricsenhanced.root.aitrans.AppleNativeReadingProjection
             .project(
                 "駄目", listOf("駄", "目"),
                 listOf(SourceReadingSpan(0, 2, "駄目", "ダメ", "다메")),
                 "다메",
             )
-        assertEquals(true, projection?.approximate)
-        assertEquals(listOf("다", "메"), projection?.words?.map { it.hangul })
-        assertEquals(ApplePronunciationPresentationMode.ALIGNED_WORDS,
+        assertNull(projection)
+        assertEquals(ApplePronunciationPresentationMode.LINE_WIDE,
             ApplePronunciationPolicy.presentationMode(
                 "다메", false, listOf("駄", "目"), projection?.words,
             ))

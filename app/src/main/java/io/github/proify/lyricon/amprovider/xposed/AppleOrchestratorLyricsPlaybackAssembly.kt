@@ -431,6 +431,13 @@ internal class AppleOrchestratorLyricsPlaybackAssembly(
             isAodLyricsEnabled = catalogLanguage::isAodLyricsEnabled,
             currentMetadataId = playbackMetadataCoordinator::currentMetadataId,
             currentLyricsSongId = lyricsHooks::currentSongId,
+            onAcceptedSeek = { songId ->
+                runtime.mainHandler.post {
+                    if (lyricsHooks.currentSongId() == songId) {
+                        lyricsHooks.onAcceptedPlaybackSeek(songId)
+                    }
+                }
+            },
             queueItemMediaId = playbackMetadataCoordinator::queueItemMediaId,
             refreshCurrentQueueItem = playbackMetadataCoordinator::refreshCurrentQueueItem,
             isNetworkAutoSkipPreventionEnabled = {

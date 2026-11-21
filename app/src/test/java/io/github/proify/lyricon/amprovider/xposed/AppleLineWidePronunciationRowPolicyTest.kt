@@ -7,54 +7,13 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AppleLineWidePronunciationRowPolicyTest {
-    @Test fun nativeHangulOverlayNeverBorrowsSourceOrTranslationCells() {
-        assertTrue(AppleNativeHangulWordPaintPolicy.eligible(
-            hangul = true, underPronunciation = true, underTranslation = false,
-            injectedReading = false, measured = true,
-        ))
-        assertFalse(AppleNativeHangulWordPaintPolicy.eligible(
-            hangul = true, underPronunciation = false, underTranslation = false,
-            injectedReading = false, measured = true,
-        ))
-        assertFalse(AppleNativeHangulWordPaintPolicy.eligible(
-            hangul = true, underPronunciation = true, underTranslation = true,
-            injectedReading = false, measured = true,
-        ))
-        assertFalse(AppleNativeHangulWordPaintPolicy.eligible(
-            hangul = false, underPronunciation = true, underTranslation = false,
-            injectedReading = false, measured = true,
-        ))
-        assertFalse(AppleNativeHangulWordPaintPolicy.eligible(
-            hangul = true, underPronunciation = true, underTranslation = false,
-            injectedReading = true, measured = true,
-        ))
-        assertFalse(AppleNativeHangulWordPaintPolicy.eligible(
-            hangul = true, underPronunciation = true, underTranslation = false,
-            injectedReading = false, measured = false,
-        ))
-    }
-
-    @Test fun nativeWordOverlayKeepsOriginalWordOpacityAndThrottlesInvisibleRows() {
-        assertTrue(AppleNativeHangulWordPaintPolicy.focusedRow(
-            playbackAdapterPosition = 6, holderAdapterPosition = 6,
-        ))
-        assertFalse(AppleNativeHangulWordPaintPolicy.focusedRow(
-            playbackAdapterPosition = 6, holderAdapterPosition = 5,
-        ))
-        assertFalse(AppleNativeHangulWordPaintPolicy.focusedRow(
-            playbackAdapterPosition = null, holderAdapterPosition = 6,
-        ))
-        assertEquals(0.36f, AppleNativeHangulWordPaintPolicy.opacity(
-            childAlpha = 0.6f, ancestorAlphas = listOf(0.75f, 0.8f),
-        ), 0.001f)
-        assertEquals(0f, AppleNativeHangulWordPaintPolicy.opacity(
-            childAlpha = 0f, ancestorAlphas = listOf(1f),
-        ), 0.001f)
-        assertEquals(80L, AppleNativeHangulWordPaintPolicy.nextRefreshMs(visible = true))
-        assertEquals(180L, AppleNativeHangulWordPaintPolicy.nextRefreshMs(
-            visible = true, focused = false,
-        ))
-        assertEquals(600L, AppleNativeHangulWordPaintPolicy.nextRefreshMs(visible = false))
+    @Test fun existingNativeWordPainterMustNotHaveAnUnverifiedSecondOverlayOwner() {
+        // Apple's own native pronunciation word views already paint every
+        // karaoke cell. A second manager registered on the line row doubles
+        // paint and bypasses the source word's parent gradient.
+        assertFalse(AppleLineWidePronunciationRow::class.java.declaredFields.any { field ->
+            field.type.simpleName == "AppleNativeHangulWordOverlayManager"
+        })
     }
 
     @Test fun repeatedChorusRequiresAnExactHolderNotASourceTextGuess() {
@@ -68,6 +27,23 @@ class AppleLineWidePronunciationRowPolicyTest {
         assertTrue(AppleLineWidePronunciationRowPolicy.safeSourceFallback(
             repeated.copy(repeatTimings = emptyList()),
         ))
+        val firstWindow = AppleLineWidePronunciationRowPolicy.lineWindowForVariant(repeated.copy(
+            lineBeginMs = 1_000L, lineEndMs = 1_900L,
+        ), 0)
+        assertEquals(1_000L to 1_900L, firstWindow)
+        val repeatedWindow = AppleLineWidePronunciationRowPolicy.lineWindowForVariant(repeated.copy(
+            lineBeginMs = 1_000L, lineEndMs = 1_900L,
+        ), 1)
+        assertEquals(null to null, repeatedWindow)
+        val later = AppleTimedPronunciationHighlightPolicy.units(
+            sourceText = repeated.sourceText,
+            pronunciation = repeated.pronunciation,
+            timedWords = repeated.repeatTimings.single(),
+            lineBeginMs = repeatedWindow.first,
+            lineEndMs = repeatedWindow.second,
+        )
+        assertEquals(9_000L, later.single().beginMs)
+        assertEquals(9_900L, later.single().endMs)
     }
 
     @Test fun `reading uses exactly one outer paint owner after layout`() {
@@ -142,6 +118,114 @@ class AppleLineWidePronunciationRowPolicyTest {
         assertEquals(400L, AppleReadingPulsePolicy.nextDelayMs(
             onScreen = false, positionMs = 11_950, nextBeginMs = 12_000,
             active = false,
+        ))
+    }
+
+    @Test fun upcomingVerifiedWordAfterAnInternalTimingGapIsNotMissed() {
+        // The next line-wide variant began at 100 ms, but the next *timed
+        // word* begins at 700 ms. At 550 ms there is no active reading unit.
+        // Looking up only variant start times would return null and sleep
+        // for 400 ms, waking *after* the Japanese word starts.
+        val variants = listOf(listOf(
+            AppleTimedReadingUnit(0, 1, 100, 200),
+            AppleTimedReadingUnit(2, 3, 700, 900),
+        ))
+        val next = AppleReadingPulsePolicy.nextUpcomingBeginMs(550, variants)
+        assertEquals(700L, next)
+        assertEquals(60L, AppleReadingPulsePolicy.nextDelayMs(
+            onScreen = true, positionMs = 550, nextBeginMs = next,
+            active = false,
+        ))
+        assertNull(AppleReadingPulsePolicy.nextUpcomingBeginMs(901, variants))
+    }
+
+    @Test fun upcomingReadingWakeUsesActualWordsAcrossRepeatedChorusVariants() {
+        val variants = listOf(
+            listOf(AppleTimedReadingUnit(0, 2, 10_000, 10_200)),
+            listOf(
+                AppleTimedReadingUnit(0, 1, 1_000, 1_300),
+                AppleTimedReadingUnit(2, 3, 1_800, 2_100),
+            ),
+        )
+        assertEquals(1_800L, AppleReadingPulsePolicy.nextUpcomingBeginMs(1_600, variants))
+        assertEquals(10_000L, AppleReadingPulsePolicy.nextUpcomingBeginMs(2_200, variants))
+        assertEquals(1_000L, AppleReadingPulsePolicy.nextUpcomingBeginMs(0, variants))
+    }
+
+    @Test fun offscreenReadingDoesNotPollPlayerClockOrScanFastTimers() {
+        val variants = listOf(listOf(AppleTimedReadingUnit(0, 1, 1_000, 1_200)))
+        var playbackPolls = 0
+        val playbackClock: () -> Long? = { playbackPolls++; 1_010L }
+        val offscreen = AppleReadingPulsePolicy.playbackSample(false, playbackClock)
+        assertNull(offscreen)
+        assertEquals(400L, AppleReadingPulsePolicy.nextDelayForReading(
+            onScreen = false,
+            positionMs = offscreen,
+            variants = variants,
+        ))
+        assertEquals(0, playbackPolls)
+        val onscreen = AppleReadingPulsePolicy.playbackSample(true, playbackClock)
+        assertEquals(60L, AppleReadingPulsePolicy.nextDelayForReading(
+            onScreen = true,
+            positionMs = onscreen,
+            variants = variants,
+        ))
+        // The one sampled clock value is also the one supplied to the paint.
+        assertEquals(1, playbackPolls)
+    }
+
+    @Test fun visibleReadingWakesForTheNextRealUnitAfterAnInternalGap() {
+        val variants = listOf(listOf(
+            AppleTimedReadingUnit(0, 1, 100, 200),
+            AppleTimedReadingUnit(2, 3, 700, 900),
+        ))
+        assertEquals(60L, AppleReadingPulsePolicy.nextDelayForReading(
+            onScreen = true,
+            positionMs = 550L,
+            variants = variants,
+        ))
+        assertEquals(400L, AppleReadingPulsePolicy.nextDelayForReading(
+            onScreen = true,
+            positionMs = 901L,
+            variants = variants,
+        ))
+        assertEquals(400L, AppleReadingPulsePolicy.nextDelayForReading(
+            onScreen = true,
+            positionMs = null,
+            variants = variants,
+        ))
+    }
+
+    @Test fun aSeekOnlyWakesTheCurrentVisibleAttachedSongReading() {
+        assertTrue(AppleReadingSeekWakePolicy.shouldWake(
+            boundSongId = "song-a", seekSongId = "song-a",
+            boundRevision = 3L, currentRevision = 3L,
+            attached = true, onScreen = true,
+        ))
+        assertFalse(AppleReadingSeekWakePolicy.shouldWake(
+            boundSongId = "song-a", seekSongId = "song-b",
+            boundRevision = 3L, currentRevision = 3L,
+            attached = true, onScreen = true,
+        ))
+        assertFalse(AppleReadingSeekWakePolicy.shouldWake(
+            boundSongId = "song-a", seekSongId = null,
+            boundRevision = 3L, currentRevision = 3L,
+            attached = true, onScreen = true,
+        ))
+        assertFalse(AppleReadingSeekWakePolicy.shouldWake(
+            boundSongId = "song-a", seekSongId = "song-a",
+            boundRevision = 2L, currentRevision = 3L,
+            attached = true, onScreen = true,
+        ))
+        assertFalse(AppleReadingSeekWakePolicy.shouldWake(
+            boundSongId = "song-a", seekSongId = "song-a",
+            boundRevision = 3L, currentRevision = 3L,
+            attached = false, onScreen = true,
+        ))
+        assertFalse(AppleReadingSeekWakePolicy.shouldWake(
+            boundSongId = "song-a", seekSongId = "song-a",
+            boundRevision = 3L, currentRevision = 3L,
+            attached = true, onScreen = false,
         ))
     }
 

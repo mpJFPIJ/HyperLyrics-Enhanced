@@ -17,14 +17,19 @@ internal object AppleLyricUiRuntimeProbe {
     private val samples = ConcurrentHashMap<String, AtomicInteger>()
     private const val MAX_PER_STAGE = 6
 
-    fun record(stage: String, details: String, root: View? = null) {
+    fun record(stage: String, details: String, root: View? = null) =
+        recordLazy(stage, root) { details }
+
+    /** Expensive geometry is calculated only for the first bounded samples,
+     * never for every subsequently measured RecyclerView holder. */
+    fun recordLazy(stage: String, root: View? = null, details: () -> String) {
         val number = samples.computeIfAbsent(stage) { AtomicInteger() }
             .incrementAndGet()
         if (number > MAX_PER_STAGE) return
         val viewSummary = if (root == null) "" else viewShapeSummary(root)
         ProviderLogger.debug(
             "[HLE_UX_TRACE] build=${BuildConfig.HLE_BUILD_RUN} " +
-                "stage=$stage sample=$number $details $viewSummary"
+                "stage=$stage sample=$number ${details()} $viewSummary"
         )
     }
 

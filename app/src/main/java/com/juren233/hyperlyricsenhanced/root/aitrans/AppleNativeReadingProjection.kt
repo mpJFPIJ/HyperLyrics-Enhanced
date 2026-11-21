@@ -168,7 +168,12 @@ internal object AppleNativeReadingProjection {
         val valid = AppleWordReadingAlignment.align(
             original, appleWords, spans, expectedHangul,
         )
-        if (valid is WordAlignmentResult.LineWide) return null
+        // Grouped means one *verified* Japanese phonetic token crosses several
+        // Apple cells. Its Hangul sound is verified as a whole, but no
+        // syllable-to-cell breakpoint is. Dividing by source glyph count
+        // fabricates a karaoke boundary and may leave its last syllable at
+        // the next flexbox row. Keep the intact line-wide reading instead.
+        if (valid !is WordAlignmentResult.Verified) return null
         if (appleWords.isEmpty() || spans.isEmpty()) return null
         val ranges = mutableListOf<IntRange>()
         var cursor = 0

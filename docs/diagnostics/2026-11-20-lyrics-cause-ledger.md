@@ -212,8 +212,29 @@ internal source wrapping, not only distinct source top coordinates.
 **RED observed:** [run #253](https://github.com/mpJFPIJ/HyperLyrics-Enhanced/actions/runs/44857470129)
 failed with six test compile errors for the deliberately missing
 `AppleReadingSeekWakePolicy`; this is compile-level TDD, not a runtime seek
-reproduction. Final integrated GREEN CI and device replay for the accepted-seek
-change are still required.
+reproduction. [Run #254](https://github.com/mpJFPIJ/HyperLyrics-Enhanced/actions/runs/44858202524)
+compiled and executed 3,085 JVM tests, but **failed one existing regression**:
+`AppleOrchestratorAssemblyContractTest.no new initialization guard swallows failures`.
+The new main-thread seek callback had added a `this::lyricsHooks.isInitialized`
+guard, violating the assembly's pre-existing exact-nine-guards contract. The
+`lyricsHooks` coordinator is already constructed before `ApplePlaybackHooks`
+and must fail visibly if that order is broken. The follow-up removes the
+unnecessary guard while retaining the current-song check. #254 produced no
+verified installable APK; rerun GREEN is required.
+
+**Independent review residual:** Immediately after a paused nonzero seek,
+`ApplePlaybackHooks.currentPositionMs()` always prefers a nonnegative Exo raw
+getter value over the newer accepted seek fallback, except for a special
+zero-getter case. Conditional source example: paused at 21,370 ms, accepted
+seek to 77,000 ms, but if the Exo getter still returns 21,370 ms, the newly
+woken reading samples 21,370 ms and may return to its 400-ms idle interval.
+The selection behavior is confirmed by code; **whether Apple's Exo wrapper
+actually returns stale nonzero values after its seek method is unknown**.
+The app's seek target can differ from its eventual clamped/real playhead, so
+blindly replacing the authoritative raw getter with that target would be an
+unjustified timing override. Actual seek-completion/getter provenance is
+required before claiming this edge case resolved. The native lyric-tap route
+to this exact Exo method likewise needs NPatch same-event traces.
 
 ## Required handoff replay
 

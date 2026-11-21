@@ -433,7 +433,7 @@ internal class AppleOrchestratorLyricsPlaybackAssembly(
             currentLyricsSongId = lyricsHooks::currentSongId,
             onAcceptedSeek = { songId ->
                 runtime.mainHandler.post {
-                    if (this::lyricsHooks.isInitialized && lyricsHooks.currentSongId() == songId) {
+                    if (lyricsHooks.currentSongId() == songId) {
                         lyricsHooks.onAcceptedPlaybackSeek(songId)
                     }
                 }

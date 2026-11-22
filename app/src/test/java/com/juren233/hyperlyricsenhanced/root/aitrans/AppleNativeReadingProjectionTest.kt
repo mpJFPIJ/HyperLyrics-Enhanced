@@ -76,6 +76,11 @@ class AppleNativeReadingProjectionTest {
             emptyList(), "야타라토신도이코이",
         )
         assertEquals(4, native?.words?.size)
+        // This is the exact problematic visual-row boundary from the sample
+        // video. Kana words prove their OWN sounds; the remaining kanji gets
+        // the two remaining syllables rather than stealing a kana syllable.
+        assertEquals(listOf("야타라", "토", "신도이", "코이"),
+            native?.words?.map { it.hangul })
         assertEquals("야타라토신도이코이", native?.words?.joinToString("") { it.hangul })
         assertTrue(native?.approximate == true)
         assertNull(AppleNativeReadingProjection.projectForNativeKaraoke(
@@ -103,6 +108,11 @@ class AppleNativeReadingProjectionTest {
         assertEquals("다린", result?.words?.joinToString("") { it.hangul }?.replace(
             AppleNativeReadingProjection.EMPTY_PRONUNCIATION_CELL, "",
         ))
+        val native = AppleNativeReadingProjection.projectForNativeKaraoke(
+            "ダーリン", listOf("ダ", "ー", "リン"), emptyList(), "다린",
+        )
+        assertEquals(listOf("다", AppleNativeReadingProjection.EMPTY_PRONUNCIATION_CELL, "린"),
+            native?.words?.map { it.hangul })
     }
     @Test fun groupedJapaneseMorphemeCannotInventAWordClockBoundary() {
         val result = AppleNativeReadingProjection.project(

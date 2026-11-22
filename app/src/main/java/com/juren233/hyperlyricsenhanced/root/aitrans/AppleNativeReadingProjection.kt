@@ -39,7 +39,50 @@ internal object AppleNativeReadingProjection {
             return project(original, appleWords, spans, pronunciation)
                 ?: projectAnchored(original, appleWords, spans, pronunciation)
         }
-        return projectApproximate(original, appleWords, pronunciation)
+        // Without a dictionary map, entire native KANA words still have a
+        // deterministic phonetic reading. Pin only uniquely occurring sounds
+        // in the supplied Korean line; leave kanji and ambiguous repetitions
+        // for the last-resort positional projection.
+        val kanaAnchors = unambiguousKanaWordAnchors(original, appleWords, pronunciation)
+        return kanaAnchors.takeIf { it.isNotEmpty() }?.let { anchors ->
+            projectAnchored(original, appleWords, anchors, pronunciation)
+        } ?: projectApproximate(original, appleWords, pronunciation)
+    }
+
+    private fun unambiguousKanaWordAnchors(
+        original: String,
+        appleWords: List<String>,
+        pronunciation: String,
+    ): List<SourceReadingSpan> {
+        val sounded = pronunciation.filter { it in '가'..'힣' }
+        if (sounded.isEmpty()) return emptyList()
+        val spans = mutableListOf<SourceReadingSpan>()
+        var sourceCursor = 0
+        var readingCursor = 0
+        for (native in appleWords) {
+            val word = native.trim()
+            if (word.isEmpty()) continue
+            val sourceStart = original.indexOf(word, sourceCursor)
+            if (sourceStart < 0 || original.substring(sourceCursor, sourceStart)
+                    .any(Char::isLetterOrDigit)
+            ) return emptyList()
+            sourceCursor = sourceStart + word.length
+            if (word.any { it !in '\u3040'..'\u30ff' } ||
+                word.all { it == '\u30fc' || it == '\u30fb' }
+            ) continue
+            val kanaReading = JapaneseToHangul.fromKana(word) ?: continue
+            val hangul = kanaReading.filter { it in '가'..'힣' }
+            if (hangul.isEmpty()) continue
+            val soundStart = sounded.indexOf(hangul, readingCursor)
+            // A repeated same-sounding particle is not by itself evidence
+            // of a unique phonetic offset in the full Korean line.
+            if (soundStart < 0 || sounded.indexOf(hangul, soundStart + 1) >= 0) continue
+            spans += SourceReadingSpan(
+                sourceStart, sourceCursor, word, kanaReading, hangul,
+            )
+            readingCursor = soundStart + hangul.length
+        }
+        return spans
     }
 
     /**

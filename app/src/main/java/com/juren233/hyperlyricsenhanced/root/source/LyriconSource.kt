@@ -126,6 +126,7 @@ class LyriconSource : LyricSource {
     internal val fallbackScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     internal val fallbackRequestMutex = Mutex()
     internal val publication = LyriconPublication()
+    internal val acceptedOnlinePublication = AppleAcceptedOnlinePublication()
     internal val currentAppleSong get() = publication.currentAppleSong
     internal val currentAppleNativeSong get() = publication.currentAppleNativeSong
     internal val currentAppleHasNativeLyrics get() = publication.currentAppleHasNativeLyrics

@@ -1,5 +1,7 @@
 package io.github.proify.lyricon.amprovider.xposed
 
+import com.juren233.hyperlyricsenhanced.root.aitrans.JapaneseToHangul
+
 /** Read-only copies of Apple Music's actual main-word timing values, in milliseconds. */
 internal data class AppleTimedSourceWord(
     val text: String,
@@ -21,8 +23,9 @@ internal data class AppleTimedReadingUnit(
     val end: Int,
     val beginMs: Long,
     val endMs: Long,
-    // Original Apple source word index; -1 when only line-level time exists.
+    // Original visible native word index; -1 if several words or a line share this window.
     val sourceWordIndex: Int = -1,
+    val isWholeLine: Boolean = false,
 )
 
 /** Never fabricate Korean syllable boundaries from Japanese character lengths. */
@@ -35,6 +38,177 @@ internal object AppleTimedPronunciationHighlightPolicy {
         val nativeIndex: Int,
     )
 
+    private data class LocatedSound(
+        val sourceStart: Int,
+        val sourceEnd: Int,
+        val readingStart: Int,
+        val readingEnd: Int,
+    )
+
+    // Both passes respect order. If the earliest and latest legal placements
+    // disagree, a repeated word cannot be attributed to one occurrence.
+    private fun uniqueOffsets(text: String, parts: List<String>): List<Int?> {
+        var cursor = 0
+        val first = IntArray(parts.size)
+        for ((index, part) in parts.withIndex()) {
+            val start = text.indexOf(part, cursor)
+            if (start < 0) return List(parts.size) { null }
+            first[index] = start
+            cursor = start + part.length
+        }
+        val offsets = MutableList<Int?>(parts.size) { null }
+        cursor = text.length
+        for (index in parts.indices.reversed()) {
+            val part = parts[index]
+            val start = text.lastIndexOf(part, cursor - part.length)
+            if (start == first[index]) offsets[index] = start
+            cursor = start
+        }
+        return offsets
+    }
+
+    private fun locateWords(source: String, words: List<AppleTimedSourceWord>): List<LocatedWord> {
+        val content = words.mapIndexedNotNull { index, word ->
+            val letters = word.text.filter(Char::isLetterOrDigit)
+            if (letters.isEmpty()) null else index to letters
+        }
+        // Untimed cells still occupy source text and native view indices.
+        val offsets = uniqueOffsets(source, content.map { it.second })
+        return content.mapIndexedNotNull { index, (nativeIndex, letters) ->
+            val start = offsets[index] ?: return@mapIndexedNotNull null
+            val word = words[nativeIndex]
+            if (word.beginMs < 0 || word.endMs <= word.beginMs) return@mapIndexedNotNull null
+            LocatedWord(start, start + letters.length, word.beginMs, word.endMs, nativeIndex)
+        }
+    }
+
+    private fun locateSounds(
+        source: String, readingLetters: String, spans: List<ApplePronunciationSourceToken>,
+    ): List<LocatedSound> {
+        val sourceOffsets = IntArray(source.length + 1)
+        for (i in source.indices) {
+            sourceOffsets[i + 1] = sourceOffsets[i] + if (source[i].isLetterOrDigit()) 1 else 0
+        }
+        var previousEnd = 0
+        val parts = spans.map { span ->
+            if (span.sourceStart < previousEnd || span.sourceEnd <= span.sourceStart ||
+                span.sourceEnd > source.length ||
+                (span.sourceText != null &&
+                    source.substring(span.sourceStart, span.sourceEnd) != span.sourceText) ||
+                sourceOffsets[span.sourceStart] == sourceOffsets[span.sourceEnd]
+            ) return emptyList()
+            previousEnd = span.sourceEnd
+            span.hangul.filter(Char::isLetterOrDigit).ifEmpty { return emptyList() }
+        }
+        val offsets = uniqueOffsets(readingLetters, parts)
+        return spans.mapIndexedNotNull { i, span ->
+            val start = offsets[i] ?: return@mapIndexedNotNull null
+            LocatedSound(sourceOffsets[span.sourceStart], sourceOffsets[span.sourceEnd],
+                start, start + parts[i].length)
+        }
+    }
+
+    private fun literalKanaSounds(
+        source: String, reading: String, words: List<AppleTimedSourceWord>,
+    ): List<LocatedSound> {
+        if (!AppleInterleavedReadingPolicy.canDeriveKanaRows(source, reading)) return emptyList()
+        val sourceLetters = source.filter(Char::isLetterOrDigit)
+        val readingLetters = reading.filter(Char::isLetterOrDigit)
+        var sourceCursor = 0
+        var readingCursor = 0
+        val sounds = mutableListOf<LocatedSound>()
+        for (word in words) {
+            val letters = word.text.filter(Char::isLetterOrDigit)
+            if (letters.isEmpty()) continue
+            if (!sourceLetters.startsWith(letters, sourceCursor)) return emptyList()
+            val sound = JapaneseToHangul.fromKana(word.text)?.filter(Char::isLetterOrDigit)
+            if (sound.isNullOrEmpty() || !readingLetters.startsWith(sound, readingCursor)) {
+                return emptyList()
+            }
+            sounds += LocatedSound(sourceCursor, sourceCursor + letters.length,
+                readingCursor, readingCursor + sound.length)
+            sourceCursor += letters.length
+            readingCursor += sound.length
+        }
+        // Requiring complete coverage also disambiguates repeated native words.
+        return if (sourceCursor == sourceLetters.length && readingCursor == readingLetters.length)
+            sounds else emptyList()
+    }
+
+    // A dictionary token can contain more than one native word, even across
+    // a real rest. Its original sound anchors both ends of any finer mapping.
+    private fun splitVerifiedKana(
+        source: String,
+        readingLetters: String,
+        sounds: List<LocatedSound>,
+        words: List<LocatedWord>,
+        nativeWords: List<AppleTimedSourceWord>,
+    ): List<LocatedSound> {
+        val wordsByStart = words.associateBy { it.sourceStart }
+        val sourceOffsets = source.indices.filter { source[it].isLetterOrDigit() }
+        return sounds.flatMap { sound ->
+            val first = wordsByStart[sound.sourceStart]
+            if (first == null || first.sourceEnd >= sound.sourceEnd) return@flatMap listOf(sound)
+            val cells = mutableListOf<AppleTimedSourceWord>()
+            var cursor = sound.sourceStart
+            while (cursor < sound.sourceEnd) {
+                val word = wordsByStart[cursor] ?: return@flatMap listOf(sound)
+                if (word.sourceEnd > sound.sourceEnd) return@flatMap listOf(sound)
+                cells += nativeWords[word.nativeIndex]
+                cursor = word.sourceEnd
+            }
+            val fragment = source.substring(sourceOffsets[sound.sourceStart],
+                sourceOffsets[sound.sourceEnd - 1] + 1)
+            val expected = readingLetters.substring(sound.readingStart, sound.readingEnd)
+            val finer = literalKanaSounds(fragment, expected, cells)
+            if (finer.isEmpty()) listOf(sound) else finer.map { local ->
+                LocatedSound(sound.sourceStart + local.sourceStart, sound.sourceStart + local.sourceEnd,
+                    sound.readingStart + local.readingStart, sound.readingStart + local.readingEnd)
+            }
+        }
+    }
+
+    // Advance the shorter source interval until BOTH representations end at
+    // the same boundary. This also covers several dictionary tokens in one
+    // native cell. Missing source letters, reading letters or clocks break a group.
+    private fun verifiedUnits(
+        words: List<LocatedWord>, sounds: List<LocatedSound>, readingOffsets: List<Int>,
+    ): List<AppleTimedReadingUnit> {
+        val wordsByStart = words.associateBy { it.sourceStart }
+        val soundsByStart = sounds.associateBy { it.sourceStart }
+        val units = mutableListOf<AppleTimedReadingUnit>()
+        for (firstSound in sounds) {
+            val firstWord = wordsByStart[firstSound.sourceStart] ?: continue
+            var word = firstWord
+            var sound = firstSound
+            while (sound.sourceEnd != word.sourceEnd) {
+                if (sound.sourceEnd < word.sourceEnd) {
+                    val next = soundsByStart[sound.sourceEnd] ?: break
+                    if (next.readingStart != sound.readingEnd) break
+                    sound = next
+                } else {
+                    val next = wordsByStart[word.sourceEnd] ?: break
+                    // Never infer a continuous token clock across a native rest
+                    // or a reversed timestamp.
+                    if (next.beginMs < word.beginMs || next.beginMs > word.endMs ||
+                        next.endMs < word.endMs
+                    ) break
+                    word = next
+                }
+            }
+            if (word.sourceEnd == sound.sourceEnd) {
+                units += AppleTimedReadingUnit(
+                    start = readingOffsets[firstSound.readingStart],
+                    end = readingOffsets[sound.readingEnd - 1] + 1,
+                    beginMs = firstWord.beginMs,
+                    endMs = word.endMs,
+                    sourceWordIndex = if (firstWord === word) word.nativeIndex else -1,
+                )
+            }
+        }
+        return units
+    }
+
     fun units(
         sourceText: String,
         pronunciation: String,
@@ -43,121 +217,35 @@ internal object AppleTimedPronunciationHighlightPolicy {
         lineBeginMs: Long? = null,
         lineEndMs: Long? = null,
     ): List<AppleTimedReadingUnit> {
-        if (sourceText.isBlank() || pronunciation.isBlank()) return emptyList()
-        val sourceChars = sourceText.indices.filter { sourceText[it].isLetterOrDigit() }
-        val normalizedSource = sourceChars.joinToString("") { sourceText[it].toString() }
-        var sourceCursor = 0
-        val located = timedWords.mapIndexedNotNull { nativeIndex, word ->
-            if (word.beginMs < 0L || word.endMs <= word.beginMs) return@mapIndexedNotNull null
-            val normalizedWord = word.text.filter(Char::isLetterOrDigit)
-            if (normalizedWord.isEmpty()) return@mapIndexedNotNull null
-            val offset = normalizedSource.indexOf(normalizedWord, sourceCursor)
-            if (offset < 0) return@mapIndexedNotNull null
-            sourceCursor = offset + normalizedWord.length
-            LocatedWord(
-                sourceStart = sourceChars[offset],
-                sourceEnd = sourceChars[sourceCursor - 1] + 1,
-                beginMs = word.beginMs,
-                endMs = word.endMs,
-                nativeIndex = nativeIndex,
-            )
+        val source = sourceText.filter(Char::isLetterOrDigit)
+        val readingOffsets = pronunciation.indices.filter { pronunciation[it].isLetterOrDigit() }
+        if (source.isEmpty() || readingOffsets.isEmpty()) return emptyList()
+        val words = locateWords(source, timedWords)
+        if (words.isNotEmpty()) {
+            val sounds = if (phoneticSpans.isEmpty()) {
+                literalKanaSounds(sourceText, pronunciation, timedWords)
+            } else {
+                val letters = pronunciation.filter(Char::isLetterOrDigit)
+                val anchored = locateSounds(sourceText, letters, phoneticSpans)
+                splitVerifiedKana(sourceText, letters, anchored, words, timedWords)
+            }
+            val verified = verifiedUnits(words, sounds, readingOffsets)
+            if (verified.isNotEmpty()) return verified
         }
+
         val hasLineWindow = lineBeginMs != null && lineEndMs != null &&
             lineBeginMs >= 0L && lineEndMs > lineBeginMs
-        if (located.isEmpty() && !hasLineWindow) return emptyList()
-        val coveredSourcePositions = BooleanArray(sourceText.length)
-        located.forEach { word ->
-            for (index in word.sourceStart until word.sourceEnd) {
-                coveredSourcePositions[index] = true
-            }
+        if (!hasLineWindow && words.sumOf { it.sourceEnd - it.sourceStart } != source.length) {
+            return emptyList()
         }
-        val fullNativeCoverage = sourceChars.isNotEmpty() &&
-            sourceChars.all { coveredSourcePositions[it] }
-
-        val pronouncedOffsets = pronunciation.indices.filter {
-            pronunciation[it].isLetterOrDigit()
-        }
-        if (pronouncedOffsets.isEmpty()) return emptyList()
-
-        // A tokenizer boundary establishes what a complete Korean expression
-        // means; it does NOT establish when each of its syllables is spoken.
-        // Accept only structural source spans whose sound is actually present
-        // in the generated/loaded reading, preserving source UTF-16 offsets.
-        val structurallyValidSpans = phoneticSpans.takeIf { spans ->
-            spans.isNotEmpty() && spans.zipWithNext().all { (a, b) ->
-                a.sourceEnd <= b.sourceStart
-            } && spans.all { span ->
-                span.sourceStart >= 0 && span.sourceEnd > span.sourceStart &&
-                    span.sourceEnd <= sourceText.length &&
-                    span.hangul.any(Char::isLetterOrDigit) &&
-                    (span.sourceText == null ||
-                        sourceText.substring(span.sourceStart, span.sourceEnd) == span.sourceText)
-            }
-        }
-        val pronunciationLetters = pronouncedOffsets.joinToString("") {
-            pronunciation[it].toString()
-        }
-        val completeSpans = structurallyValidSpans != null &&
-            structurallyValidSpans.joinToString("") {
-                it.hangul.filter(Char::isLetterOrDigit)
-            } == pronunciationLetters
-
-        if (structurallyValidSpans != null) {
-            var cursor = 0
-            val verified = mutableListOf<AppleTimedReadingUnit>()
-            var ambiguous = false
-            for (span in structurallyValidSpans) {
-                val phonetic = span.hangul.filter(Char::isLetterOrDigit)
-                val index = if (completeSpans) cursor else
-                    pronunciationLetters.indexOf(phonetic, cursor)
-                if (index < 0 || !pronunciationLetters.startsWith(phonetic, index) ||
-                    (!completeSpans && pronunciationLetters.indexOf(phonetic, index + 1) >= 0)
-                ) {
-                    ambiguous = true
-                    break
-                }
-                cursor = index + phonetic.length
-
-                val segmentSource = sourceChars.filter {
-                    it in span.sourceStart until span.sourceEnd
-                }
-                if (segmentSource.isEmpty() ||
-                    !segmentSource.all { coveredSourcePositions[it] }
-                ) continue
-                val native = located.filter {
-                    it.sourceEnd > span.sourceStart && it.sourceStart < span.sourceEnd
-                }
-                // A token must consume entire native cells. If only part of a
-                // cell is known, its timing cannot be split safely.
-                if (native.isEmpty() || native.first().sourceStart < span.sourceStart ||
-                    native.last().sourceEnd > span.sourceEnd
-                ) continue
-                val begin = native.first().beginMs
-                val end = native.last().endMs
-                if (end <= begin) continue
-                verified += AppleTimedReadingUnit(
-                    start = pronouncedOffsets[index],
-                    end = pronouncedOffsets[cursor - 1] + 1,
-                    beginMs = begin,
-                    endMs = end,
-                    sourceWordIndex = native.singleOrNull()?.nativeIndex ?: -1,
-                )
-            }
-            if (!ambiguous && verified.isNotEmpty()) return verified
-        }
-
-        // No trustworthy phonetic-to-word anchors: the only defensible
-        // fallback is one WHOLE line interval. Never invent fine timing.
-        val begin = if (hasLineWindow) lineBeginMs!! else
-            located.minOfOrNull(LocatedWord::beginMs) ?: return emptyList()
-        val end = if (hasLineWindow) lineEndMs!! else
-            located.maxOfOrNull(LocatedWord::endMs) ?: return emptyList()
-        if ((!fullNativeCoverage && !hasLineWindow) || end <= begin) return emptyList()
+        val begin = if (hasLineWindow) lineBeginMs!! else words.minOf { it.beginMs }
+        val end = if (hasLineWindow) lineEndMs!! else words.maxOf { it.endMs }
         return listOf(AppleTimedReadingUnit(
-            start = pronouncedOffsets.first(),
-            end = pronouncedOffsets.last() + 1,
+            start = readingOffsets.first(),
+            end = readingOffsets.last() + 1,
             beginMs = begin,
             endMs = end,
+            isWholeLine = true,
         ))
     }
 

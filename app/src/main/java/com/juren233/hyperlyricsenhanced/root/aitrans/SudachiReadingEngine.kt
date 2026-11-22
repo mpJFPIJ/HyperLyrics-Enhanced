@@ -26,7 +26,12 @@ internal object SudachiReadingEngine {
     }
 
     /** One dictionary pass over the original complete line, never one pass per karaoke cell. */
-    fun analyzeLine(text: String): LineReadingResult {
+    fun analyzeLine(text: String): LineReadingResult = analyzeLineForNativeWords(text, emptyList())
+
+    /** Full-line context is always the authoritative sound. Individual Kanji
+     * cells may refine its boundaries only after independent dictionary reads
+     * rejoin EXACTLY the already established whole-line Hangul pronunciation. */
+    fun analyzeLineForNativeWords(text: String, nativeWords: List<String>): LineReadingResult {
         if (text.isBlank()) return LineReadingResult(null, emptyList(), LineReadingStatus.EMPTY)
         val dic = getDictionary()
             ?: return LineReadingResult(null, emptyList(), LineReadingStatus.MISSING_UNSUPPORTED)
@@ -34,8 +39,8 @@ internal object SudachiReadingEngine {
             // Preserve the whole-line context while retrying more fine-grained
             // Sudachi segmentation only if a coarse unknown token caused loss.
             val modes = listOf(Tokenizer.SplitMode.C, Tokenizer.SplitMode.B, Tokenizer.SplitMode.A)
-            SourceReadingAssembler.retryModes(text, modes.size) { mode ->
-                dic.create().tokenize(modes[mode], text).map { word ->
+            val tokens: (String, Int) -> List<RawReadingToken> = { input, mode ->
+                dic.create().tokenize(modes[mode], input).map { word ->
                     RawReadingToken(
                         sourceStart = word.begin(),
                         sourceEnd = word.end(),
@@ -43,6 +48,26 @@ internal object SudachiReadingEngine {
                         isParticle = word.partOfSpeech().firstOrNull() == "助詞",
                     )
                 }
+            }
+            val tokenize: (Int) -> List<RawReadingToken> = { mode -> tokens(text, mode) }
+            if (nativeWords.isEmpty()) {
+                SourceReadingAssembler.retryModes(text, modes.size, tokenize)
+            } else {
+                val wholeLine = SourceReadingAssembler.retryModesForNativeWords(
+                    text, nativeWords, modes.size, tokenize,
+                )
+                val analyzeCell: (String) -> LineReadingResult = { nativeCell ->
+                    SourceReadingAssembler.retryModes(nativeCell, modes.size) { mode ->
+                        tokens(nativeCell, mode)
+                    }
+                }
+                val nativeRefined = SourceReadingAssembler.refineCoarseNativeWords(
+                    text, nativeWords, wholeLine,
+                    analyzeCell = analyzeCell,
+                )
+                SourceReadingAssembler.refinePotentialVisualLineBoundaries(
+                    text, nativeRefined, analyzeCell,
+                )
             }
         }.getOrElse {
             Log.w(TAG, "Full-line reading failed: ${it.javaClass.simpleName}")

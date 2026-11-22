@@ -9,6 +9,22 @@ import com.juren233.hyperlyricsenhanced.lyric.model.Song
 import com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation
 import com.juren233.hyperlyricsenhanced.lyric.model.LyricPronunciationSpan
 
+/** Checks a receipt's declared provider against the latest explicit song selection. */
+internal fun shouldAcceptAppleOnlineSourceReceipt(
+    songId: String?,
+    incomingSource: String?,
+    pendingSongId: String?,
+    pendingTargetSource: String?,
+    confirmedSongId: String?,
+    confirmedSource: String?,
+): Boolean {
+    val expected = pendingTargetSource.takeIf { pendingSongId == songId }
+        ?: confirmedSource.takeIf { confirmedSongId == songId }
+    // Older or standalone providers may not declare a source. Such payloads
+    // cannot be proven stale by source identity alone; retain old behavior.
+    return incomingSource.isNullOrBlank() || expected.isNullOrBlank() || incomingSource == expected
+}
+
 internal class AppleNativeOnlineTranslationStore {
     private data class TimingKey(
         val begin: Long,
@@ -22,6 +38,7 @@ internal class AppleNativeOnlineTranslationStore {
 
     private data class Content(
         val translation: String?,
+        val generatedTranslation: String?,
         val pronunciation: String?,
         val wordPronunciations: List<LyricWordPronunciation>?,
         val pronunciationSpans: List<LyricPronunciationSpan>?,
@@ -38,6 +55,7 @@ internal class AppleNativeOnlineTranslationStore {
         val exactContent: Map<LineKey, Content>,
         val translationsByTiming: Map<TimingKey, List<Entry>>,
         val hasTranslation: Boolean,
+        val hasGeneratedTranslation: Boolean,
         val hasPronunciation: Boolean,
         val hasHangulPronunciation: Boolean,
         val translationSource: String?,
@@ -60,24 +78,40 @@ internal class AppleNativeOnlineTranslationStore {
     @Volatile
     private var contentRevision = 0L
 
+    private var nextReceipt = 0L
+    private var lastAcceptedDirectReceipt = 0L
+
+    @Synchronized fun nextDirectReceipt(): Long = ++nextReceipt
+
     /** Cache acceptance is not source selection or successful View binding. */
     data class Receipt(
         val updated: Boolean,
         val displayContentChanged: Boolean,
         val update: AppleLyricsPresentationUpdate,
+        /** False only when a later direct publication has already won. */
+        val accepted: Boolean = true,
     )
 
     fun update(song: Song): Boolean = receive(song).updated
 
     /**
      * Comparison, mutation and revision capture share the store monitor.
-     * Source-only changes advance revision for source menus, while unchanged line content
-     * does not request a full-page presentation (including RACE_FIRST/RACE_FINAL receipts).
+     * Menu metadata can change independently. A presentation revision invalidates bound
+     * rows, so advance it only when those rows also need a rebind.
      */
     @Synchronized
-    fun receive(song: Song, preserveExistingPronunciation: Boolean = false): Receipt {
-        val candidate = buildOverlay(song)
+    fun receive(
+        song: Song,
+        preserveExistingPronunciation: Boolean = false,
+        directReceipt: Long? = null,
+    ): Receipt {
+        if (directReceipt != null && directReceipt <= lastAcceptedDirectReceipt) {
+            return Receipt(false, false, AppleLyricsPresentationUpdate(song.id, contentRevision), accepted = false)
+        }
+        val previousAi = aiOverlay
+        val candidate = buildOverlay(song, standalone = preserveExistingPronunciation)
         if (candidate != null) {
+            if (directReceipt != null) lastAcceptedDirectReceipt = directReceipt
             if (aiOverlay?.songId != candidate.songId) aiOverlay = null
             if (preserveExistingPronunciation) {
                 // A later translation-only response must not erase the exact
@@ -90,12 +124,14 @@ internal class AppleNativeOnlineTranslationStore {
         ) {
             preservePronunciation(candidate, requireNotNull(overlay))
         } else candidate
+        // AI-first rows read aiOverlay even if the general provider already supplied identical text.
+        val aiContentChanged = previousAi?.exactContent != aiOverlay?.exactContent
         val displayChanged = next != null &&
-            (overlay == null || overlay?.exactContent != next.exactContent)
-        val updated = next != null && overlay != next
+            (aiContentChanged || overlay?.songId != next.songId || overlay?.exactContent != next.exactContent)
+        val updated = next != null && (overlay != next || previousAi != aiOverlay)
         if (updated) {
             overlay = next
-            contentRevision += 1
+            if (displayChanged) contentRevision += 1
         }
         return Receipt(
             updated = updated,
@@ -113,7 +149,10 @@ internal class AppleNativeOnlineTranslationStore {
         val merged = next.exactContent.mapValues { (key, content) ->
             val exactPreviousContent = previous.exactContent[key]
             val previousContent = exactPreviousContent
-                ?: previous.translationsByTiming[key.timing]?.singleOrNull()?.content
+                ?: previous.translationsByTiming[key.timing]?.singleOrNull()?.takeIf {
+                    val identity = normalizedSourceIdentity(key.text)
+                    identity.isNotEmpty() && normalizedSourceIdentity(it.text) == identity
+                }?.content
             val existing = previousContent?.pronunciation
             // Prefer requested Hangul display when AI provides it, while
             // preserving older romanization whenever no Hangul was returned.
@@ -152,17 +191,25 @@ internal class AppleNativeOnlineTranslationStore {
         )
     }
 
-    private fun buildOverlay(song: Song): Overlay? {
+    private fun buildOverlay(song: Song, standalone: Boolean): Overlay? {
         val songId = song.id?.takeIf(String::isNotBlank) ?: return null
         val entries = song.lyrics.orEmpty().mapNotNull { line ->
+            val translation = sanitizeContent(line.translation)
+            val generated = when {
+                !standalone -> null
+                line.metadata?.getBoolean(LyricMetadataKeys.STANDALONE_INHERITED_TRANSLATION) == true ->
+                    sanitizeContent(line.metadata?.getString(LyricMetadataKeys.STANDALONE_GENERATED_TRANSLATION))
+                else -> translation
+            }
             val content = Content(
-                translation = sanitizeContent(line.translation),
+                translation = translation,
+                generatedTranslation = generated,
                 pronunciation = RomanizationPolicy.sanitizeSupplement(line.text, line.roma),
                 wordPronunciations = line.pronunciationWords,
                 pronunciationSpans = line.pronunciationSpans,
                 pronunciationStatus = line.pronunciationStatus,
             )
-            if (content.translation == null && content.pronunciation == null &&
+            if (content.translation == null && content.generatedTranslation == null && content.pronunciation == null &&
                 content.pronunciationStatus == null
             ) {
                 return@mapNotNull null
@@ -179,6 +226,7 @@ internal class AppleNativeOnlineTranslationStore {
                 valueTransform = { Entry(it.first.text, it.second) },
             ),
             hasTranslation = entries.any { it.second.translation != null },
+            hasGeneratedTranslation = entries.any { it.second.generatedTranslation != null },
             hasPronunciation = entries.any { it.second.pronunciation != null },
             hasHangulPronunciation = entries.any {
                 RomanizationPolicy.isHangulPronunciation(it.second.pronunciation)
@@ -216,7 +264,7 @@ internal class AppleNativeOnlineTranslationStore {
 
     fun hasAiTranslation(songId: String?): Boolean =
         !songId.isNullOrBlank() &&
-            aiOverlay?.let { it.songId == songId && it.hasTranslation } == true
+            aiOverlay?.let { it.songId == songId && it.hasGeneratedTranslation } == true
 
     fun hasAiHangulPronunciation(songId: String?): Boolean =
         !songId.isNullOrBlank() &&
@@ -227,7 +275,7 @@ internal class AppleNativeOnlineTranslationStore {
         begin: Long,
         end: Long,
         text: String?,
-    ): String? = content(songId, begin, end, text, aiOverlay)?.translation
+    ): String? = content(songId, begin, end, text, aiOverlay)?.generatedTranslation
 
     fun aiHangulPronunciation(
         songId: String?,
@@ -254,6 +302,76 @@ internal class AppleNativeOnlineTranslationStore {
     ): List<LyricPronunciationSpan>? = content(songId, begin, end, text, aiOverlay)
         ?.takeIf { RomanizationPolicy.isHangulPronunciation(it.pronunciation) }
         ?.pronunciationSpans
+
+    /** A provider switch must not throw away valid AI/native source↔sound anchors
+     * when the chosen Hangul says *exactly* the same thing. Never accept a
+     * text-only/refrain match or partial dictionary map as a complete row plan. */
+    fun soundMatchedPronunciationSpans(
+        songId: String?,
+        begin: Long,
+        end: Long,
+        text: String?,
+        selectedPronunciation: String?,
+    ): List<LyricPronunciationSpan>? {
+        val source = text?.takeIf(String::isNotBlank) ?: return null
+        val chosen = selectedPronunciation
+            ?.takeIf(RomanizationPolicy::isHangulPronunciation) ?: return null
+        // Hangul Jamo and digits may represent sounds that would disappear
+        // from a syllables-only comparison. Only punctuation/spaces are silent.
+        fun onlyCompleteHangulSyllables(value: String): Boolean =
+            value.all { !it.isLetterOrDigit() || it in '가'..'힣' }
+        if (!onlyCompleteHangulSyllables(chosen)) return null
+        val expectedSound = chosen.filter { it in '가'..'힣' }
+        if (expectedSound.isEmpty()) return null
+        for (candidate in listOfNotNull(
+            content(songId, begin, end, source, aiOverlay),
+            content(songId, begin, end, source, overlay),
+        )) {
+            if (!RomanizationPolicy.isHangulPronunciation(candidate.pronunciation) ||
+                !onlyCompleteHangulSyllables(candidate.pronunciation.orEmpty())
+            ) continue
+            val candidateSound = candidate.pronunciation.orEmpty().filter { it in '가'..'힣' }
+            if (candidateSound != expectedSound) continue
+            val spans = candidate.pronunciationSpans.orEmpty()
+            if (spans.isEmpty()) continue
+            val covered = BooleanArray(source.length)
+            var cursor = 0
+            val sound = StringBuilder(expectedSound.length)
+            val tokenEnds = mutableSetOf<Int>()
+            var valid = true
+            for (span in spans) {
+                if (span.start < cursor || span.start < 0 ||
+                    span.end <= span.start || span.end > source.length ||
+                    source.substring(span.start, span.end) != span.source
+                ) {
+                    valid = false
+                    break
+                }
+                val syllables = span.hangul.filter { it in '가'..'힣' }
+                if (syllables.isEmpty() || !onlyCompleteHangulSyllables(span.hangul)) {
+                    valid = false
+                    break
+                }
+                sound.append(syllables)
+                tokenEnds += sound.length
+                for (index in span.start until span.end) covered[index] = true
+                cursor = span.end
+            }
+            if (!valid || sound.toString() != expectedSound || source.indices.any {
+                    source[it].isLetterOrDigit() && !covered[it]
+                }
+            ) continue
+            var sounded = 0
+            val hasFalseSpace = chosen.indices.any { index ->
+                val char = chosen[index]
+                if (char in '가'..'힣') sounded++
+                char.isWhitespace() && sounded in 1 until expectedSound.length &&
+                    sounded !in tokenEnds
+            }
+            if (!hasFalseSpace) return spans
+        }
+        return null
+    }
 
     fun aiHangulPronunciationStatus(
         songId: String?,

@@ -9,6 +9,52 @@ import org.junit.Test
 
 class AppleMusicSourcePhoneticsTest {
 
+    @Test fun mixedJapaneseKanaCanUseExactNativeWordsWithoutFakingKanjiBoundaries() {
+        val source = "駄目あい"
+        val result = AppleMusicSourcePhonetics.attach(
+            RichLyricLine(
+                text = source,
+                words = listOf("駄目", "あ", "い").map { LyricWord(text = it) },
+                translation = "안 돼, 사랑",
+            ),
+            source,
+            SourceReadingAssembler.assemble(source, listOf(
+                RawReadingToken(0, 2, "ダメ"), RawReadingToken(2, 4, "アイ"),
+            )),
+        )
+        assertEquals("ALIGNED", result.pronunciationStatus)
+        assertEquals(listOf("다메", "아", "이"),
+            result.pronunciationWords?.map { it.hangul })
+        assertEquals("안 돼, 사랑", result.translation)
+    }
+
+    @Test fun verifiedFullLineFineReadingUsesNativeWordHighlightWithoutChangingMeaning() {
+        val source = "駄目駄目"
+        val nativeWords = listOf("駄", "目", "駄", "目")
+        val analyzed = SourceReadingAssembler.retryModesForNativeWords(
+            source, nativeWords, modeCount = 2,
+        ) { mode ->
+            if (mode == 0) listOf(RawReadingToken(0, 2, "ダメ"), RawReadingToken(2, 4, "ダメ"))
+            else listOf(
+                RawReadingToken(0, 1, "ダ"), RawReadingToken(1, 2, "メ"),
+                RawReadingToken(2, 3, "ダ"), RawReadingToken(3, 4, "メ"),
+            )
+        }
+        val result = AppleMusicSourcePhonetics.attach(
+            RichLyricLine(
+                text = source,
+                words = nativeWords.map { LyricWord(text = it) },
+                roma = "다메다메", translation = "안 돼, 안 돼",
+            ), source, analyzed,
+        )
+        assertEquals("ALIGNED", result.pronunciationStatus)
+        assertEquals(listOf("다", "메", "다", "메"),
+            result.pronunciationWords?.map { it.hangul })
+        assertEquals(listOf(0 to 1, 1 to 2, 2 to 3, 3 to 4),
+            result.pronunciationSpans?.map { it.start to it.end })
+        assertEquals("안 돼, 안 돼", result.translation)
+    }
+
     @Test fun realAiReadingRemainsVisibleWhenOfflinePureKanjiAnalysisFails() {
         val text = "未知語"
         val original = RichLyricLine(

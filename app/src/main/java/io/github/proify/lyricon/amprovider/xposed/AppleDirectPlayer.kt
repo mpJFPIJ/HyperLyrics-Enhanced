@@ -50,11 +50,13 @@ internal object AppleDirectBridgeContract {
 internal class AppleDirectPlayer(
     private val context: Context,
     private val onOriginalMetadataRequested: (String) -> Unit,
-    private val onOnlineTranslationReceived: (ByteArray) -> Unit,
-    private val onStandaloneAiTranslationReceived: (ByteArray) -> Unit,
-    private val onOnlineTranslationCleared: (String?) -> Unit,
-    private val onMissingLyricsSupplementReceived: (ByteArray) -> Unit,
-    private val onMissingLyricsSupplementCleared: (String?) -> Unit,
+    private val onOnlineTranslationReceived: (ByteArray, (String?) -> Boolean) -> Unit,
+    private val onStandaloneAiTranslationReceived: (ByteArray, (String?) -> Boolean) -> Unit,
+    private val onOnlineTranslationCleared: (String?, (String?) -> Boolean) -> Unit,
+    private val onMissingLyricsSupplementReceived:
+        (ByteArray, () -> Boolean, (String?) -> Boolean) -> Unit,
+    private val onMissingLyricsSupplementCleared:
+        (String?, (String?) -> Boolean) -> Unit,
     private val onOnlineTranslationSourceSwitchResult:
         (Long, String?, String?, String?, String?, Boolean) -> Unit,
 ) : RemotePlayer {
@@ -64,6 +66,9 @@ internal class AppleDirectPlayer(
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val translationTrack = AppleTranslationReceiptTrack()
+    private val visitTrack = AppleDirectVisitReceiptTrack()
+    private val songPublicationLock = Any()
     private val reconnectLock = Any()
     private val reconnectPolicy = AppleDirectReconnectPolicy()
     private val bridgeInstance = Integer.toHexString(System.identityHashCode(this))
@@ -82,8 +87,9 @@ internal class AppleDirectPlayer(
             }
         },
     )
+    private data class PublishedSong(val bytes: ByteArray, val visitId: Long)
     @Volatile
-    private var latestSongPayload: ByteArray? = null
+    private var latestSongPublication: PublishedSong? = null
     @Volatile
     private var registered = false
 
@@ -95,6 +101,12 @@ internal class AppleDirectPlayer(
         }
 
         override fun onOnlineTranslationResult(compressedSong: ByteArray) {
+            // Legacy one-way Binder receipts contain no originating playback identity.
+            // They cannot be safely associated with a repeat visit to the same song.
+            ProviderLogger.diagnostic("丢弃无播放访问 ID 的旧版翻译回执")
+        }
+
+        override fun onOnlineTranslationResultForVisit(compressedSong: ByteArray, visitId: Long) {
             val callbackStartedAtNanos = SystemClock.elapsedRealtimeNanos()
             pronunciationDiagnostic(
                 "stage=bridge_payload_callback, bytes=${compressedSong.size}"
@@ -103,7 +115,11 @@ internal class AppleDirectPlayer(
                 "[SourceSwitchPerf] stage=bridge_translation_callback_enter, " +
                     "bytes=${compressedSong.size}, thread=${Thread.currentThread().name}"
             )
-            this@AppleDirectPlayer.onOnlineTranslationReceived(compressedSong)
+            if (!visitTrack.isCurrentClear(visitId, null)) return
+            val sameTrack = translationTrack.ticket()
+            this@AppleDirectPlayer.onOnlineTranslationReceived(compressedSong) { songId ->
+                visitTrack.isCurrent(visitId, songId) && sameTrack(songId)
+            }
             ProviderLogger.diagnostic(
                 "[SourceSwitchPerf] stage=bridge_translation_callback_delegate_finished, " +
                     "bytes=${compressedSong.size}, elapsedMs=" +
@@ -113,16 +129,35 @@ internal class AppleDirectPlayer(
         }
 
         override fun onOnlineTranslationCleared(songId: String?) {
-            pronunciationDiagnostic("stage=bridge_payload_cleared, id=$songId")
-            this@AppleDirectPlayer.onOnlineTranslationCleared(songId)
+            ProviderLogger.diagnostic("丢弃无播放访问 ID 的旧版翻译清理通知: id=$songId")
+        }
+
+        override fun onOnlineTranslationClearedForVisit(songId: String?, visitId: Long) {
+            visitTrack.withCurrentClear(visitId, songId) {
+                translationTrack.invalidate(songId)
+                pronunciationDiagnostic("stage=bridge_payload_cleared, id=$songId")
+                this@AppleDirectPlayer.onOnlineTranslationCleared(songId) { currentSongId ->
+                    visitTrack.isCurrentClear(visitId, currentSongId)
+                }
+            }
         }
 
         override fun onMissingLyricsSupplementCleared(songId: String?) {
+            ProviderLogger.diagnostic("丢弃无播放访问 ID 的旧版无歌词清理通知: id=$songId")
+        }
+
+        override fun onMissingLyricsSupplementClearedForVisit(songId: String?, visitId: Long) {
             pronunciationDiagnostic("stage=bridge_supplement_payload_cleared, id=$songId")
-            this@AppleDirectPlayer.onMissingLyricsSupplementCleared(songId)
+            this@AppleDirectPlayer.onMissingLyricsSupplementCleared(songId) { currentSongId ->
+                visitTrack.isCurrentClear(visitId, currentSongId)
+            }
         }
 
         override fun onMissingLyricsSupplementResult(compressedSong: ByteArray) {
+            ProviderLogger.diagnostic("丢弃无播放访问 ID 的旧版无歌词补充回执")
+        }
+
+        override fun onMissingLyricsSupplementResultForVisit(compressedSong: ByteArray, visitId: Long) {
             val callbackStartedAtNanos = SystemClock.elapsedRealtimeNanos()
             pronunciationDiagnostic(
                 "stage=bridge_supplement_payload_callback, bytes=${compressedSong.size}"
@@ -131,7 +166,12 @@ internal class AppleDirectPlayer(
                 "[SourceSwitchPerf] stage=bridge_supplement_callback_enter, " +
                     "bytes=${compressedSong.size}, thread=${Thread.currentThread().name}"
             )
-            this@AppleDirectPlayer.onMissingLyricsSupplementReceived(compressedSong)
+            this@AppleDirectPlayer.onMissingLyricsSupplementReceived(
+                compressedSong,
+                { visitTrack.isCurrentClear(visitId, null) },
+            ) { songId ->
+                visitTrack.isCurrent(visitId, songId)
+            }
             ProviderLogger.diagnostic(
                 "[SourceSwitchPerf] stage=bridge_supplement_callback_delegate_finished, " +
                     "bytes=${compressedSong.size}, elapsedMs=" +
@@ -164,9 +204,13 @@ internal class AppleDirectPlayer(
     private val appAiTranslation = AppleAppAiTranslationClient(
         context = context,
         isSystemUiBridgeActive = { isActive },
-        onTranslationReceived = onStandaloneAiTranslationReceived,
+        onTranslationReceived = { payload, requestIsCurrent ->
+            val sameTrack = translationTrack.ticket()
+            onStandaloneAiTranslationReceived(payload) { songId -> requestIsCurrent() && sameTrack(songId) }
+        },
         onTranslationCleared = { songId ->
-            onOnlineTranslationCleared(songId)
+            val stillCurrent = translationTrack.ticket()
+            onOnlineTranslationCleared(songId, stillCurrent)
             mainHandler.post {
                 android.widget.Toast.makeText(
                     context, "현재 곡 AI 번역을 삭제했어요", android.widget.Toast.LENGTH_SHORT,
@@ -328,14 +372,19 @@ internal class AppleDirectPlayer(
             "直连诊断: stage=bridge_connected, alive=${binder.isBinderAlive}, " +
                 "receiverRegistered=$receiverRegistered",
         )
-        latestSongPayload?.let { payload ->
-            val replayed = send { target -> target.onSongChanged(payload) }
-            recoveryDiagnostic("direct_song_replay", "bytes=${payload.size} success=$replayed")
-            ProviderLogger.debug(
-                "直连重连后补发当前歌曲：bytes=${payload.size}, success=$replayed"
-            )
-            if (BuildConfig.DEBUG) AppleMetadataFlowDiagnostics.record("direct_replay") {
-                "bytes=${payload.size} success=$replayed"
+        synchronized(songPublicationLock) {
+            latestSongPublication?.let { publication ->
+                val payload = publication.bytes
+                val replayed = send { target ->
+                    target.onSongChangedForVisit(publication.bytes, publication.visitId)
+                }
+                recoveryDiagnostic("direct_song_replay", "bytes=${payload.size} success=$replayed")
+                ProviderLogger.debug(
+                    "直连重连后补发当前歌曲：bytes=${payload.size}, success=$replayed"
+                )
+                if (BuildConfig.DEBUG) AppleMetadataFlowDiagnostics.record("direct_replay") {
+                    "bytes=${payload.size} success=$replayed"
+                }
             }
         }
     }
@@ -348,7 +397,7 @@ internal class AppleDirectPlayer(
     /** Only the NPatch standalone AI cache is owned by this endpoint. */
     fun clearCurrentSongAiTranslation(songId: String): Boolean {
         if (isActive || latestSongIdForAiClear != songId) return false
-        val payload = latestSongPayload ?: return false
+        val payload = latestSongPublication?.bytes ?: return false
         return appAiTranslation.clearSong(payload, songId)
     }
 
@@ -363,11 +412,17 @@ internal class AppleDirectPlayer(
             ProviderLogger.error("直连歌词载荷过大：bytes=${payload.size}")
             return false
         }
-        latestSongPayload = payload
-        latestSongIdForAiClear = song?.id
-        // Clear any older fallback request once SystemUI's regular bridge is active.
-        appAiTranslation.submit(if (isActive) byteArrayOf() else payload, song?.id)
-        return send(reconnectIfMissing = true) { target -> target.onSongChanged(payload) }
+        return synchronized(songPublicationLock) {
+            translationTrack.select(song?.id)
+            val visitId = visitTrack.select(song?.id)
+            latestSongPublication = PublishedSong(payload, visitId)
+            latestSongIdForAiClear = song?.id
+            // Clear any older fallback request once SystemUI's regular bridge is active.
+            appAiTranslation.submit(if (isActive) byteArrayOf() else payload, song?.id)
+            send(reconnectIfMissing = true) { target ->
+                target.onSongChangedForVisit(payload, visitId)
+            }
+        }
     }
 
     override fun setPlaybackState(playing: Boolean): Boolean =

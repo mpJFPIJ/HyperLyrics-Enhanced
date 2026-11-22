@@ -55,6 +55,8 @@ object SongRepository {
         parserAccess: AppleLyricsParserAccess,
         source: String,
         trigger: String = "",
+        expectedSongId: String,
+        commitIfCurrent: (hasRenderableLyrics: Boolean, mutation: () -> Unit) -> Boolean,
     ): Song? {
         val parseStartNs = if (BuildConfig.DEBUG) System.nanoTime() else 0L
         // 仅用于 Debug 诊断；缓存键已改用内容指纹。
@@ -94,7 +96,7 @@ object SongRepository {
                     "thread=${Thread.currentThread().name}"
             )
         }
-        if (song.adamId.isNullOrBlank()) {
+        if (song.adamId.isNullOrBlank() || song.adamId != expectedSongId) {
             return null
         }
         if (BuildConfig.DEBUG) {
@@ -111,14 +113,14 @@ object SongRepository {
         val songWithMetadata = song.applyCurrentMetadata()
         val mapped = normalizeRenderableLyrics(songWithMetadata.toSong())
         if (mapped.lyrics.isNullOrEmpty()) {
-            DiskSongManager.delete(song.adamId.orEmpty())
+            if (!commitIfCurrent(false) { DiskSongManager.delete(expectedSongId) }) return null
             ProviderLogger.info(
                 "SongRepository: Rejected textless parsed lyrics for ${song.adamId}, " +
                     "source=$source, parsedLines=${song.lyrics.size}"
             )
             return mapped
         }
-        DiskSongManager.saveIfChanged(songWithMetadata)
+        if (!commitIfCurrent(true) { DiskSongManager.saveIfChanged(songWithMetadata) }) return null
         return mapped
     }
 

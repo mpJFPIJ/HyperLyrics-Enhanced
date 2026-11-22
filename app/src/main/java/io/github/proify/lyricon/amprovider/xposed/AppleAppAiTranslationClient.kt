@@ -18,7 +18,7 @@ import com.juren233.hyperlyricsenhanced.IAppleMusicTranslationReceiver
 internal class AppleAppAiTranslationClient(
     context: Context,
     private val isSystemUiBridgeActive: () -> Boolean,
-    private val onTranslationReceived: (ByteArray) -> Unit,
+    private val onTranslationReceived: (ByteArray, () -> Boolean) -> Unit,
     private val onTranslationCleared: (String) -> Unit,
 ) {
     private companion object {
@@ -128,6 +128,10 @@ internal class AppleAppAiTranslationClient(
 
             override fun onMissingLyricsSupplementCleared(songId: String?) = Unit
             override fun onMissingLyricsSupplementResult(compressedSong: ByteArray) = Unit
+            override fun onOnlineTranslationResultForVisit(compressedSong: ByteArray, visitId: Long) = Unit
+            override fun onOnlineTranslationClearedForVisit(songId: String?, visitId: Long) = Unit
+            override fun onMissingLyricsSupplementResultForVisit(compressedSong: ByteArray, visitId: Long) = Unit
+            override fun onMissingLyricsSupplementClearedForVisit(songId: String?, visitId: Long) = Unit
             override fun onOnlineTranslationSourceSwitchResult(
                 requestId: Long,
                 songId: String?,
@@ -187,7 +191,9 @@ internal class AppleAppAiTranslationClient(
                         "current=$current"
                 )
                 if (current) {
-                    onTranslationReceived(compressedSong)
+                    onTranslationReceived(compressedSong) {
+                        requestGeneration == generation && !isSystemUiBridgeActive()
+                    }
                     // The app process sends a final per-line completeness stage
                     // immediately after this callback; translation receipt alone
                     // cannot claim every Japanese reading has been generated.
@@ -208,6 +214,10 @@ internal class AppleAppAiTranslationClient(
             override fun onMissingLyricsSupplementCleared(songId: String?) = Unit
 
             override fun onMissingLyricsSupplementResult(compressedSong: ByteArray) = Unit
+            override fun onOnlineTranslationResultForVisit(compressedSong: ByteArray, visitId: Long) = Unit
+            override fun onOnlineTranslationClearedForVisit(songId: String?, visitId: Long) = Unit
+            override fun onMissingLyricsSupplementResultForVisit(compressedSong: ByteArray, visitId: Long) = Unit
+            override fun onMissingLyricsSupplementClearedForVisit(songId: String?, visitId: Long) = Unit
 
             override fun onOnlineTranslationSourceSwitchResult(
                 requestId: Long,

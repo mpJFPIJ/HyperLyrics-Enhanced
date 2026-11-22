@@ -32,6 +32,10 @@ class AppleLyricsBlurStateTest {
         assertNull(index.matchesKnownWindow("iris", 8, 2_200L))
         assertNull(index.matchesKnownWindow("other", 6, 2_200L))
         assertNull(index.focus("iris", setOf(5, 6), 900L))
+        assertNull(index.focus("iris", emptySet(), 2_200L))
+        // Even if the logical lyrics list has six lines, a host adapter row 6
+        // is safe only because its real native binding established that clock.
+        assertEquals(6, index.focus("iris", setOf(6), 2_200L))
         assertNull(index.focus("another-song", setOf(5, 6), 2_200L))
         index.remember("iris", 5, adapterPosition = 6, beginMs = 5_000L, endMs = 6_000L)
         assertNull(index.focus("iris", setOf(5, 6), 2_200L))

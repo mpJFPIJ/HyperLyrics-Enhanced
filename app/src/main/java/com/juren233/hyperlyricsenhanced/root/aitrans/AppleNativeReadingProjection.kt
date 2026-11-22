@@ -165,75 +165,25 @@ internal object AppleNativeReadingProjection {
         spans: List<SourceReadingSpan>,
         expectedHangul: String,
     ): Result? {
-        val valid = AppleWordReadingAlignment.align(
+        val verified = AppleWordReadingAlignment.align(
             original, appleWords, spans, expectedHangul,
-        )
+        ) as? WordAlignmentResult.Verified ?: return null
         // Grouped means one *verified* Japanese phonetic token crosses several
         // Apple cells. Its Hangul sound is verified as a whole, but no
         // syllable-to-cell breakpoint is. Dividing by source glyph count
         // fabricates a karaoke boundary and may leave its last syllable at
         // the next flexbox row. Keep the intact line-wide reading instead.
-        if (valid !is WordAlignmentResult.Verified) return null
-        if (appleWords.isEmpty() || spans.isEmpty()) return null
-        val ranges = mutableListOf<IntRange>()
-        var cursor = 0
-        for (sourceWord in appleWords) {
-            val value = sourceWord.trim()
-            if (value.isEmpty()) return null
-            val found = original.indexOf(value, cursor)
-            if (found < cursor || found < 0 ||
-                original.substring(cursor, found).any { it.isLetterOrDigit() }
-            ) return null
-            ranges += found until (found + value.length)
-            cursor = found + value.length
-        }
-        val texts = List(appleWords.size) { StringBuilder() }
-        var approximate = false
-        for (span in spans) {
-            val syllables = span.hangul.filter { it in '가'..'힣' }
-            if (syllables.isEmpty()) return null
-            val overlaps = ranges.mapIndexedNotNull { index, range ->
-                val length = (minOf(range.last + 1, span.sourceEnd) -
-                    maxOf(range.first, span.sourceStart)).coerceAtLeast(0)
-                if (length == 0) null else index to length
+        val words = verified.words.map { word ->
+            if (word.hangul.isNotEmpty()) word else {
+                // The alignment has already proved source AND sound offsets.
+                // Only punctuation cells may remain silent; keep Apple from
+                // rendering their original glyph as a pronunciation fallback.
+                if (word.source.any(Char::isLetterOrDigit)) return null
+                word.copy(hangul = EMPTY_PRONUNCIATION_CELL)
             }
-            if (overlaps.isEmpty() || syllables.length < overlaps.size) return null
-            if (overlaps.size == 1) {
-                texts[overlaps[0].first].append(syllables)
-                continue
-            }
-            approximate = true
-            // Reserve one complete Hangul syllable per source cell and place
-            // extra syllables in source-character proportion. Never split jamo
-            // or duplicate/drop the source phonetic text.
-            val total = overlaps.sumOf { it.second }
-            val extras = syllables.length - overlaps.size
-            var used = 0
-            var weighted = 0
-            overlaps.forEachIndexed { order, (index, sourceLength) ->
-                val startExtra = weighted * extras / total
-                weighted += sourceLength
-                val endExtra = weighted * extras / total
-                val count = if (order == overlaps.lastIndex)
-                    syllables.length - used else 1 + endExtra - startExtra
-                if (count <= 0 || used + count > syllables.length) return null
-                texts[index].append(syllables.substring(used, used + count))
-                used += count
-            }
-            if (used != syllables.length) return null
-        }
-        val words = appleWords.mapIndexed { index, source ->
-            val sound = texts[index].toString().ifEmpty {
-                // Some native words are punctuation-only. An invisible word
-                // joiner prevents Apple from showing source Japanese text in
-                // an empty pronunciation cell; it has no audible pronunciation.
-                if (source.none(Char::isLetterOrDigit)) EMPTY_PRONUNCIATION_CELL
-                else return null
-            }
-            LyricWordPronunciation(source, sound)
         }
         val merged = words.joinToString("") { it.hangul }.filter { it in '가'..'힣' }
         if (merged != expectedHangul.filter { it in '가'..'힣' }) return null
-        return Result(words, approximate)
+        return Result(words, approximate = false)
     }
 }

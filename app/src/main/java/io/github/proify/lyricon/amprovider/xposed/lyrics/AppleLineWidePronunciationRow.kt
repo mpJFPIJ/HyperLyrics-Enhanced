@@ -30,6 +30,64 @@ internal data class AppleLineWidePronunciationPayload(
     val timedWords: List<AppleTimedSourceWord> = emptyList(),
     val phoneticSpans: List<ApplePronunciationSourceToken> = emptyList(),
     val repeatTimings: List<List<AppleTimedSourceWord>> = emptyList(),
+    val nativeDisplay: AppleNativeReadingSourceDisplay? = null,
+) {
+    val rawSourceKey = AppleLineWidePronunciationRowPolicy.sourceKey(sourceText)
+    val displayedSourceText: String get() = nativeDisplay?.text ?: sourceText
+}
+
+/** Each entry is one real source word and its host display form, excluding
+ * unspoken separators. Only whole verified words can cross into a raw span map. */
+@ConsistentCopyVisibility
+internal data class AppleNativeReadingSourceDisplay private constructor(
+    private val words: List<Pair<String, String>>,
+) {
+    val text = words.joinToString("") { it.second }
+
+    fun rawCellTexts(cells: List<String>): List<String>? {
+        var word = 0
+        val rawCells = cells.map { cell ->
+            val display = AppleLineWidePronunciationRowPolicy.sourceKey(cell)
+            var offset = 0
+            val raw = StringBuilder()
+            while (offset < display.length) {
+                val (source, shown) = words.getOrNull(word) ?: return null
+                if (!display.startsWith(shown, offset)) return null
+                raw.append(source)
+                offset += shown.length
+                word++
+            }
+            raw.toString()
+        }
+        return rawCells.takeIf { word == words.size }
+    }
+
+    companion object {
+        fun fromWords(
+            source: String, rawWords: List<String>, transform: (String) -> String,
+        ): AppleNativeReadingSourceDisplay? {
+            val sourceKey = AppleLineWidePronunciationRowPolicy::sourceKey
+            if (sourceKey(source).isEmpty() ||
+                sourceKey(rawWords.joinToString("")) != sourceKey(source)
+            ) return null
+            val words = rawWords.mapNotNull { word ->
+                val raw = sourceKey(word)
+                val shown = sourceKey(transform(word))
+                if (raw.isEmpty() != shown.isEmpty()) return null
+                if (raw.isEmpty()) null else raw to shown
+            }
+            return if (words.any { it.first != it.second }) AppleNativeReadingSourceDisplay(words)
+                else null
+        }
+    }
+}
+
+/** Only native Japanese source measurements; injected readings are excluded. */
+internal data class AppleNativeSourceMeasureKey(
+    val flexWidth: Int,
+    val contentWidth: Int,
+    val sourceCellWidths: List<Int>,
+    val sourceTextSizes: List<Float>,
 )
 
 internal object AppleLineWidePronunciationRowPolicy {
@@ -118,6 +176,47 @@ internal object AppleLineWidePronunciationRowPolicy {
 
     /** Negative width uses MATCH_PARENT until the flexbox has been laid out. */
     fun fullWidth(measuredWidth: Int): Int = measuredWidth.takeIf { it > 0 } ?: -1
+
+    /** A provisional whole block is especially disruptive when it occupies
+     * several rows and is immediately replaced by interleaved children. */
+    fun deferUntilMeasured(
+        verifiedSourceSpans: Boolean,
+        geometryPending: Boolean,
+        hasCompatibleExistingRows: Boolean,
+    ): Boolean = verifiedSourceSpans && geometryPending && !hasCompatibleExistingRows
+
+    /** Injected full-width reading rows themselves force flex wrapping. A
+     * viewport width change must remove those artificial break boundaries
+     * before measuring the Japanese-only layout for a new projection. */
+    fun needsSourceOnlyRemeasure(
+        observedWidths: List<Int>,
+        currentWidth: Int,
+        hasVerifiedProjection: Boolean,
+    ): Boolean = hasVerifiedProjection && currentWidth > 0 &&
+        observedWidths.any { it != currentWidth }
+
+    fun measurementChanged(
+        previous: List<AppleNativeSourceMeasureKey?>,
+        current: AppleNativeSourceMeasureKey,
+        hasVerifiedProjection: Boolean,
+    ): Boolean = hasVerifiedProjection && current.flexWidth > 0 &&
+        previous.any { it != current }
+
+    /** Correct a small line overflow so one stray Hangul syllable does not
+     * wrap under its own Japanese source row. Large overflows still wrap at
+     * Android's natural breakpoints instead of becoming illegibly tiny. */
+    fun fitReadingTextPx(
+        targetPx: Float,
+        currentPx: Float,
+        availablePx: Float,
+        measuredTextPx: Float,
+    ): Float? {
+        if (targetPx <= 0f || currentPx <= 0f || availablePx <= 0f ||
+            measuredTextPx <= availablePx || measuredTextPx <= 0f
+        ) return null
+        val fitted = currentPx * (availablePx * 0.975f / measuredTextPx)
+        return fitted.takeIf { it >= targetPx * 0.78f && it < currentPx - 0.5f }
+    }
 }
 
 /** Pre-wake only the visible upcoming lyric, keeping unrelated rows at low rate. */
@@ -181,6 +280,77 @@ internal object AppleReadingSeekWakePolicy {
         boundRevision == currentRevision && attached && onScreen
 }
 
+/** Different chorus variants can associate a timing with different-sized
+ * pronunciation groups. Paint each *actual syllable* rather than keeping only
+ * the first variant's token start (which silently leaves trailing syllables
+ * without their own style). */
+internal object AppleReadingGlyphCoveragePolicy {
+    data class GlyphOwner(
+        val unit: AppleTimedReadingUnit,
+        val ordinal: Int,
+        val count: Int,
+    )
+
+    fun offsets(
+        value: String,
+        variants: List<List<AppleTimedReadingUnit>>,
+    ): List<Int> = variants.asSequence().flatten().flatMap { unit ->
+        (unit.start until unit.end).asSequence()
+    }.filter { it in value.indices && value[it].isLetterOrDigit() }
+        .distinct().sorted().toList()
+
+    fun owners(units: List<AppleTimedReadingUnit>): Map<Int, AppleTimedReadingUnit> {
+        val mapped = mutableMapOf<Int, AppleTimedReadingUnit>()
+        val conflicts = mutableSetOf<Int>()
+        units.forEach { unit ->
+            for (offset in unit.start until unit.end) {
+                if (offset in conflicts) continue
+                if (mapped.put(offset, unit) != null) {
+                    mapped.remove(offset)
+                    conflicts += offset
+                }
+            }
+        }
+        return mapped
+    }
+
+    /** Precompute each syllable's word position once at bind time. */
+    fun glyphOwners(
+        value: String,
+        units: List<AppleTimedReadingUnit>,
+    ): Map<Int, GlyphOwner> {
+        val mapped = mutableMapOf<Int, GlyphOwner>()
+        val conflicts = mutableSetOf<Int>()
+        units.forEach { unit ->
+            val glyphs = (unit.start until unit.end).filter {
+                it in value.indices && value[it].isLetterOrDigit()
+            }
+            glyphs.forEachIndexed { ordinal, offset ->
+                if (offset in conflicts) return@forEachIndexed
+                if (mapped.put(offset, GlyphOwner(unit, ordinal, glyphs.size)) != null) {
+                    mapped.remove(offset)
+                    conflicts += offset
+                }
+            }
+        }
+        return mapped
+    }
+
+    /** Only a verified *word* gets a left-to-right karaoke sweep. A native
+     * whole-line fallback has no syllable timing, so keep its uniform clock. */
+    fun glyphProgress(owner: GlyphOwner, positionMs: Long): Float {
+        val progress = AppleTimedPronunciationHighlightPolicy.progress(positionMs, owner.unit)
+        if (owner.unit.isWholeLine) return progress
+        return (progress * owner.count - owner.ordinal).coerceIn(0f, 1f)
+    }
+
+    fun progressAtGlyph(
+        value: String, unit: AppleTimedReadingUnit, glyphOffset: Int, positionMs: Long,
+    ): Float = glyphOwners(value, listOf(unit))[glyphOffset]?.let {
+        glyphProgress(it, positionMs)
+    } ?: 0f
+}
+
 /**
  * Attached to Apple's measured karaoke_line_flexbox, not to any timed native word.
  * The flexbox wraps this full-width child below the intact native Japanese line.
@@ -215,18 +385,29 @@ internal class AppleLineWidePronunciationRow {
         var playbackPositionMs: (() -> Long?)? = null
         var sourceWords: List<TextView> = emptyList()
         var boundPayload: AppleLineWidePronunciationPayload? = null
+        var sourceCellAbove: View? = null
+        var readingStart = 0
+        var readingEnd = 0
+        var measuredSourceWidth = 0
+        var sourceMeasureKey: AppleNativeSourceMeasureKey? = null
+        var targetReadingTextPx = 0f
+        var inlineWrapOverlay: AppleNativeSoftWrapReadingOverlay? = null
+        var inlineVisualRows: List<AppleInterleavedReadingRow>? = null
         private var paintRoot: ViewGroup? = null
         private var outerForeground: AppleHangulReadingForeground? = null
         private val updatePaintLayer = Runnable { syncPaintLayer() }
         private var timedStyles: List<Pair<Int, KaraokeSyllableStyle>> = emptyList()
+        private var plainReading = ""
         private var timedVariants: List<List<AppleTimedReadingUnit>> = emptyList()
-        private var timedVariantLookups: List<Map<Int, AppleTimedReadingUnit>> = emptyList()
+        private var timedVariantLookups: List<Map<Int, AppleReadingGlyphCoveragePolicy.GlyphOwner>> =
+            emptyList()
         private val visibleBounds = Rect()
         private val highlightPulse = object : Runnable {
             override fun run() {
                 if (!isAttachedToWindow) return
                 syncPaintLayer()
-                val onScreen = isShown && getGlobalVisibleRect(visibleBounds)
+                val onScreen = (isShown && getGlobalVisibleRect(visibleBounds)) ||
+                    inlineWrapOverlay?.isSourceVisibleOnScreen() == true
                 val position = AppleReadingPulsePolicy.playbackSample(
                     onScreen, playbackPositionMs,
                 )
@@ -245,8 +426,9 @@ internal class AppleLineWidePronunciationRow {
         }
 
         fun refreshForAcceptedSeek(songId: String?, currentRevision: Long): Boolean {
-            val onScreen = isAttachedToWindow && isShown &&
-                getGlobalVisibleRect(visibleBounds)
+            val onScreen = (isAttachedToWindow && isShown &&
+                getGlobalVisibleRect(visibleBounds)) ||
+                inlineWrapOverlay?.isSourceVisibleOnScreen() == true
             if (!AppleReadingSeekWakePolicy.shouldWake(
                     boundSongId = boundPayload?.songId,
                     seekSongId = songId,
@@ -264,16 +446,19 @@ internal class AppleLineWidePronunciationRow {
         }
 
         fun setTimedText(value: String, variants: List<List<AppleTimedReadingUnit>>) {
+            plainReading = value
             val styled = SpannableString(value)
             timedVariants = variants.map { units ->
                 units.filter { it.start >= 0 && it.end <= value.length && it.start < it.end }
             }
-            timedVariantLookups = timedVariants.map { it.associateBy(AppleTimedReadingUnit::start) }
-            timedStyles = timedVariants.flatten().distinctBy(AppleTimedReadingUnit::start)
-                .map { unit ->
+            timedVariantLookups = timedVariants.map { units ->
+                AppleReadingGlyphCoveragePolicy.glyphOwners(value, units)
+            }
+            timedStyles = AppleReadingGlyphCoveragePolicy.offsets(value, timedVariants)
+                .map { offset ->
                     val style = KaraokeSyllableStyle()
-                    styled.setSpan(style, unit.start, unit.end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-                    unit.start to style
+                    styled.setSpan(style, offset, offset + 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    offset to style
                 }
             setText(styled, BufferType.SPANNABLE)
             syncTimedHighlight()
@@ -385,12 +570,26 @@ internal class AppleLineWidePronunciationRow {
                 removeCallbacks(updatePaintLayer)
                 post(updatePaintLayer)
             }
+            if ((layout?.lineCount ?: 0) > 1 && width > 0) {
+                val available = (width - compoundPaddingLeft - compoundPaddingRight).toFloat()
+                val measured = paint.measureText(plainReading)
+                val fitted = AppleLineWidePronunciationRowPolicy.fitReadingTextPx(
+                    targetPx = targetReadingTextPx,
+                    currentPx = textSize,
+                    availablePx = available,
+                    measuredTextPx = measured,
+                )
+                if (fitted != null) setTextSize(TypedValue.COMPLEX_UNIT_PX, fitted)
+            }
         }
 
         override fun onDetachedFromWindow() {
             removeCallbacks(highlightPulse)
             removeCallbacks(updatePaintLayer)
             detachOuterForeground()
+            inlineWrapOverlay?.clear()
+            inlineWrapOverlay = null
+            inlineVisualRows = null
             super.onDetachedFromWindow()
         }
 
@@ -401,7 +600,7 @@ internal class AppleLineWidePronunciationRow {
             // Share that line-level fade without copying any word's *single*
             // highlight color onto the entire Korean sentence.
             val parentAnchor = parent as? View
-            val nativeStates = sourceWords.map { source ->
+            val nativeOpacities = sourceWords.map { source ->
                 // Preserve source word indexes even if one TextView is
                 // temporarily detached during a RecyclerView animation.
                 if (!source.isAttachedToWindow || parentAnchor == null) return@map null
@@ -412,13 +611,13 @@ internal class AppleLineWidePronunciationRow {
                     view = view.parent as? View
                 }
                 if (view !== parentAnchor) return@map null
-                val color = source.currentTextColor
-                val brightness = (0.2126f * Color.red(color) +
-                    0.7152f * Color.green(color) + 0.0722f * Color.blue(color)) / 255f
-                brightness to opacity
+                // Apple's visible karaoke gradient may be painted by a
+                // RenderNode/parent mask rather than TextView.currentTextColor.
+                // Multiplying by the stale base color left the Korean syllable
+                // grey while the matching Japanese word was fully lit.
+                opacity
             }
-            val defaultNativeBrightness = nativeStates.filterNotNull()
-                .maxOfOrNull { it.first * it.second } ?: 1f
+            val defaultNativeOpacity = nativeOpacities.filterNotNull().maxOrNull() ?: 1f
             // The native flexbox measures this view but an outer holder
             // foreground paints its Layout outside the host's alpha mask.
             val activeVariantIndex = positionMs?.let {
@@ -427,10 +626,11 @@ internal class AppleLineWidePronunciationRow {
             val activeVariant = activeVariantIndex?.let(timedVariantLookups::get)
             var changed = false
             timedStyles.forEach { (offset, style) ->
-                val nativeWord = activeVariant?.get(offset)
+                val glyphOwner = activeVariant?.get(offset)
+                val nativeWord = glyphOwner?.unit
                 val next = positionMs?.let { now ->
-                    nativeWord?.let { unit ->
-                        AppleTimedPronunciationHighlightPolicy.progress(now, unit)
+                    glyphOwner?.let { owner ->
+                        AppleReadingGlyphCoveragePolicy.glyphProgress(owner, now)
                     }
                 } ?: 0f
                 if (kotlin.math.abs(style.progress - next) > 0.01f) {
@@ -441,9 +641,8 @@ internal class AppleLineWidePronunciationRow {
                 // line (the parent native view may still be fully opaque).
                 val nativeBrightness = if (activeVariantIndex == null) 0.52f else
                     nativeWord?.sourceWordIndex
-                        ?.takeIf { it in nativeStates.indices }
-                        ?.let(nativeStates::get)
-                        ?.let { it.first * it.second } ?: defaultNativeBrightness
+                        ?.takeIf { it in nativeOpacities.indices }
+                        ?.let(nativeOpacities::get) ?: defaultNativeOpacity
                 if (kotlin.math.abs(style.nativeBrightness - nativeBrightness) > 0.01f) {
                     style.nativeBrightness = nativeBrightness
                     changed = true
@@ -453,6 +652,7 @@ internal class AppleLineWidePronunciationRow {
                 invalidate()
                 outerForeground?.invalidateSelf()
             }
+            inlineWrapOverlay?.refresh(positionMs)
         }
     }
 
@@ -541,6 +741,9 @@ internal class AppleLineWidePronunciationRow {
         for (index in anchor.childCount - 1 downTo 0) {
             val reading = anchor.getChildAt(index) as? ReadingView
             if (reading != null) {
+                reading.inlineWrapOverlay?.clear()
+                reading.inlineWrapOverlay = null
+                reading.inlineVisualRows = null
                 readingViews.remove(reading)
                 anchor.removeViewAt(index)
             }
@@ -556,6 +759,44 @@ internal class AppleLineWidePronunciationRow {
             "linewide_seek_wake", "tracked=$count woken=$woken",
         )
         return woken
+    }
+
+    /** Observe only the native source geometry, excluding our injected rows.
+     * Include nested source TextViews: their internal wrapping can change even
+     * when their parent flexbox retains the same outer dimensions. */
+    fun nativeSourceLayoutViews(root: View?): List<View> {
+        val flex = anchor(root) ?: return emptyList()
+        val source = (0 until flex.childCount).map(flex::getChildAt)
+            .filterNot { it is ReadingView }
+        return (listOf(flex) + source + source.flatMap(::nativeWordTexts)).distinct()
+    }
+
+    /** Source-only fingerprint; a freshly added ReadingView must not itself
+     * be mistaken for a changed Japanese line break. */
+    fun nativeSourceGeometry(root: View?): List<Int>? {
+        val flex = anchor(root) ?: return null
+        val source = (0 until flex.childCount).map(flex::getChildAt)
+            .filterNot { it is ReadingView }
+        return buildList {
+            add(flex.width)
+            add(flex.paddingLeft)
+            add(flex.paddingRight)
+            source.forEach { cell ->
+                add(System.identityHashCode(cell))
+                add(cell.left)
+                add(cell.top)
+                add(cell.right)
+                add(cell.bottom)
+                nativeWordTexts(cell).forEach { word ->
+                    add(System.identityHashCode(word))
+                    add(word.text.toString().hashCode())
+                    add(word.textSize.toBits())
+                    add(word.width)
+                    add(word.height)
+                    add(word.layout?.lineCount ?: -1)
+                }
+            }
+        }
     }
 
     fun bind(
@@ -576,19 +817,23 @@ internal class AppleLineWidePronunciationRow {
             return false
         }
 
-        val childText = visibleNativeCellTexts(root).orEmpty()
+        // Rebinding may happen after we have already interleaved one or more
+        // reading children. They must not count as Apple-native source cells.
+        val nativeChildren = (0 until anchor.childCount)
+            .map(anchor::getChildAt).filterNot { it is ReadingView }
+        val childWords = nativeChildren.map(::nativeWordTexts)
+        val childText = childWords.map { words -> words.joinToString("") { it.text.toString() } }
         val insertionIndex = (if (trustedHolder)
             AppleLineWidePronunciationRowPolicy.insertionIndex(
-                payload?.sourceText.orEmpty(), childText,
+                payload?.displayedSourceText.orEmpty(), childText,
             ) else AppleLineWidePronunciationRowPolicy.verifiedInsertionIndex(
-                payload?.sourceText.orEmpty(), childText,
+                payload?.displayedSourceText.orEmpty(), childText,
         )) ?: run {
             clear(root)
             return false
         }
-        val sourceWords = (0 until insertionIndex).flatMap { index ->
-            nativeWordTexts(anchor.getChildAt(index))
-        }
+        val sourceChildren = nativeChildren.take(insertionIndex)
+        val sourceWords = childWords.take(insertionIndex).flatten()
         val sourceStyle = sourceWords.firstOrNull() ?: run {
             clear(root)
             return false
@@ -598,53 +843,113 @@ internal class AppleLineWidePronunciationRow {
                 clear(root)
                 return false
             }
+        val hasVerifiedProjection = payload!!.phoneticSpans.isNotEmpty() ||
+            AppleInterleavedReadingPolicy.canDeriveKanaRows(payload.sourceText, text)
+        val nativeMeasureKey = AppleNativeSourceMeasureKey(
+            flexWidth = anchor.width,
+            contentWidth = (anchor.width - anchor.paddingLeft - anchor.paddingRight)
+                .coerceAtLeast(0),
+            sourceCellWidths = sourceChildren.map { it.width },
+            sourceTextSizes = sourceWords.map { it.textSize },
+        )
         val existing = (0 until anchor.childCount)
-            .map(anchor::getChildAt).filterIsInstance<ReadingView>().singleOrNull()
-        if (existing != null && AppleLineWidePronunciationRowPolicy.canReuseReading(
-                boundPayload = existing.boundPayload,
-                requestedPayload = payload!!,
-                oldWords = existing.sourceWords,
-                newWords = sourceWords,
-                currentIndex = anchor.indexOfChild(existing),
-                insertionIndex = insertionIndex,
-            ) && kotlin.math.abs(existing.textSize -
-                AppleLineWidePronunciationRowPolicy.readingTextPx(sourceStyle.textSize)) < 0.8f
+            .map(anchor::getChildAt).filterIsInstance<ReadingView>()
+        if (AppleLineWidePronunciationRowPolicy.needsSourceOnlyRemeasure(
+                observedWidths = existing.map(ReadingView::measuredSourceWidth),
+                currentWidth = anchor.width,
+                hasVerifiedProjection = hasVerifiedProjection,
+            ) || AppleLineWidePronunciationRowPolicy.measurementChanged(
+                previous = existing.map(ReadingView::sourceMeasureKey),
+                current = nativeMeasureKey,
+                hasVerifiedProjection = hasVerifiedProjection,
+            )
         ) {
-            existing.playbackPositionMs = playbackPositionMs
-            existing.bindPaintRoot(root)
-            readingViews.add(existing)
+            clear(root)
+            // The next measured flex layout must contain Japanese cells only.
+            // In particular, the prior Hangul full-width children must not
+            // keep narrow-screen row boundaries alive on a wider screen.
+            anchor.requestLayout()
+            return false
+        }
+        // Use the host's measured flex rows, never a guessed character count.
+        // A native TextView that wraps internally cannot be safely divided
+        // without replacing Apple's own word/shader renderer.
+        val geometryPending = anchor.width <= 0 || sourceChildren.isEmpty() ||
+            anchor.isLayoutRequested || root?.isLayoutRequested == true ||
+            sourceChildren.any {
+                it.isLayoutRequested || it.width <= 0 || it.height <= 0
+            } || sourceWords.any { it.isLayoutRequested || it.layout == null }
+        // During a pending holder remeasure, old coordinates are stale. Keep
+        // the already-bound reading rows temporarily, rather than collapsing
+        // them back to one block and triggering another unnecessary reflow.
+        val hasCompatibleExistingRows = existing.isNotEmpty() && existing.all { reading ->
+                reading.boundPayload == payload &&
+                    reading.sourceCellAbove in sourceChildren &&
+                    reading.sourceWords.size == sourceWords.size &&
+                    sourceWords.indices.all { reading.sourceWords[it] === sourceWords[it] }
+            }
+        if (geometryPending && hasCompatibleExistingRows) {
+            existing.forEach { reading ->
+                reading.playbackPositionMs = playbackPositionMs
+                reading.bindPaintRoot(root)
+                readingViews.add(reading)
+            }
             return true
         }
-        clear(root)
-        val reading = ReadingView(anchor.context).apply {
-            this.playbackPositionMs = playbackPositionMs
-            this.sourceWords = sourceWords
-            this.boundPayload = payload
-            bindPaintRoot(root)
-            setTextSize(
-                TypedValue.COMPLEX_UNIT_PX,
-                AppleLineWidePronunciationRowPolicy.readingTextPx(sourceStyle.textSize),
+        if (AppleLineWidePronunciationRowPolicy.deferUntilMeasured(
+                verifiedSourceSpans = hasVerifiedProjection,
+                geometryPending = geometryPending,
+                hasCompatibleExistingRows = hasCompatibleExistingRows,
             )
-            // Any syllable with no verified native timing stays visibly dim.
-            setTextColor(Color.rgb(110, 110, 110))
-            typeface = sourceStyle?.typeface
-            gravity = Gravity.START
-            // Leave ascender/descender space when the native flexbox measures
-            // this hidden layout-only copy and the outer holder repaints it.
-            includeFontPadding = true
-            setSingleLine(false)
-            maxLines = Int.MAX_VALUE
-            ellipsize = null
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                breakStrategy = LineBreaker.BREAK_STRATEGY_HIGH_QUALITY
-                hyphenationFrequency = Layout.HYPHENATION_FREQUENCY_NONE
+        ) {
+            clear(root)
+            return false
+        }
+        val displayedCells = childText.take(insertionIndex)
+        val nativeDisplay = payload.nativeDisplay
+        val rawCells = if (nativeDisplay == null) displayedCells
+            else nativeDisplay.rawCellTexts(displayedCells)
+        val rows = if (!geometryPending && rawCells != null) AppleInterleavedReadingPolicy.plan(
+            sourceText = payload!!.sourceText,
+            pronunciation = text,
+            cells = sourceChildren.mapIndexed { index, child ->
+                AppleVisualSourceCell(
+                    text = rawCells[index],
+                    top = child.top,
+                    bottom = child.bottom,
+                    nativeLineCount = childWords[index].maxOfOrNull { it.layout?.lineCount ?: 0 } ?: 0,
+                )
+            },
+            spans = payload.phoneticSpans,
+        ) else null
+        val targetTextSize = AppleLineWidePronunciationRowPolicy.readingTextPx(sourceStyle.textSize)
+        // A flex cell can itself contain several TextView.Layout lines. Flex
+        // children cannot be injected BETWEEN those lines. Only for one exact
+        // native source TextView, use its REAL UTF-16 soft-line offsets to
+        // reserve an inline reading slot without cloning Japanese words or
+        // replacing Apple's native shader/click target.
+        val softWrapRows = if (!geometryPending && rows == null && root is ViewGroup &&
+            sourceChildren.size == 1 && sourceWords.size == 1 &&
+            (sourceStyle.layout?.lineCount ?: 0) > 1 &&
+            sourceStyle.text.toString() == payload.sourceText
+        ) {
+            val nativeLayout = requireNotNull(sourceStyle.layout)
+            AppleNativeSoftWrapReadingPolicy.plan(
+                sourceText = payload.sourceText,
+                displayedText = sourceStyle.text.toString(),
+                pronunciation = text,
+                visualLineRanges = (0 until nativeLayout.lineCount).map { index ->
+                    nativeLayout.getLineStart(index) until nativeLayout.getLineEnd(index)
+                },
+                spans = payload.phoneticSpans,
+            )?.takeIf { verified ->
+                verified.size == nativeLayout.lineCount &&
+                    verified.indices.all { verified[it].insertAfterSourceCell == it }
             }
-            if (Build.VERSION.SDK_INT >= 33) {
-                setLineBreakWordStyle(android.graphics.text.LineBreakConfig.LINE_BREAK_WORD_STYLE_PHRASE)
-            }
-            setTimedText(
-                text,
-                (listOf(payload!!.timedWords) + payload.repeatTimings).mapIndexed { index, native ->
+        } else null
+        val timedVariants by lazy {
+            (listOf(payload.timedWords) + payload.repeatTimings)
+                .mapIndexed { index, native ->
                     val (begin, end) = AppleLineWidePronunciationRowPolicy.lineWindowForVariant(
                         payload, index,
                     )
@@ -656,20 +961,160 @@ internal class AppleLineWidePronunciationRow {
                         lineBeginMs = begin,
                         lineEndMs = end,
                     )
-                },
-            )
+                }
         }
-        // MATCH_PARENT takes the whole karaoke flexbox width, unlike native
-        // lyrics_pronunciation_vertical_container cells (~206–373px in the device log).
-        anchor.addView(
-            reading,
-            insertionIndex,
-            ViewGroup.LayoutParams(
-                AppleLineWidePronunciationRowPolicy.fullWidth(anchor.width),
-                ViewGroup.LayoutParams.WRAP_CONTENT,
+        val desiredRows = when {
+            softWrapRows != null -> listOf(
+                softWrapRows.last().copy(insertAfterSourceCell = insertionIndex - 1),
+            )
+            rows != null -> rows
+            else -> listOf(AppleInterleavedReadingRow(
+                insertAfterSourceCell = insertionIndex - 1,
+                text = text,
+                readingStart = 0,
+                readingEnd = text.length,
+            ))
+        }
+        val canReuse = existing.size == desiredRows.size &&
+            existing.zip(desiredRows).all { (view, row) ->
+                val previous = sourceChildren[row.insertAfterSourceCell]
+                view.boundPayload == payload && view.sourceCellAbove === previous &&
+                    view.readingStart == row.readingStart &&
+                    view.readingEnd == row.readingEnd && view.text.toString() == row.text &&
+                    view.sourceWords.size == sourceWords.size &&
+                    sourceWords.indices.all { view.sourceWords[it] === sourceWords[it] } &&
+                    anchor.indexOfChild(view) == anchor.indexOfChild(previous) + 1 &&
+                    view.layoutParams?.width ==
+                        AppleLineWidePronunciationRowPolicy.fullWidth(nativeMeasureKey.contentWidth) &&
+                    view.inlineVisualRows == softWrapRows &&
+                    (softWrapRows == null || view.inlineWrapOverlay != null) &&
+                    kotlin.math.abs(view.targetReadingTextPx - targetTextSize) < 0.8f
+            }
+        if (canReuse) {
+            existing.forEach { reading ->
+                reading.playbackPositionMs = playbackPositionMs
+                reading.bindPaintRoot(root)
+                readingViews.add(reading)
+            }
+            return true
+        }
+        // Never construct a replacement overlay while a preceding overlay's
+        // extra TextView line spacing is still installed. Its constructor
+        // captures the *current* spacing; doing this first would double the
+        // spacing on every rebind and leave the first gap after recycling.
+        // Removing the old reading also changes source geometry, so allow one
+        // host remeasure before trusting its next internal line offsets.
+        if (existing.any { it.inlineWrapOverlay != null }) {
+            clear(root)
+            anchor.requestLayout()
+            return false
+        }
+        clear(root)
+        val softWrapOverlay = softWrapRows?.let { verified ->
+            runCatching {
+                AppleNativeSoftWrapReadingOverlay(
+                    root as ViewGroup, sourceStyle, targetTextSize, text, verified, timedVariants,
+                )
+            }.getOrNull()?.takeIf { it.install() }
+        }
+        // Installation can fail on an unfamiliar host. Fall back to the full
+        // reading rather than leaving the earlier Hangul line fragments blank.
+        val visibleSoftRows = softWrapRows.takeIf { softWrapOverlay != null }
+        val committedRows = if (softWrapRows != null && visibleSoftRows == null) listOf(
+            AppleInterleavedReadingRow(
+                insertAfterSourceCell = insertionIndex - 1,
+                text = text,
+                readingStart = 0,
+                readingEnd = text.length,
             ),
+        ) else desiredRows
+        val insertionResult = runCatching { committedRows.forEach { row ->
+            val precedingNativeCell = sourceChildren[row.insertAfterSourceCell]
+            val reading = ReadingView(anchor.context).apply {
+                this.playbackPositionMs = playbackPositionMs
+                this.sourceWords = sourceWords
+                this.boundPayload = payload
+                this.sourceCellAbove = precedingNativeCell
+                this.readingStart = row.readingStart
+                this.readingEnd = row.readingEnd
+                this.measuredSourceWidth = anchor.width
+                this.sourceMeasureKey = nativeMeasureKey
+                this.targetReadingTextPx = targetTextSize
+                this.inlineVisualRows = visibleSoftRows
+                bindPaintRoot(root)
+                setTextSize(TypedValue.COMPLEX_UNIT_PX, targetTextSize)
+                // Any syllable with no verified native timing stays visibly dim.
+                setTextColor(Color.rgb(110, 110, 110))
+                typeface = sourceStyle.typeface
+                gravity = Gravity.START
+                // The native flexbox measures the layout; the holder overlay
+                // repaints the same glyphs without its horizontal gradient mask.
+                includeFontPadding = true
+                setSingleLine(false)
+                maxLines = Int.MAX_VALUE
+                ellipsize = null
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    breakStrategy = LineBreaker.BREAK_STRATEGY_HIGH_QUALITY
+                    hyphenationFrequency = Layout.HYPHENATION_FREQUENCY_NONE
+                }
+                if (Build.VERSION.SDK_INT >= 33) {
+                    setLineBreakWordStyle(
+                        android.graphics.text.LineBreakConfig.LINE_BREAK_WORD_STYLE_PHRASE,
+                    )
+                }
+                setTimedText(row.text, AppleInterleavedReadingTimingPolicy.project(
+                    variants = timedVariants,
+                    fullPronunciation = text,
+                    rows = visibleSoftRows ?: committedRows,
+                    row = row,
+                ))
+            }
+            // Source rows remain unmodified and in their original order.
+            // Inserting after each native row means the next native row now
+            // naturally follows its preceding Korean reading.
+            anchor.addView(
+                reading,
+                anchor.indexOfChild(precedingNativeCell) + 1,
+                ViewGroup.LayoutParams(
+                    AppleLineWidePronunciationRowPolicy.fullWidth(nativeMeasureKey.contentWidth),
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                ),
+            )
+            if (visibleSoftRows != null) {
+                reading.inlineWrapOverlay = softWrapOverlay
+            }
+            readingViews.add(reading)
+        } }
+        if (insertionResult.isFailure) {
+            // A partially inserted reading must not leave an outer drawable
+            // or modified native TextView spacing behind on an unknown host.
+            softWrapOverlay?.clear()
+            runCatching { clear(root) }
+            AppleLyricUiRuntimeProbe.record(
+                "linewide_bind_rollback",
+                "error=${insertionResult.exceptionOrNull()?.javaClass?.simpleName ?: "unknown"}",
+                root,
+            )
+            return false
+        }
+        val maxSourceLines = sourceWords.maxOfOrNull { it.layout?.lineCount ?: 0 } ?: 0
+        if (visibleSoftRows != null) AppleLyricUiRuntimeProbe.record(
+            "linewide_internal_wrap_interleaved",
+            "sourceCells=${sourceChildren.size} visualRows=${visibleSoftRows.size} " +
+                "readingChars=${text.length} nativeTimedWords=${payload.timedWords.size}",
+            root,
         )
-        readingViews.add(reading)
+        if (rows == null && visibleSoftRows == null && maxSourceLines > 1) AppleLyricUiRuntimeProbe.record(
+            "linewide_internal_wrap_fallback",
+            "maxSourceLines=$maxSourceLines sourceCells=${sourceChildren.size} customPaint=true",
+            root,
+        )
+        if (rows != null) AppleLyricUiRuntimeProbe.record(
+            "linewide_visual_rows_interleaved",
+            "sourceCells=${sourceChildren.size} visualRows=${rows.size} " +
+                "readingChars=${text.length} nativeTimedWords=${payload.timedWords.size}",
+            root,
+        )
         return true
     }
 
@@ -677,9 +1122,11 @@ internal class AppleLineWidePronunciationRow {
     /** Cell boundaries are needed to distinguish the source from any translation script. */
     fun visibleNativeCellTexts(root: View?): List<String>? {
         val group = anchor(root) ?: return null
-        return (0 until group.childCount).map { index ->
-            nativeWordTexts(group.getChildAt(index)).joinToString("") { it.text.toString() }
-        }
+        return (0 until group.childCount).map(group::getChildAt)
+            .filterNot { it is ReadingView }
+            .map { child ->
+                nativeWordTexts(child).joinToString("") { it.text.toString() }
+            }
     }
 
     private fun anchor(root: View?): ViewGroup? {

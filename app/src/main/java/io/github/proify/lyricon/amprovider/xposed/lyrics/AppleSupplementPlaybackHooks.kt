@@ -128,6 +128,22 @@ internal fun AppleLyricsSupplementHooks.hookLyricBuildMethod() {
             ).toString()
         }.getOrNull()
         val moduleRequestSongId = requester.requestedMediaId(chain.thisObject)
+        val queueId = runCatching {
+            (AppleReflection.call(
+                item,
+                lyricsSongMember(AppleMusicRuntimeMember.LYRICS_SONG_QUEUE_ID_METHOD),
+            ) as? Number)?.toLong()
+        }.getOrNull()
+        if (requestSource == APPLE_LYRICS_REQUEST_SOURCE_APPLE &&
+            !loadedSongId.isNullOrBlank()
+        ) {
+            chain.thisObject?.let { viewModel ->
+                nativeLyricsRequestTrack.record(
+                    viewModel, loadedSongId, queueId,
+                    missingLyricsSupplement().supplementReceiptTrack.visitEpoch(),
+                )
+            }
+        }
         val tracksNativeRequest = requestSource == APPLE_LYRICS_REQUEST_SOURCE_APPLE ||
             (requestSource == APPLE_LYRICS_REQUEST_SOURCE_MODULE &&
                 !loadedSongId.isNullOrBlank() && loadedSongId == moduleRequestSongId)
@@ -161,12 +177,6 @@ internal fun AppleLyricsSupplementHooks.hookLyricBuildMethod() {
         loadedSongId?.let { requestId ->
             recordLyricsRequestSource(requestId, requestSource)
         }
-        val queueId = runCatching {
-            AppleReflection.call(
-                item,
-                lyricsSongMember(AppleMusicRuntimeMember.LYRICS_SONG_QUEUE_ID_METHOD),
-            )
-        }.getOrNull()
         val language = runCatching {
             chain.thisObject?.let {
                 lyricsNativeCall(
@@ -188,10 +198,33 @@ internal fun AppleLyricsSupplementHooks.hookLyricBuildMethod() {
         buildMethod,
         before = { chain ->
             val pointer = chain.args.firstOrNull() ?: return@installHook
+            val requester = lyricRequester()
+            requester.receipt(chain.thisObject)?.let {
+                moduleLyricsPointerReceipts[pointer] = it
+            }
             val songNative = lyricsNativeCall(
                 pointer,
                 AppleMusicRuntimeMember.LYRICS_NATIVE_POINTER_GET_METHOD,
             ) ?: return@installHook
+            if (!requester.ownsViewModel(chain.thisObject) &&
+                !missingLyricsSupplement().isSupplementPointer(pointer)
+            ) {
+                val origin = nativeLyricsRequestTrack.claim(
+                    chain.thisObject,
+                    nativeSongId(songNative),
+                    nativeLyricsQueueId(songNative),
+                )
+                nativeLyricsPointerOrigins[pointer] = origin
+                if (origin !is AppleNativeLyricsVisitRequestTrack.Origin.Verified ||
+                    origin.visitEpoch != missingLyricsSupplement()
+                        .supplementReceiptTrack.visitEpoch()
+                ) return@installHook
+            }
+            if (isClearlyStaleNativeLyricsResult(songNative)) return@installHook
+            if (!isCurrentModuleLyricsBuild(chain.thisObject, songNative)) {
+                ProviderLogger.diagnostic("Apple Music: 忽略过期模块歌词构建前置操作")
+                return@installHook
+            }
             ensureAppleLyricTextHooks(songNative)
             applyAppleNativeSupplementSelection(songNative)
             logApplePronunciationModelState(
@@ -203,6 +236,10 @@ internal fun AppleLyricsSupplementHooks.hookLyricBuildMethod() {
         },
         after = { chain, _ ->
             val pointer = chain.args.firstOrNull() ?: return@installHook
+            val buildViewModel = chain.thisObject
+            lyricRequester().receipt(buildViewModel)?.let {
+                moduleLyricsPointerReceipts[pointer] = it
+            }
             val songNative = lyricsNativeCall(
                 pointer,
                 AppleMusicRuntimeMember.LYRICS_NATIVE_POINTER_GET_METHOD,
@@ -213,8 +250,34 @@ internal fun AppleLyricsSupplementHooks.hookLyricBuildMethod() {
             } else {
                 APPLE_LYRICS_REQUEST_SOURCE_APPLE
             }
-            val songId = songNative?.let { this.nativeSongId(it) }
             val supplementPointer = missingLyricsSupplement().isSupplementPointer(pointer)
+            val nativeOrigin = if (requestSource == APPLE_LYRICS_REQUEST_SOURCE_APPLE &&
+                !supplementPointer
+            ) {
+                nativeLyricsPointerOrigins[pointer] ?: nativeLyricsRequestTrack.claim(
+                    chain.thisObject,
+                    songNative?.let { nativeSongId(it) },
+                    songNative?.let { nativeLyricsQueueId(it) },
+                ).also { nativeLyricsPointerOrigins[pointer] = it }
+            } else null
+            if (requestSource == APPLE_LYRICS_REQUEST_SOURCE_APPLE && !supplementPointer &&
+                (nativeOrigin !is AppleNativeLyricsVisitRequestTrack.Origin.Verified ||
+                    nativeOrigin.visitEpoch != missingLyricsSupplement()
+                        .supplementReceiptTrack.visitEpoch())
+            ) {
+                ProviderLogger.diagnostic(
+                    "Apple Music: 원래 요청을 증명할 수 없는 네이티브 가사 콜백 무시"
+                )
+                return@installHook
+            }
+            if (songNative != null && isClearlyStaleNativeLyricsResult(songNative)) {
+                return@installHook
+            }
+            val songId = songNative?.let { this.nativeSongId(it) }
+            if (!isCurrentModuleLyricsBuild(chain.thisObject, songNative)) {
+                ProviderLogger.diagnostic("Apple Music: 忽略过期模块歌词构建结果: id=$songId")
+                return@installHook
+            }
             val hasNativeLines = appleNativeSongHasLines(songNative)
             val moduleNative = shouldTreatModuleLyricsResultAsAppleNative(
                 requestSource = requestSource,
@@ -250,6 +313,10 @@ internal fun AppleLyricsSupplementHooks.hookLyricBuildMethod() {
             if (songNative == null) return@installHook
 
             val resolvedSongId = nativeSongId(songNative)
+            val resultQueueId = nativeLyricsQueueId(songNative)
+            val queuedVisitEpoch =
+                (nativeOrigin as? AppleNativeLyricsVisitRequestTrack.Origin.Verified)?.visitEpoch
+                    ?: missingLyricsSupplement().supplementReceiptTrack.visitEpoch()
             logApplePronunciationModelState(
                 stage = "build_after:$diagnosticSource",
                 viewModel = chain.thisObject,
@@ -263,12 +330,34 @@ internal fun AppleLyricsSupplementHooks.hookLyricBuildMethod() {
                 }
             postWhenMainIdle(mainHandler, LYRICS_PARSE_IDLE_MAX_DELAY_MS) { waitedMs, viaIdle ->
                 logLyricsParseDeferred("build", resolvedSongId, waitedMs, viaIdle)
+                if (!isCurrentModuleLyricsBuild(buildViewModel, songNative)) {
+                    ProviderLogger.diagnostic("Apple Music: 延迟解析期间模块歌词请求已过期: id=$resolvedSongId")
+                    return@postWhenMainIdle
+                }
+                if (requestSource == APPLE_LYRICS_REQUEST_SOURCE_APPLE &&
+                    queuedVisitEpoch != missingLyricsSupplement()
+                        .supplementReceiptTrack.visitEpoch()
+                ) return@postWhenMainIdle
                 PlaybackManager.onLyricsBuilt(
                     nativeSongObj = songNative,
                     source = contentSource,
                     visibleSongId = visibleSongId,
                     playbackSongId = currentPlaybackQueueMediaId(),
                     trigger = "build",
+                    scheduledVisitEpoch = queuedVisitEpoch,
+                    activeVisitEpoch = missingLyricsSupplement().supplementReceiptTrack.visitEpoch(),
+                    nativeResultSongId = resolvedSongId,
+                    nativeResultQueueId = resultQueueId,
+                    isModuleRequest = requestSource == APPLE_LYRICS_REQUEST_SOURCE_MODULE,
+                    moduleRequestProven = requestSource == APPLE_LYRICS_REQUEST_SOURCE_MODULE,
+                    nativeRequestProven =
+                        nativeOrigin is AppleNativeLyricsVisitRequestTrack.Origin.Verified,
+                    receiptStillCurrent = {
+                        isCurrentModuleLyricsBuild(buildViewModel, songNative) &&
+                            (requestSource != APPLE_LYRICS_REQUEST_SOURCE_APPLE ||
+                                queuedVisitEpoch == missingLyricsSupplement()
+                                    .supplementReceiptTrack.visitEpoch())
+                    },
                 )
                 if (
                     requestSource == APPLE_LYRICS_REQUEST_SOURCE_APPLE &&
@@ -321,9 +410,17 @@ internal fun AppleLyricsSupplementHooks.scheduleLegacyModuleCachePromotion(songI
 }
 
 internal fun AppleLyricsSupplementHooks.hookAppleNativeLyricsPresentation() {
+    blurHooks.onLyricsUserDrag = ::cancelAppleLyricsRestoreOnUserDrag
     appleLyricsResultPresentationMethod = hookResolver.resolveMethod(
         AppleMusicHookPoint.LYRICS_RESULT_PRESENTATION
     ).method
+    // I2 is the primary native lyrics consumer. Guard before the host installs an adapter;
+    // rejecting the later disk save would not undo a stale native presentation.
+    appleLyricsResultPresentationMethod?.takeIf { it.returnType == Void.TYPE }?.let { method ->
+        hookRegistrar.installConditionalVoidSkipHook(method) { chain ->
+            shouldBlockStaleLyricsPresentation(chain.args.firstOrNull())
+        }
+    }
     appleLyricsResultPresentationMethod?.let { method ->
         installSourceSwitchPresentationPerformanceHook(
             method = method,
@@ -368,6 +465,11 @@ internal fun AppleLyricsSupplementHooks.hookAppleNativeLyricsPresentation() {
         AppleMusicHookPoint.LYRICS_NATIVE_PRESENTATION
     ).method
     appleLyricsPresentationMethod = method
+    if (method.returnType == Void.TYPE) {
+        hookRegistrar.installConditionalVoidSkipHook(method) { chain ->
+            shouldBlockStaleLyricsPresentation(chain.args.firstOrNull())
+        }
+    }
     installSourceSwitchPresentationPerformanceHook(
         method = method,
         stagePrefix = "lyrics_native_presentation",
@@ -434,7 +536,7 @@ internal fun AppleLyricsSupplementHooks.hookAppleNativeLyricsPresentation() {
                 return@installHook
             }
             onAppleLyricsDisplayTrackChanged(songId)
-            ensureAppleLyricsScrollTracking(fragment, songId)
+            ensureAppleLyricsScrollTracking(fragment, songId, nativePresentationCompleted = true)
             logAppleLyricsUiState(
                 fragment = fragment,
                 stage = "presentation_after",
@@ -446,6 +548,11 @@ internal fun AppleLyricsSupplementHooks.hookAppleNativeLyricsPresentation() {
                 scheduleSupplementActiveLineUpdate()
             }
             onAppleLyricsPresentationCompleted(fragment, songId)
+            val resultQueueId = nativeLyricsQueueId(songNative)
+            val nativeOrigin = nativeLyricsPointerOrigins[pointer]
+            val queuedVisitEpoch =
+                (nativeOrigin as? AppleNativeLyricsVisitRequestTrack.Origin.Verified)?.visitEpoch
+                    ?: missingLyricsSupplement().supplementReceiptTrack.visitEpoch()
             postWhenMainIdle(mainHandler, LYRICS_PARSE_IDLE_MAX_DELAY_MS) { waitedMs, viaIdle ->
                 logLyricsParseDeferred("presentation", songId, waitedMs, viaIdle)
                 PlaybackManager.onLyricsBuilt(
@@ -454,6 +561,19 @@ internal fun AppleLyricsSupplementHooks.hookAppleNativeLyricsPresentation() {
                     visibleSongId = songId,
                     playbackSongId = currentPlaybackQueueMediaId(),
                     trigger = "presentation",
+                    scheduledVisitEpoch = queuedVisitEpoch,
+                    activeVisitEpoch = missingLyricsSupplement().supplementReceiptTrack.visitEpoch(),
+                    nativeResultSongId = songId,
+                    nativeResultQueueId = resultQueueId,
+                    isModuleRequest = false,
+                    moduleRequestProven = false,
+                    nativeRequestProven =
+                        nativeOrigin is AppleNativeLyricsVisitRequestTrack.Origin.Verified,
+                    receiptStillCurrent = {
+                        songId == currentPlaybackQueueMediaId() &&
+                            queuedVisitEpoch == missingLyricsSupplement()
+                                .supplementReceiptTrack.visitEpoch()
+                    },
                 )
             }
         },
@@ -463,6 +583,87 @@ internal fun AppleLyricsSupplementHooks.hookAppleNativeLyricsPresentation() {
 
 /** 原生歌词解析让出主线程的最长等待；超过后不再等空闲，避免状态栏歌词迟迟不更新。 */
 private const val LYRICS_PARSE_IDLE_MAX_DELAY_MS = 300L
+
+/** Only intercept a proven cross-song/queue contradiction or stale module-owned receipt. */
+private fun AppleLyricsSupplementHooks.shouldBlockStaleLyricsPresentation(
+    pointer: Any?,
+): Boolean {
+    if (pointer == null) return false
+    val nativeSong = runCatching {
+        lyricsNativeCall(pointer, AppleMusicRuntimeMember.LYRICS_NATIVE_POINTER_GET_METHOD)
+    }.getOrNull()
+    val nativeOrigin = nativeLyricsPointerOrigins[pointer]
+    if (nativeOrigin is AppleNativeLyricsVisitRequestTrack.Origin.Verified &&
+        nativeOrigin.visitEpoch != missingLyricsSupplement().supplementReceiptTrack.visitEpoch()
+    ) {
+        ProviderLogger.diagnostic("Apple Music: 이전 재생 방문에서 생성된 가사 표시 차단")
+        return true
+    }
+    if (nativeSong != null && isClearlyStaleNativeLyricsResult(nativeSong)) {
+        ProviderLogger.diagnostic("Apple Music: 차단된 이전 곡/큐 가사 화면 반영")
+        return true
+    }
+    val receipt = moduleLyricsPointerReceipts[pointer] ?: return false
+    val songId = nativeSong?.let { nativeSongId(it) }
+    val playbackSongId = currentPlaybackQueueMediaId()
+    val stale = playbackSongId.isNullOrBlank() || songId != playbackSongId ||
+        !lyricRequester().isCurrentReceipt(
+            receipt = receipt,
+            resultSongId = songId,
+            activeVisitEpoch = missingLyricsSupplement().supplementReceiptTrack.visitEpoch(),
+            activeQueueId = playbackSongId?.let {
+                MediaMetadataCache.getMetadataById(it)?.queueId
+            },
+        )
+    if (stale) {
+        ProviderLogger.diagnostic("Apple Music: 차단된 오래된 모듈 가사 화면 반영")
+    }
+    return stale
+}
+
+private fun AppleLyricsSupplementHooks.isClearlyStaleNativeLyricsResult(
+    nativeSong: Any,
+): Boolean {
+    val activeId = currentPlaybackQueueMediaId()
+    val nativeQueue = runCatching {
+        (lyricsNativeCall(
+            nativeSong,
+            AppleMusicRuntimeMember.LYRICS_NATIVE_SONG_QUEUE_ID_METHOD,
+        ) as? Number)?.toLong()
+    }.getOrNull()
+    val activeQueue = activeId?.let { MediaMetadataCache.getMetadataById(it)?.queueId }
+    return isClearlyStaleNativePresentation(nativeSongId(nativeSong), activeId, nativeQueue, activeQueue)
+}
+
+internal fun AppleLyricsSupplementHooks.nativeLyricsQueueId(nativeSong: Any): Long? =
+    runCatching {
+        (lyricsNativeCall(
+            nativeSong,
+            AppleMusicRuntimeMember.LYRICS_NATIVE_SONG_QUEUE_ID_METHOD,
+        ) as? Number)?.toLong()
+    }.getOrNull()
+
+/**
+ * A module-owned ViewModel has an immutable request identity, unlike the mutable playback
+ * song at callback time. Check it before any module-side native availability/UI mutations.
+ * Apple-owned ViewModels do not have module receipts and remain under host control.
+ */
+private fun AppleLyricsSupplementHooks.isCurrentModuleLyricsBuild(
+    viewModel: Any?,
+    songNative: Any?,
+): Boolean {
+    val requester = lyricRequester()
+    if (!requester.ownsViewModel(viewModel)) return true
+    val resultSongId = songNative?.let { nativeSongId(it) }
+    val playbackSongId = currentPlaybackQueueMediaId()
+    if (playbackSongId.isNullOrBlank() || resultSongId != playbackSongId) return false
+    return requester.isCurrentRequest(
+        instance = viewModel,
+        resultSongId = resultSongId,
+        activeVisitEpoch = missingLyricsSupplement().supplementReceiptTrack.visitEpoch(),
+        activeQueueId = MediaMetadataCache.getMetadataById(playbackSongId)?.queueId,
+    )
+}
 
 private fun logLyricsParseDeferred(trigger: String, songId: String?, waitedMs: Long, viaIdle: Boolean) {
     if (!BuildConfig.DEBUG) return

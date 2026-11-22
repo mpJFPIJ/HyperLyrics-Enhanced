@@ -42,6 +42,7 @@ internal class AppleLyricsPronunciationState {
     private val wordRenderContexts = ThreadLocalStack<ApplePronunciationWordRenderContext>()
     private val lineWideByHolder = WeakIdentityMap<Any, AppleLineWidePronunciationPayload>()
     private val lineWideBySource = LinkedHashMap<String, AppleLineWidePronunciationPayload>()
+    private val displayKeyByRawSource = HashMap<String, String>()
     private val ambiguousLineWideSources = HashSet<String>()
     private var lineWideSongId: String? = null
     private var lineWideRevision: Long = -1L
@@ -111,23 +112,34 @@ internal class AppleLyricsPronunciationState {
         payload: AppleLineWidePronunciationPayload,
         holder: Any?,
     ) {
-        holder?.let { lineWideByHolder[it] = payload }
         synchronized(lineWideBySource) {
+            holder?.let { lineWideByHolder[it] = payload }
             if (lineWideSongId != payload.songId || lineWideRevision != payload.revision ||
                 lineWideBySource.size >= MAX_RENDER_PLANS
             ) {
                 lineWideBySource.clear()
+                displayKeyByRawSource.clear()
                 ambiguousLineWideSources.clear()
                 lineWideSongId = payload.songId
                 lineWideRevision = payload.revision
             }
-            val source = AppleLineWidePronunciationRowPolicy.sourceKey(payload.sourceText)
+            val source = AppleLineWidePronunciationRowPolicy.sourceKey(payload.displayedSourceText)
+            val raw = payload.rawSourceKey
+            val oldDisplay = displayKeyByRawSource[raw]
+            if (oldDisplay != null && oldDisplay != source) {
+                lineWideBySource.remove(oldDisplay)
+                displayKeyByRawSource.remove(raw)
+            }
             if (source.isBlank() || source in ambiguousLineWideSources) return@synchronized
             val previous = lineWideBySource[source]
-            if (previous != null && previous.pronunciation != payload.pronunciation) {
+            if (previous != null &&
+                (previous.pronunciation != payload.pronunciation || previous.rawSourceKey != raw)
+            ) {
                 lineWideBySource.remove(source)
+                displayKeyByRawSource.remove(previous.rawSourceKey)
                 ambiguousLineWideSources.add(source)
             } else {
+                displayKeyByRawSource[raw] = source
                 // Repeated chorus text is not a unique lyric event. Keep
                 // *all* native timing windows rather than letting the final
                 // occurrence overwrite the first and desynchronize karaoke.
@@ -171,7 +183,7 @@ internal class AppleLyricsPronunciationState {
             return lineWideBySource.values.singleOrNull { candidate ->
                 AppleLineWidePronunciationRowPolicy.safeSourceFallback(candidate) &&
                     AppleLineWidePronunciationRowPolicy.verifiedInsertionIndex(
-                    candidate.sourceText, observedSourceCells,
+                    candidate.displayedSourceText, observedSourceCells,
                 ) != null
             }
         }
@@ -187,25 +199,31 @@ internal class AppleLyricsPronunciationState {
         val exactHolder = holder?.let { lineWideByHolder[it] }
         if (exactHolder != null && exactHolder.songId == songId &&
             exactHolder.revision == revision && exactHolder.sourcePriority == sourcePriority &&
-            AppleLineWidePronunciationRowPolicy.sourceKey(exactHolder.sourceText) == sourceKey
+            exactHolder.rawSourceKey == sourceKey
         ) return true
         synchronized(lineWideBySource) {
             if (lineWideSongId != songId || lineWideRevision != revision) return false
-            return lineWideBySource[sourceKey]?.let { candidate ->
-                candidate.sourcePriority == sourcePriority &&
-                    AppleLineWidePronunciationRowPolicy.safeSourceFallback(candidate)
-            } == true
+            val display = displayKeyByRawSource[sourceKey] ?: return false
+            val candidate = lineWideBySource[display] ?: return false
+            return candidate.sourcePriority == sourcePriority &&
+                AppleLineWidePronunciationRowPolicy.safeSourceFallback(candidate)
         }
     }
 
     /** Official/verified native words must never inherit an older line-wide fallback. */
-    fun forgetLineWide(songId: String?, sourceText: String?) {
+    fun forgetLineWide(songId: String?, sourceText: String?, holder: Any? = null) {
         if (songId.isNullOrBlank() || sourceText.isNullOrBlank()) return
+        val source = AppleLineWidePronunciationRowPolicy.sourceKey(sourceText)
         synchronized(lineWideBySource) {
+            if (holder != null) {
+                val bound = lineWideByHolder[holder]
+                if (bound != null && bound.songId == songId && bound.rawSourceKey == source) {
+                    lineWideByHolder.remove(holder)
+                }
+            }
             if (songId == lineWideSongId) {
-                val source = AppleLineWidePronunciationRowPolicy.sourceKey(sourceText)
-                lineWideBySource.remove(source)
-                ambiguousLineWideSources.remove(source)
+                displayKeyByRawSource.remove(source)?.let(lineWideBySource::remove)
+                // Conflicting display aliases stay ambiguous for this revision.
             }
         }
     }
@@ -218,17 +236,17 @@ internal class AppleLyricsPronunciationState {
 
 /**
  * Owns the "已处理过该 View" identity sets used by the loading-overlay and translation-button
- * suppression paths. Identity semantics rely on View not overriding equals/hashCode.
+ * suppression paths. Views belong to Apple's lifecycle: de-duplication must not keep them alive.
  */
 internal class AppleLyricsViewTracking {
-    private val suppressedLoadingViews =
-        Collections.newSetFromMap(IdentityHashMap<Any, Boolean>())
-    private val forcedTranslationButtons =
-        Collections.newSetFromMap(IdentityHashMap<Any, Boolean>())
+    private val suppressedLoadingViews = WeakIdentityMap<Any, Unit>()
+    private val forcedTranslationButtons = WeakIdentityMap<Any, Unit>()
 
-    fun markLoadingViewSuppressedIfNew(view: Any): Boolean = suppressedLoadingViews.add(view)
+    fun markLoadingViewSuppressedIfNew(view: Any): Boolean =
+        suppressedLoadingViews.putIfAbsent(view, Unit)
 
-    fun markTranslationButtonForcedIfNew(view: Any): Boolean = forcedTranslationButtons.add(view)
+    fun markTranslationButtonForcedIfNew(view: Any): Boolean =
+        forcedTranslationButtons.putIfAbsent(view, Unit)
 }
 
 /**

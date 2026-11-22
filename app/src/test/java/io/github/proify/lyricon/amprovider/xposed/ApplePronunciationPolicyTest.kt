@@ -29,6 +29,25 @@ class ApplePronunciationPolicyTest {
             ))
     }
 
+    @Test fun `provider punctuation does not erase independently verified native syllable timing`() {
+        val words = listOf(
+            com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation("駄目", "다메"),
+            com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation("あ", "아"),
+            com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation("い", "이"),
+        )
+        assertEquals(listOf("다메", "아", "이"),
+            ApplePronunciationPolicy.verifiedNativeSegments(
+                "다메, 아이!", listOf("駄目", "あ", "い"), words,
+            ))
+        assertEquals(ApplePronunciationPresentationMode.ALIGNED_WORDS,
+            ApplePronunciationPolicy.presentationMode(
+                "다메, 아이!", false, listOf("駄目", "あ", "い"), words,
+            ))
+        assertNull(ApplePronunciationPolicy.verifiedNativeSegments(
+            "다메2아이", listOf("駄目", "あ", "い"), words,
+        ))
+    }
+
     @Test
     fun `verified sound without a native cell boundary remains line wide`() {
         val projection = com.juren233.hyperlyricsenhanced.root.aitrans.AppleNativeReadingProjection

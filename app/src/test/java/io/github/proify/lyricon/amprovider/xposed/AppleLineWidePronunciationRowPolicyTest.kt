@@ -7,6 +7,172 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AppleLineWidePronunciationRowPolicyTest {
+    @Test fun transformedNativeWordsVerifyDisplayCellsAndPreserveRawWrapOffsets() {
+        val display = requireNotNull(AppleNativeReadingSourceDisplay.fromWords(
+            "反覆の夢", listOf("反", "覆", "の", "夢"),
+        ) { word -> if (word == "夢") "梦" else word })
+        val payload = AppleLineWidePronunciationPayload(
+            "song", "line", "反覆の夢", "한푸쿠노 유메", 1L, nativeDisplay = display,
+        )
+        val state = AppleLyricsPronunciationState()
+        state.rememberLineWide(payload, null)
+        val cells = listOf("反覆", "の梦", "a dream")
+        assertEquals(payload, state.lineWideForHolder(null, "song", null, 1L, cells))
+        assertEquals(listOf("反覆", "の夢"), display.rawCellTexts(cells.take(2)))
+        assertNull(display.rawCellTexts(listOf("反复", "の梦")))
+        assertNull(AppleNativeReadingSourceDisplay.fromWords("別の夢", listOf("夢")) { "梦" })
+        assertTrue(state.hasLineWide("song", "反覆の夢", 1L))
+        state.forgetLineWide("song", "反覆の夢")
+        assertNull(state.lineWideForHolder(null, "song", null, 1L, cells))
+    }
+
+    @Test fun lengthChangingWordConversionPreservesOnlyProvenWordBoundaries() {
+        val source = "網際網路の夢"
+        val display = requireNotNull(AppleNativeReadingSourceDisplay.fromWords(
+            source, listOf("網際網路", "の", "夢"),
+        ) { word -> when (word) {
+            "網際網路" -> "互联网"
+            "夢" -> "梦"
+            else -> word
+        } })
+        val raw = requireNotNull(display.rawCellTexts(listOf("互联网", "の梦")))
+        val rows = AppleInterleavedReadingPolicy.plan(
+            source, "인터넷 노유메",
+            listOf(AppleVisualSourceCell(raw[0], 0, 42), AppleVisualSourceCell(raw[1], 54, 96)),
+            listOf(
+                ApplePronunciationSourceToken(0, 4, "인터넷", "網際網路"),
+                ApplePronunciationSourceToken(4, 5, "노", "の"),
+                ApplePronunciationSourceToken(5, 6, "유메", "夢"),
+            ),
+        )
+        assertEquals(listOf("인터넷", "노유메"), rows?.map { it.text })
+        assertNull(display.rawCellTexts(listOf("互联", "网の梦")))
+    }
+
+    @Test fun differentRawSourcesWithIdenticalDisplayRequireTheNativeHolder() {
+        val state = AppleLyricsPronunciationState()
+        val firstHolder = Any()
+        val original = AppleLineWidePronunciationPayload(
+            "s", "1", "夢", "유메", 1, nativeDisplay =
+                AppleNativeReadingSourceDisplay.fromWords("夢", listOf("夢")) { "梦" },
+        )
+        val other = original.copy(lineKey = "2", sourceText = "梦", nativeDisplay = null)
+        state.rememberLineWide(original, firstHolder)
+        state.rememberLineWide(other, Any())
+        assertNull(state.lineWideForHolder(null, "s", null, 1, listOf("梦")))
+        assertEquals(original, state.lineWideForHolder(firstHolder, "s", null, 1))
+    }
+
+    @Test fun nativePromotionClearsOnlyTheMatchingHolderFallback() {
+        val state = AppleLyricsPronunciationState()
+        val holder = Any()
+        val other = Any()
+        val payload = AppleLineWidePronunciationPayload("s", "a", "夢", "유메", 1)
+        state.rememberLineWide(payload, holder)
+        state.rememberLineWide(payload.copy(lineKey = "b"), other)
+        state.forgetLineWide("s", "別", holder)
+        assertEquals(payload, state.lineWideForHolder(holder, "s", null, 1))
+        state.forgetLineWide("s", "夢", holder)
+        assertNull(state.lineWideForHolder(holder, "s", null, 1))
+        assertFalse(state.hasLineWide("s", "夢", 1, holder = holder))
+        assertTrue(state.hasLineWide("s", "夢", 1, holder = other))
+    }
+
+    @Test fun `pending first measurement must not flash a trailing pronunciation block`() {
+        assertTrue(AppleLineWidePronunciationRowPolicy.deferUntilMeasured(
+            verifiedSourceSpans = true, geometryPending = true,
+            hasCompatibleExistingRows = false,
+        ))
+        assertFalse(AppleLineWidePronunciationRowPolicy.deferUntilMeasured(
+            verifiedSourceSpans = true, geometryPending = false,
+            hasCompatibleExistingRows = false,
+        ))
+        assertFalse(AppleLineWidePronunciationRowPolicy.deferUntilMeasured(
+            verifiedSourceSpans = false, geometryPending = true,
+            hasCompatibleExistingRows = false,
+        ))
+    }
+
+    @Test fun `viewport expansion removes old inserted row breaks before native source measurement`() {
+        assertTrue(AppleLineWidePronunciationRowPolicy.needsSourceOnlyRemeasure(
+            observedWidths = listOf(520, 520), currentWidth = 900,
+            hasVerifiedProjection = true,
+        ))
+        assertFalse(AppleLineWidePronunciationRowPolicy.needsSourceOnlyRemeasure(
+            observedWidths = listOf(900, 900), currentWidth = 900,
+            hasVerifiedProjection = true,
+        ))
+        assertFalse(AppleLineWidePronunciationRowPolicy.needsSourceOnlyRemeasure(
+            observedWidths = listOf(520), currentWidth = 900,
+            hasVerifiedProjection = false,
+        ))
+        val old = AppleNativeSourceMeasureKey(900, 900, listOf(430, 430), listOf(40f))
+        assertTrue(AppleLineWidePronunciationRowPolicy.measurementChanged(
+            previous = listOf(old),
+            current = old.copy(contentWidth = 850),
+            hasVerifiedProjection = true,
+        ))
+        assertTrue(AppleLineWidePronunciationRowPolicy.measurementChanged(
+            previous = listOf(old),
+            current = old.copy(sourceTextSizes = listOf(44f)),
+            hasVerifiedProjection = true,
+        ))
+        assertFalse(AppleLineWidePronunciationRowPolicy.measurementChanged(
+            previous = listOf(old), current = old, hasVerifiedProjection = true,
+        ))
+    }
+
+    @Test fun `repeat variants can cover different lengths without losing the final Hangul syllable`() {
+        val variants = listOf(
+            listOf(AppleTimedReadingUnit(0, 2, 100, 200)),
+            listOf(AppleTimedReadingUnit(0, 3, 300, 500)),
+        )
+        assertEquals(listOf(0, 1, 2),
+            AppleReadingGlyphCoveragePolicy.offsets("카나나", variants))
+        val first = AppleReadingGlyphCoveragePolicy.owners(variants[0])
+        val second = AppleReadingGlyphCoveragePolicy.owners(variants[1])
+        assertEquals(null, first[2])
+        assertEquals(500L, second[2]?.endMs)
+        val conflicting = AppleReadingGlyphCoveragePolicy.owners(listOf(
+            AppleTimedReadingUnit(0, 2, 100, 200),
+            AppleTimedReadingUnit(1, 3, 300, 500),
+        ))
+        assertEquals(null, conflicting[1])
+    }
+
+    @Test fun `verified word karaoke advances left to right rather than brightening all syllables together`() {
+        val word = AppleTimedReadingUnit(0, 4, 100L, 500L)
+        val value = "카나카나"
+        assertEquals(1f, AppleReadingGlyphCoveragePolicy.progressAtGlyph(
+            value, word, glyphOffset = 0, positionMs = 300L), 0.001f)
+        assertEquals(1f, AppleReadingGlyphCoveragePolicy.progressAtGlyph(
+            value, word, glyphOffset = 1, positionMs = 300L), 0.001f)
+        assertEquals(0f, AppleReadingGlyphCoveragePolicy.progressAtGlyph(
+            value, word, glyphOffset = 2, positionMs = 300L), 0.001f)
+        assertEquals(0f, AppleReadingGlyphCoveragePolicy.progressAtGlyph(
+            value, word, glyphOffset = 3, positionMs = 300L), 0.001f)
+        assertEquals(1f, AppleReadingGlyphCoveragePolicy.progressAtGlyph(
+            value, word, glyphOffset = 3, positionMs = 500L), 0.001f)
+        val coarse = word.copy(isWholeLine = true)
+        for (offset in value.indices) {
+            assertEquals(0.5f, AppleReadingGlyphCoveragePolicy.progressAtGlyph(
+                value, coarse, glyphOffset = offset, positionMs = 300L), 0.001f)
+        }
+    }
+
+    @Test fun `slightly overflowing reading fits source row without orphaning a final syllable`() {
+        assertEquals(31.5f, AppleLineWidePronunciationRowPolicy.fitReadingTextPx(
+            targetPx = 36f, currentPx = 36f,
+            availablePx = 900f, measuredTextPx = 1000f,
+        ) ?: 0f, 0.2f)
+        // A very long line must retain readable text rather than shrinking
+        // to illegible characters just to satisfy the one-line constraint.
+        assertNull(AppleLineWidePronunciationRowPolicy.fitReadingTextPx(
+            targetPx = 36f, currentPx = 36f,
+            availablePx = 400f, measuredTextPx = 1400f,
+        ))
+    }
+
     @Test fun existingNativeWordPainterMustNotHaveAnUnverifiedSecondOverlayOwner() {
         // Apple's own native pronunciation word views already paint every
         // karaoke cell. A second manager registered on the line row doubles

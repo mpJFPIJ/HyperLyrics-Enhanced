@@ -45,4 +45,13 @@ internal class AppleLyricsFrameRefreshQueue {
 
     @Synchronized fun consume(scheduledRequest: AppleLyricsRefreshKey): AppleLyricsRefreshKey? =
         pending.remove(Group(scheduledRequest.songId, scheduledRequest.presentationGeneration))
+
+    @Synchronized fun peek(scheduledRequest: AppleLyricsRefreshKey): AppleLyricsRefreshKey? =
+        pending[Group(scheduledRequest.songId, scheduledRequest.presentationGeneration)]
+}
+
+internal object AppleLyricsRefreshRetryPolicy {
+    const val MAX_LAYOUT_RETRIES = 8
+
+    fun shouldRetry(attempts: Int): Boolean = attempts < MAX_LAYOUT_RETRIES
 }

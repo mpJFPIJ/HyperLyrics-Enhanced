@@ -175,25 +175,7 @@ internal fun AppleLyricsBlurHooks.appleLyricsFirstLineBeginMs(adapter: Any): Lon
 internal fun AppleLyricsBlurHooks.appleLyricsAdapterPositionForPlayback(
     adapter: Any,
     playbackPositionMs: Long,
-): Int? = runCatching {
-    val lyrics = AppleReflection.call(
-        adapter,
-        lyricsAdapterMember(adapter, AppleMusicRuntimeMember.LYRICS_ADAPTER_LYRICS_METHOD),
-    ) ?: return@runCatching null
-    val lineCount = (AppleReflection.call(
-        lyrics,
-        lyricsAdapterMember(adapter, AppleMusicRuntimeMember.LYRICS_ADAPTER_LINE_COUNT_METHOD),
-    ) as? Number)?.toInt() ?: return@runCatching null
-    if (lineCount <= 0) return@runCatching null
-    val itemCount = appleRecyclerAdapterItemCount(adapter)
-    selectAppleLyricsPlaybackAdapterPosition(
-        lineBeginsMs = (0 until lineCount).map { lineIndex ->
-            appleLyricsLineBeginMs(adapter, lyrics, lineIndex)
-        },
-        playbackPositionMs = playbackPositionMs,
-        itemCount = itemCount,
-    )
-}.getOrNull()
+): Int? = verifiedAdapterPositionForPlayback(adapter, playbackPositionMs)
 
 /**
  * Returns a compact, debug-only view of the adapter's lyric time axis and the
@@ -281,6 +263,23 @@ internal fun AppleLyricsBlurHooks.appleLyricsVisiblePositionedChildren(
                 .takeIf { it >= 0 }
                 ?.let { position -> add(position to child) }
         }
+    }
+}
+
+/** Keep only visible pixels shared by the row and its RecyclerView after transforms/clipping. */
+internal fun AppleLyricsBlurHooks.appleLyricsOnScreenChildren(recycler: View): List<Pair<Int, View>> {
+    val viewport = android.graphics.Rect()
+    if (!recycler.getGlobalVisibleRect(viewport)) return emptyList()
+    val childBounds = android.graphics.Rect()
+    return appleLyricsVisiblePositionedChildren(recycler).filter { (_, child) ->
+        child.getGlobalVisibleRect(childBounds) && AppleLyricsVisibleViewportPolicy.intersects(
+            childLeft = childBounds.left - viewport.left,
+            childTop = childBounds.top - viewport.top,
+            childRight = childBounds.right - viewport.left,
+            childBottom = childBounds.bottom - viewport.top,
+            viewportWidth = viewport.width(),
+            viewportHeight = viewport.height(),
+        )
     }
 }
 
@@ -403,6 +402,10 @@ internal fun AppleLyricsBlurHooks.findAppleLyricsChildViewHolderMethods(clazz: C
         .map { it.apply { isAccessible = true } }
         .toList()
 
+// Unknown/obfuscated fields may be song IDs, accessibility labels or immutable metadata.
+// Leave those to the host's full bind until a specific field mapping is verified.
+private val appleLyricsTextCacheFieldNames = setOf("lineText", "translation", "pronunciation")
+
 /**
  * Apple 的歌词 holder 用 String 字段缓存上一轮绑定文本；缓存命中时 `onBindViewHolder`
  * 会整段跳过翻译/发音行的可见性更新。清空这些缓存可强制下一轮重绑重新判断。
@@ -414,8 +417,9 @@ internal fun clearAppleLyricsHolderTextCaches(holder: Any): Int {
         .forEach { clazz ->
             clazz.declaredFields.forEach { field ->
                 if (
+                    field.name in appleLyricsTextCacheFieldNames &&
                     field.type == String::class.java &&
-                    !Modifier.isStatic(field.modifiers)
+                    !Modifier.isStatic(field.modifiers) && !Modifier.isFinal(field.modifiers)
                 ) {
                     runCatching {
                         field.isAccessible = true

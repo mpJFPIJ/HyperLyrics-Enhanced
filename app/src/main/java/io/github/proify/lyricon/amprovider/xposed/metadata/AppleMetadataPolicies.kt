@@ -528,15 +528,12 @@ internal fun appleNativeSupplementTracks(
 }
 
 internal fun shouldCompleteAppleLyricsProgrammaticRecenter(
-    suspendedForScroll: Boolean,
     scrollState: Int,
     pendingTargetPosition: Int?,
     focusPositions: Set<Int>,
-): Boolean =
-    suspendedForScroll &&
-        scrollState == 0 &&
-        pendingTargetPosition != null &&
-        pendingTargetPosition in focusPositions
+    visiblePositions: Set<Int>,
+): Boolean = scrollState == 0 && pendingTargetPosition != null &&
+    pendingTargetPosition in focusPositions && pendingTargetPosition in visiblePositions
 
 internal fun appleLyricsBlurFocusPositions(
     activePositions: Set<Int>,

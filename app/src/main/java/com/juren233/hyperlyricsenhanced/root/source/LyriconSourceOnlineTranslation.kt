@@ -122,6 +122,7 @@ internal fun LyriconSource.scheduleOnlineTranslation(baseSong: LocalSong): Boole
 
     val previousJobActive = onlineTranslationRunning
     val generation = onlineTranslationRequest.begin(attemptKey, allowRestart = true) ?: return false
+    directBridge?.rememberOnlineRequestOrigin(generation, baseSong.id)
     pronunciationDiagnostic(
         "stage=request_scheduled, generation=$generation, id=${baseSong.id}, " +
             "attempt=$attemptKey, nativeLines=${baseSong.lyrics.orEmpty().size}"

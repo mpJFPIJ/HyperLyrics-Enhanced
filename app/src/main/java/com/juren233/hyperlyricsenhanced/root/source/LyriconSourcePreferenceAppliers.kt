@@ -95,12 +95,28 @@ private fun LyriconSource.applyNativeOnlineTranslationPreferenceChange() {
     }
 
     if (currentPublishedAppleOnlineTranslationMatched && publishedSong != null) {
-        directBridge?.publishOnlineTranslation(
-            ApplePronunciationVisibilityPolicy.filterSong(
-                song = publishedSong,
-                hideMandarinPinyin = isHideMandarinPinyinEnabled(),
-    )
-)
+        val provenGeneration = acceptedOnlinePublication.generationFor(
+            publishedSong, onlineTranslationGeneration,
+        )
+        if (provenGeneration != null) {
+            directBridge?.publishOnlineTranslation(
+                ApplePronunciationVisibilityPolicy.filterSong(
+                    song = publishedSong,
+                    hideMandarinPinyin = isHideMandarinPinyinEnabled(),
+                ),
+                generation = provenGeneration,
+            )
+        } else if (!onlineTranslationRunning && !onlineTranslationResultReady) {
+            // The visible snapshot is older than the current request. Recompute from
+            // the present native input; never stamp the old translation as a new visit.
+            currentAppleSong?.takeIf { it.id == publishedSong.id }?.let { native ->
+                cancelOnlineTranslation(
+                    clearAttempt = true, clearMatched = false,
+                    reason = "unproven_preference_republication",
+                )
+                scheduleOnlineTranslation(native)
+            }
+        }
 
         return
     }

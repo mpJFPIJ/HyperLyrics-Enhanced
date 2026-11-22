@@ -56,6 +56,34 @@ class AppleLyricsScrollIntentPolicyTest {
     }
 
     @Test
+    fun `resizing while browsing leaves the listener in control`() {
+        val state = AppleLyricsBlurRuntimeState(recyclerHeight = 900, settledAnchorTopY = 150f)
+        AppleLyricsScrollIntentPolicy.recordMovement(state, scrollState = 1)
+        AppleLyricsScrollIntentPolicy.endMotion(state)
+        AppleLyricsScrollIntentPolicy.onViewportHeightChanged(state, 640)
+
+        assertEquals(640, state.recyclerHeight)
+        assertNull(state.settledAnchorTopY)
+        assertTrue(state.suspendedForScroll)
+    }
+
+    @Test
+    fun `unacknowledged automatic request cannot block recovery of the next active line`() {
+        val state = AppleLyricsBlurRuntimeState()
+        AppleLyricsScrollIntentPolicy.requestRecovery(state, target = 2, nowMs = 12_000L)
+        assertFalse(state.suspendedForScroll)
+        assertEquals(2, state.pendingProgrammaticRecenterPosition)
+        assertTrue(AppleLyricsFollowRecoveryPolicy.shouldRecover(
+            active = setOf(3), visible = setOf(9, 10), scrollState = 0,
+            suspendedForBrowse = state.suspendedForScroll, playing = true,
+            nowMs = 16_000L, lastRecoveryAtMs = state.lastFollowRecoveryAtMs,
+        ))
+        AppleLyricsScrollIntentPolicy.recordMovement(state, scrollState = 1)
+        assertTrue(state.suspendedForScroll)
+        assertNull(state.pendingProgrammaticRecenterPosition)
+    }
+
+    @Test
     fun `repeated movement clears blur only once until idle`() {
         val state = AppleLyricsBlurRuntimeState()
 

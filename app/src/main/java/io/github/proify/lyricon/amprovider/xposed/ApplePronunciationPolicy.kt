@@ -30,12 +30,19 @@ internal object ApplePronunciationPolicy {
             }
         ) return null
         return alignedWords.map { it.hangul }.takeIf {
-            RomanizationPolicy.sameHangulSounds(
-                it.joinToString("").replace(
-                    com.juren233.hyperlyricsenhanced.root.aitrans
-                        .AppleNativeReadingProjection.EMPTY_PRONUNCIATION_CELL, "",
-                ), pronunciation,
-            ) &&
+            val rendered = it.joinToString("").replace(
+                com.juren233.hyperlyricsenhanced.root.aitrans
+                    .AppleNativeReadingProjection.EMPTY_PRONUNCIATION_CELL, "",
+            )
+            (RomanizationPolicy.sameHangulSounds(rendered, pronunciation) ||
+                // A provider comma or exclamation is not a spoken syllable.
+                // With a separately VERIFIED source-to-cell map, punctuation
+                // must not make us lose Apple's real original-word clock.
+                // Digits/Jamo could change the spoken text: never ignore those.
+                (rendered.all { char -> !char.isLetterOrDigit() || char in '가'..'힣' } &&
+                    pronunciation.all { char -> !char.isLetterOrDigit() || char in '가'..'힣' } &&
+                    rendered.filter { char -> char in '가'..'힣' } ==
+                        pronunciation.filter { char -> char in '가'..'힣' })) &&
                 it.any(String::isNotBlank)
         }
     }

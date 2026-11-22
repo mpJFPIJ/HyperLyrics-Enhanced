@@ -75,11 +75,35 @@ internal object AppleWordReadingAlignment {
             if (wordIndex == -1 || endWordIndex == -1 || endWordIndex < wordIndex) {
                 return WordAlignmentResult.LineWide(AlignmentFailure.BOUNDARY_SPLIT)
             }
-            // A morphological span is an indivisible verified sound. Its native
-            // presentation may cover more than one Apple karaoke cell; never
-            // fabricate arbitrary Hangul syllable boundaries to fill those cells.
-            if (wordIndex != endWordIndex) grouped = true
-            sounds[wordIndex].append(span.hangul)
+            if (wordIndex == endWordIndex) {
+                sounds[wordIndex].append(span.hangul)
+            } else {
+                // A mixed Japanese sentence may contain a grouped *literal kana*
+                // token (e.g. 駄目 + あい). Read each real Apple cell independently,
+                // but accept a split ONLY if the concatenated syllables are
+                // identical to the full-line Sudachi reading. This cannot split
+                // Kanji, a digraph such as きゃ, or a separated long-vowel mark.
+                val literalKana = (wordIndex..endWordIndex).map { index ->
+                    val range = ranges[index]
+                    val start = maxOf(span.sourceStart, range.first)
+                    val end = minOf(span.sourceEnd, range.last + 1)
+                    val fragment = original.substring(start, end)
+                    if (fragment.isEmpty() || fragment.any { it !in '\u3040'..'\u30ff' }) null
+                    else JapaneseToHangul.fromKana(fragment)
+                        ?.filter { it in '가'..'힣' }
+                        ?.takeIf(String::isNotEmpty)
+                }
+                if (literalKana.all { it != null } &&
+                    literalKana.joinToString("") == span.hangul.filter { it in '가'..'힣' }
+                ) {
+                    literalKana.forEachIndexed { index, sound ->
+                        sounds[wordIndex + index].append(sound)
+                    }
+                } else {
+                    grouped = true
+                    sounds[wordIndex].append(span.hangul)
+                }
+            }
             previousEnd = span.sourceEnd
         }
 

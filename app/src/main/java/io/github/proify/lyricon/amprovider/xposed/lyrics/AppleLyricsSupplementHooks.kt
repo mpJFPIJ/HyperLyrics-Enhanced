@@ -72,6 +72,7 @@ import io.github.proify.lyricon.amprovider.xposed.hooks.AppleFrameworkMetadataHo
 import io.github.proify.lyricon.amprovider.xposed.hooks.ApplePlaybackHooks
 import io.github.proify.lyricon.amprovider.xposed.hooks.FunctionalAppleMusicHookModule
 import io.github.proify.lyricon.amprovider.xposed.lyrics.AppleOnlineSourceMenuHooks
+import io.github.proify.lyricon.amprovider.xposed.internal.WeakIdentityMap
 import io.github.proify.lyricon.amprovider.xposed.internal.ThreadLocalReentryGuard
 import io.github.proify.lyricon.amprovider.xposed.internal.ThreadLocalStack
 import io.github.proify.lyricon.lyric.model.Song as LyriconSong
@@ -121,6 +122,13 @@ internal class AppleLyricsSupplementHooks(
     private val epoxyDataBindingFromHolderCallback: (Any?) -> Any?,
     internal val missingLyricsSupplement: () -> AppleMissingLyricsHooks,
 ) {
+    /** Bridge module request identity from the build callback to native presentation. */
+    internal val moduleLyricsPointerReceipts =
+        WeakIdentityMap<Any, AppleModuleLyricsRequestOwner.Receipt>()
+    internal val nativeLyricsRequestTrack = AppleNativeLyricsVisitRequestTrack()
+    /** Separate equal-but-distinct JNI wrappers; provenance must never leak across pointers. */
+    internal val nativeLyricsPointerOrigins =
+        WeakIdentityMap<Any, AppleNativeLyricsVisitRequestTrack.Origin>()
     internal companion object {
         const val MAX_APPLE_SYSTEM_FONT_VARIATION_CACHE_ENTRIES = 64
         const val LEGACY_MODULE_PROMOTION_DELAY_MS = 1_000L
@@ -293,6 +301,7 @@ internal class AppleLyricsSupplementHooks(
                 pronunciationState.beginHolderBinding(context.holder)
                 translationLineHighlight.beginHolderBinding(context.holder, root)
                 root?.let { view ->
+                    lineWideLayoutRecheck.forget(view)
                     lineWideBindingGeneration[view] =
                         (lineWideBindingGeneration[view] ?: 0L) + 1L
                 }
@@ -306,6 +315,7 @@ internal class AppleLyricsSupplementHooks(
         )
     }
     internal val lineWidePronunciationRow = AppleLineWidePronunciationRow()
+    internal val lineWideLayoutRecheck by lazy { AppleNativePronunciationLayoutRecheck(this) }
     internal val translationLineHighlight = AppleNativeTranslationHighlight { recyclerView ->
         appleRecyclerAdapter(recyclerView)?.let { adapter ->
             blurHooks.appleLyricsNativeActiveAdapterPositionsOrNull(adapter)
@@ -607,7 +617,7 @@ internal class AppleLyricsSupplementHooks(
                 if (method.name == "onChanged") {
                     val result = args?.firstOrNull()
                     if (result !== initialValue) {
-                        handleNativeLyricsResultEmitted(songId, result)
+                        handleNativeLyricsResultEmitted(viewModel, songId, result)
                     }
                 }
                 null
@@ -622,7 +632,7 @@ internal class AppleLyricsSupplementHooks(
         }
     }
 
-    private fun handleNativeLyricsResultEmitted(songId: String, result: Any?) {
+    private fun handleNativeLyricsResultEmitted(viewModel: Any, songId: String, result: Any?) {
         if (result == null) return
         val pointer = runCatching {
             AppleReflection.call(result, "getFirst")
@@ -638,17 +648,71 @@ internal class AppleLyricsSupplementHooks(
                 lyricsNativeCall(pointer, AppleMusicRuntimeMember.LYRICS_NATIVE_POINTER_GET_METHOD)
             }.getOrNull()
             val nativeSongId = songNative?.let { this.nativeSongId(it) }
-            val hasLines = appleNativeSongHasLines(songNative)
+            if (!canReportNativeLyricsPointerAvailability(songNative, nativeSongId)) {
+                // A failed JNI/reflection read is not an Apple-confirmed "no lyrics"
+                // response. In particular, do not reuse the observer's song ID to
+                // report a false native-empty result and trigger source takeover.
+                ProviderLogger.diagnostic(
+                    "Apple Music: 읽을 수 없는 가사 포인터의 가용성 판정 보류"
+                )
+                return
+            }
+            val resolvedSongId = nativeSongId ?: return
+            val requester = lyricRequester()
+            val moduleProven = requester.ownsViewModel(viewModel) &&
+                requester.isCurrentRequest(
+                    viewModel, resolvedSongId,
+                    missingLyricsSupplement().supplementReceiptTrack.visitEpoch(),
+                    currentPlaybackQueueMediaId()?.let {
+                        MediaMetadataCache.getMetadataById(it)?.queueId
+                    },
+                )
+            val origin = if (requester.ownsViewModel(viewModel)) null else
+                nativeLyricsPointerOrigins[pointer] ?: nativeLyricsRequestTrack.claim(
+                    viewModel, nativeSongId, songNative?.let { nativeLyricsQueueId(it) },
+                ).also { nativeLyricsPointerOrigins[pointer] = it }
+            if (!moduleProven &&
+                (origin !is AppleNativeLyricsVisitRequestTrack.Origin.Verified ||
+                    origin.visitEpoch != missingLyricsSupplement().supplementReceiptTrack.visitEpoch())
+            ) {
+                ProviderLogger.diagnostic(
+                    "Apple Music: 출처가 불명확한 네이티브 결과의 가용성 변경 거부"
+                )
+                return
+            }
+            val hasLines = songNative?.let { confirmedAppleNativeSongHasLines(it) }
+            if (hasLines == null) {
+                ProviderLogger.diagnostic(
+                    "Apple Music: 네이티브 가사 목록 조회 실패로 가용성 판정 보류"
+                )
+                return
+            }
             ProviderLogger.info(
-                "Apple Music 原生歌词请求结果已发射: id=${nativeSongId ?: songId}, " +
+                "Apple Music 原生歌词请求结果已发射: id=$resolvedSongId, " +
                     "hasLines=$hasLines"
             )
             missingLyricsSupplement().onNativeLyricsState(
-                songId = nativeSongId ?: songId,
+                songId = resolvedSongId,
                 hasLines = hasLines,
             )
         } else {
             // pointer 为 null 表示 Apple 原生歌词请求已结束且无歌词（404 / 异常 / 空结果）
+            val requester = lyricRequester()
+            val moduleProven = requester.ownsViewModel(viewModel) &&
+                requester.isCurrentRequest(
+                    viewModel, songId,
+                    missingLyricsSupplement().supplementReceiptTrack.visitEpoch(),
+                    currentPlaybackQueueMediaId()?.let {
+                        MediaMetadataCache.getMetadataById(it)?.queueId
+                    },
+                )
+            val origin = if (requester.ownsViewModel(viewModel)) null else
+                nativeLyricsRequestTrack.claimPointerless(viewModel, songId)
+            if ((!moduleProven &&
+                    (origin !is AppleNativeLyricsVisitRequestTrack.Origin.Verified ||
+                        origin.visitEpoch != missingLyricsSupplement().supplementReceiptTrack.visitEpoch())) ||
+                songId != currentPlaybackQueueMediaId()
+            ) return
             val exception = runCatching {
                 AppleReflection.call(result, "getSecond")
             }.getOrNull()
@@ -763,9 +827,29 @@ internal class AppleLyricsSupplementHooks(
                 AppleReflection.call(recyclerView, "isComputingLayout") as? Boolean
             }.getOrNull() == true
 
-        fun rebindAllRows(stage: String) {
+        fun rebindAllRows(stage: String, layoutRetries: Int = 0) {
+            val queuedRequest = queue.peek(key) ?: return
+            if (!isRefreshCurrent(queuedRequest)) {
+                queue.consume(key)
+                return
+            }
             if (isComputingLayout()) {
-                recyclerViewAsView.postOnAnimation { rebindAllRows(stage) }
+                if (!AppleLyricsRefreshRetryPolicy.shouldRetry(layoutRetries)) {
+                    queue.consume(key)
+                    ProviderLogger.error(
+                        "Apple Music 歌词列表布局持续占用，取消本轮重绑: " +
+                            "id=$expectedSongId, attempts=$layoutRetries"
+                    )
+                    return
+                }
+                runCatching {
+                    recyclerViewAsView.postOnAnimation {
+                        rebindAllRows(stage, layoutRetries + 1)
+                    }
+                }.onFailure {
+                    queue.consume(key)
+                    ProviderLogger.error("Apple Music 歌词列表重绑帧调度失败", it)
+                }
                 return
             }
             val request = queue.consume(key) ?: return

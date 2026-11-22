@@ -29,6 +29,7 @@ internal class AITranslationCache(
 
     private val dbMutex = Mutex()
     private val groupEpochs = AiCacheGroupEpochs()
+    private val clearGate = AiCacheClearGate()
     private var dbHelper: DatabaseHelper? = null
 
     private val memory: MutableMap<String, List<TranslationItem>> =
@@ -51,13 +52,11 @@ internal class AITranslationCache(
         }
     }
 
-    fun getFromMemory(key: String): List<TranslationItem>? = memory[key]
-
-    fun putMemory(key: String, items: List<TranslationItem>) {
-        memory[key] = items
-    }
+    fun getFromMemory(key: String): List<TranslationItem>? =
+        memory[key].takeIf { clearGate.mayServeCache() }
 
     suspend fun getFromDb(key: String): List<TranslationItem>? = dbMutex.withLock {
+        if (!clearGate.mayReadDatabase()) return@withLock null
         val db = dbHelper?.readableDatabase ?: return null
         return runCatching {
             db.query(
@@ -70,10 +69,9 @@ internal class AITranslationCache(
                 if (cursor.moveToFirst()) {
                     val jsonData =
                         cursor.getString(cursor.getColumnIndexOrThrow(DatabaseHelper.COLUMN_DATA))
-                    json.decodeFromString<List<TranslationItem>>(jsonData).also {
-                        // Keep the RAM mirror consistent with deletion under dbMutex.
-                        memory[key] = it
-                    }
+                    json.decodeFromString<List<TranslationItem>>(jsonData)
+                        .takeIf { clearGate.mayReadDatabase() }
+                        ?.also { memory[key] = it }
                 } else null
             }
         }.getOrElse {
@@ -85,26 +83,21 @@ internal class AITranslationCache(
     suspend fun saveToDb(
         key: String,
         items: List<TranslationItem>,
-        song: Song? = null,
-        originalLines: List<String> = emptyList(),
-        expectedEpoch: Long? = null,
+        song: Song,
+        ticket: AiCacheWriteTicket,
     ): Boolean {
         val jsonData = items.toJson()
-        val groupId = song?.let { AiCachedSongCatalog.groupId(it.name, it.artist, originalLines) }
         return dbMutex.withLock {
+            if (key !in ticket.scope.keys || !mayWrite(ticket)) return@withLock false
             val db = dbHelper?.writableDatabase ?: return@withLock false
-            if (expectedEpoch != null && (groupId == null ||
-                    !groupEpochs.isCurrent(groupId, expectedEpoch))) return@withLock false
             val saved = runCatching {
                 val values = ContentValues().apply {
                     put(DatabaseHelper.COLUMN_ID, key)
                     put(DatabaseHelper.COLUMN_DATA, jsonData)
                     put(DatabaseHelper.COLUMN_TIMESTAMP, System.currentTimeMillis())
-                    if (song != null) {
-                        put(DatabaseHelper.COLUMN_GROUP_ID, groupId)
-                        put(DatabaseHelper.COLUMN_SONG_TITLE, song.name)
-                        put(DatabaseHelper.COLUMN_SONG_ARTIST, song.artist)
-                    }
+                    put(DatabaseHelper.COLUMN_GROUP_ID, ticket.scope.groupId)
+                    put(DatabaseHelper.COLUMN_SONG_TITLE, song.name)
+                    put(DatabaseHelper.COLUMN_SONG_ARTIST, song.artist)
                 }
                 db.insertWithOnConflict(
                     DatabaseHelper.TABLE_NAME,
@@ -121,27 +114,34 @@ internal class AITranslationCache(
         }
     }
 
-    suspend fun currentGroupEpoch(groupId: String): Long = dbMutex.withLock {
-        groupEpochs.current(groupId)
-    }
-
-    /** Backfill catalog metadata for a legacy cache hit without altering its cached lyrics. */
-    suspend fun attachSongMetadata(key: String, song: Song, originalLines: List<String>) {
-        dbMutex.withLock {
-            val db = dbHelper?.writableDatabase ?: return@withLock
+    suspend fun writeTicket(
+        scope: AiCacheScope, song: Song, startingGeneration: Int,
+    ): AiCacheWriteTicket = dbMutex.withLock {
+        val ticket = AiCacheWriteTicket(scope, groupEpochs.current(scope), startingGeneration)
+        // Publish legacy-to-song identity before a sibling variant can be saved.
+        if (mayWrite(ticket)) {
             runCatching {
                 val values = ContentValues().apply {
-                    put(DatabaseHelper.COLUMN_GROUP_ID,
-                        AiCachedSongCatalog.groupId(song.name, song.artist, originalLines))
+                    put(DatabaseHelper.COLUMN_GROUP_ID, scope.groupId)
                     put(DatabaseHelper.COLUMN_SONG_TITLE, song.name)
                     put(DatabaseHelper.COLUMN_SONG_ARTIST, song.artist)
                 }
-                db.update(DatabaseHelper.TABLE_NAME, values,
-                    "${DatabaseHelper.COLUMN_ID} = ? AND ${DatabaseHelper.COLUMN_GROUP_ID} IS NULL",
-                    arrayOf(key))
+                val placeholders = scope.keys.joinToString(",") { "?" }
+                dbHelper?.writableDatabase?.update(DatabaseHelper.TABLE_NAME, values,
+                    "${DatabaseHelper.COLUMN_GROUP_ID} IS NULL AND ${DatabaseHelper.COLUMN_ID} IN ($placeholders)",
+                    scope.keys.toTypedArray())
             }.onFailure { HookLogger.e(TAG, "缓存歌曲信息补全失败", it) }
         }
+        ticket
     }
+
+    suspend fun ensureCurrent(ticket: AiCacheWriteTicket) = dbMutex.withLock {
+        requireCurrentAiResult(ticket.generation, ticket.epoch, generation.get(), groupEpochs.current(ticket.scope))
+    }
+
+    // Call while holding dbMutex so no per-song delete can interleave with the mutation.
+    private fun mayWrite(ticket: AiCacheWriteTicket): Boolean =
+        clearGate.mayReadDatabase() && ticket.isCurrent(generation.get(), groupEpochs.current(ticket.scope))
 
     private fun loadRows(db: SQLiteDatabase): List<AiCachedSongRow> {
         val rows = mutableListOf<AiCachedSongRow>()
@@ -173,48 +173,61 @@ internal class AITranslationCache(
         AiCachedSongCatalog.groupRows(loadRows(db))
     }
 
-    suspend fun keysForGroup(groupId: String): Set<String> = dbMutex.withLock {
-        val db = dbHelper?.readableDatabase ?: return@withLock emptySet()
-        AiCachedSongCatalog.keysForGroup(groupId, loadRows(db))
-    }
-
-    /**
-     * Delete a single song's derived cache variants from memory and SQLite.
-     * Other songs' translations and pronunciation caches remain intact.
-     */
-    suspend fun removeKeys(keys: Set<String>, groupId: String? = null): Boolean = dbMutex.withLock {
-        if (keys.isEmpty()) return@withLock false
+    /** Resolve the displayed row, delete its variants and invalidate pending writers atomically. */
+    suspend fun removeSong(
+        groupId: String,
+        knownKeys: Set<String> = emptySet(),
+        onRemoved: (AiCacheScope) -> Unit,
+    ): Boolean = dbMutex.withLock {
         val db = dbHelper?.writableDatabase ?: return@withLock false
-        // Include variants saved since the UI first enumerated this group.
-        val allKeys = if (groupId != null) {
-            keys + AiCachedSongCatalog.keysForGroup(groupId, loadRows(db))
-        } else keys
-        if (groupId != null) groupEpochs.advance(groupId)
-        val removed = runCatching {
-            val selection = allKeys.joinToString(prefix = "${DatabaseHelper.COLUMN_ID} IN (",
+        val selected = AiCachedSongCatalog.deletionScope(groupId, loadRows(db))
+        val removed = selected.copy(keys = selected.keys + knownKeys)
+        if (removed.keys.isEmpty()) return@withLock false
+        val success = runCatching {
+            val selection = removed.keys.joinToString(prefix = "${DatabaseHelper.COLUMN_ID} IN (",
                 postfix = ")", separator = ",") { "?" }
-            db.delete(DatabaseHelper.TABLE_NAME, selection, allKeys.toTypedArray())
+            db.delete(DatabaseHelper.TABLE_NAME, selection, removed.keys.toTypedArray())
             true
         }.getOrElse {
             HookLogger.e(TAG, "删除当前歌曲翻译缓存失败", it)
             false
         }
-        if (removed) allKeys.forEach(memory::remove)
-        removed
+        if (success) {
+            groupEpochs.advance(removed)
+            removed.keys.forEach(memory::remove)
+            onRemoved(removed)
+        }
+        success
     }
 
     fun clear(callback: () -> Unit) {
+        clearGate.beginClear()
         generation.incrementAndGet()
         memory.clear()
         scope.launch(Dispatchers.IO) {
-            dbMutex.withLock {
-                runCatching {
-                    dbHelper?.writableDatabase?.delete(DatabaseHelper.TABLE_NAME, null, null)
-                    HookLogger.d(TAG, "翻译缓存数据库已清空")
-                    withContext(Dispatchers.Main) { callback() }
-                }.onFailure {
-                    HookLogger.e(TAG, "清空翻译缓存数据库失败", it)
+            var cleared = false
+            try {
+                dbMutex.withLock {
+                    cleared = runCatching {
+                        dbHelper?.writableDatabase?.delete(DatabaseHelper.TABLE_NAME, null, null)
+                        true
+                    }.getOrElse {
+                        HookLogger.e(TAG, "清空翻译缓存数据库失败", it)
+                        false
+                    }
+                    // Readers that completed just before the delete acquired the
+                    // mutex might have re-populated RAM after the first clear.
+                    memory.clear()
+                    if (cleared) {
+                        HookLogger.d(TAG, "翻译缓存数据库已清空")
+                    }
                 }
+            } finally {
+                clearGate.finishClear(cleared)
+            }
+            if (cleared) {
+                runCatching { withContext(Dispatchers.Main) { callback() } }
+                    .onFailure { HookLogger.e(TAG, "翻译缓存清理完成回调失败", it) }
             }
         }
     }

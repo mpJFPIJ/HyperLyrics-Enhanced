@@ -6,6 +6,7 @@
 package io.github.proify.lyricon.amprovider.xposed
 
 import android.view.ViewTreeObserver
+import android.view.View
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -14,6 +15,39 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AppleLyricsScrollPresentationStateTest {
+    @Test fun `a temporarily unavailable native adapter mapping is retried on the next layout`() {
+        var calls = 0
+        assertNull(AppleLyricsPlaybackMappingPolicy.resolve(1_000L) {
+            calls++
+            null // Adapter has not populated its native lyric rows yet.
+        })
+        assertEquals(7, AppleLyricsPlaybackMappingPolicy.resolve(1_000L) {
+            calls++
+            7
+        })
+        assertEquals(9, AppleLyricsPlaybackMappingPolicy.resolve(1_000L) {
+            calls++
+            9 // Verified native windows may change without changing the clock.
+        })
+        assertEquals(3, calls)
+    }
+
+    @Test fun `seek and adapter changes always query the current native mapping`() {
+        assertEquals(2, AppleLyricsPlaybackMappingPolicy.resolve(1_000L) { 2 })
+        assertEquals(15, AppleLyricsPlaybackMappingPolicy.resolve(27_000L) { 15 })
+        assertEquals(3, AppleLyricsPlaybackMappingPolicy.resolve(27_000L) { 3 })
+        assertNull(AppleLyricsPlaybackMappingPolicy.resolve(null) { 99 })
+        assertEquals(4, AppleLyricsPlaybackMappingPolicy.resolve(28_000L) { 4 })
+    }
+
+    @Test fun `same paused clock cannot preserve a position after active native rows change`() {
+        var activeRow = 1
+        assertEquals(1, AppleLyricsPlaybackMappingPolicy.resolve(5_000L) { activeRow })
+        activeRow = 4
+        assertEquals(4, AppleLyricsPlaybackMappingPolicy.resolve(5_000L) { activeRow })
+        assertNull(AppleLyricsPlaybackMappingPolicy.resolve(5_000L) { -1 })
+    }
+
     @Test
     fun `restore observes positioned target instead of first disappearing recycler child`() {
         val observed = AppleLyricsRestoreObservationPolicy.select(
@@ -89,9 +123,92 @@ class AppleLyricsScrollPresentationStateTest {
         )
 
     @Test
+    fun `previous adapter cannot supply a viewport after a track change`() {
+        val state = AppleLyricsScrollPresentationState()
+        val host = Any()
+        val adapterA = Any()
+        val adapterB = Any()
+        state.bindPresentedViewport(host, adapterA, "A", hasAttachedRows = false)
+        assertTrue(state.ownsViewport(host, adapterA, "A"))
+        assertTrue(state.acceptSnapshot(host, adapterA, "A", snapshot(35)))
+
+        state.clearSnapshot()
+        assertNull(state.snapshotFor("B"))
+        assertFalse(state.ownsViewport(host, adapterA, "B"))
+        assertFalse(state.acceptSnapshot(host, adapterA, "B", snapshot(35)))
+        // The native callback can return while the old adapter is still installed.
+        state.bindPresentedViewport(host, adapterA, "B", hasAttachedRows = false)
+        assertFalse(state.ownsViewport(host, adapterA, "B"))
+        state.bindPresentedViewport(host, adapterB, "B", hasAttachedRows = true)
+        assertFalse(state.ownsViewport(host, adapterB, "B"))
+        state.bindPresentedViewport(host, adapterB, "B", hasAttachedRows = false)
+        assertTrue(state.ownsViewport(host, adapterB, "B"))
+        assertFalse(state.ownsViewport(Any(), adapterB, "B"))
+        assertFalse(state.ownsViewport(host, adapterA, "B"))
+        assertTrue(state.acceptSnapshot(host, adapterB, "B", snapshot(2)))
+        state.bindPresentedViewport(host, Any(), "B", hasAttachedRows = false)
+        assertEquals(2, state.snapshotFor("B")?.firstPosition)
+        state.bindPresentedViewport(Any(), Any(), "B", hasAttachedRows = false)
+        assertNull(state.snapshotFor("B"))
+
+        state.clearSnapshot()
+        state.bindPresentedViewport(host, adapterA, "A", hasAttachedRows = false)
+        assertFalse(state.ownsViewport(host, adapterA, "A"))
+    }
+
+    @Test
+    fun `drag cancels only the matching hosts restore and releases the preserved anchor`() {
+        val state = AppleLyricsScrollPresentationState()
+        val host = Any()
+        val listener = Listener()
+        val adapter = Any()
+        state.bindPresentedViewport(host, adapter, "A", hasAttachedRows = false)
+        assertTrue(state.acceptSnapshot(host, adapter, "A", snapshot(35)))
+        state.markRestoreFailed("A")
+        state.beginPresentation()
+        state.setPendingRestore(host, listener)
+
+        assertNull(state.cancelRestoreForUserDrag(Any()))
+        assertTrue(state.ownsPendingRestore(listener))
+        assertSame(listener, state.cancelRestoreForUserDrag(host)?.listener)
+        assertFalse(state.ownsPendingRestore(listener))
+        assertFalse(state.isPresentationInFlight())
+        assertFalse(state.shouldPreserveTopSnapshot("A", 0))
+        assertNull(state.snapshotFor("A"))
+    }
+
+    private class LyricsAdapter {
+        val appliedRows = mutableListOf<Int>()
+        fun updateRow(index: Int) {
+            appliedRows.add(index)
+        }
+    }
+
+    @Test
+    fun `placeholder member failure leaves the row available for the replacement adapter`() {
+        val controller = AppleLyricsActiveLineUpdateController({ _, _ -> }, 500L) {}
+        fun tick(adapter: Any) = controller.applyIfChanged(adapter, 4) {
+            adapter.javaClass.getDeclaredMethod("updateRow", Int::class.javaPrimitiveType)
+                .invoke(adapter, 4)
+        }
+
+        assertTrue(tick(Any())?.exceptionOrNull() is NoSuchMethodException)
+        val first = LyricsAdapter()
+        assertTrue(tick(first)?.isSuccess == true)
+        assertNull(tick(first))
+        val replacement = LyricsAdapter()
+        assertTrue(tick(replacement)?.isSuccess == true)
+        assertEquals(listOf(4), first.appliedRows)
+        assertEquals(listOf(4), replacement.appliedRows)
+    }
+
+    @Test
     fun `snapshot is addressed by song and cleared on track change`() {
         val state = AppleLyricsScrollPresentationState()
-        state.acceptSnapshot("a", snapshot(3))
+        val host = Any()
+        val adapter = Any()
+        state.bindPresentedViewport(host, adapter, "a", hasAttachedRows = false)
+        assertTrue(state.acceptSnapshot(host, adapter, "a", snapshot(3)))
         assertEquals(3, state.snapshotFor("a")?.firstPosition)
         assertNull(state.snapshotFor("b"))
         state.clearSnapshot()
@@ -101,7 +218,10 @@ class AppleLyricsScrollPresentationStateTest {
     @Test
     fun `failed restore preserves the last good anchor until real scrolling returns`() {
         val state = AppleLyricsScrollPresentationState()
-        state.acceptSnapshot("a", snapshot(7))
+        val host = Any()
+        val adapter = Any()
+        state.bindPresentedViewport(host, adapter, "a", hasAttachedRows = false)
+        assertTrue(state.acceptSnapshot(host, adapter, "a", snapshot(7)))
         state.markRestoreFailed("a")
 
         // Apple's transient top layout must not overwrite the preserved anchor.
@@ -119,7 +239,10 @@ class AppleLyricsScrollPresentationStateTest {
         val state = AppleLyricsScrollPresentationState()
         state.markRestoreFailed("a")
         assertFalse(state.shouldPreserveTopSnapshot("a", 0))
-        state.acceptSnapshot("a", snapshot(0))
+        val host = Any()
+        val adapter = Any()
+        state.bindPresentedViewport(host, adapter, "a", hasAttachedRows = false)
+        assertTrue(state.acceptSnapshot(host, adapter, "a", snapshot(0)))
         assertFalse(state.shouldPreserveTopSnapshot("a", 0))
     }
 
@@ -132,6 +255,8 @@ class AppleLyricsScrollPresentationStateTest {
 
         state.setPendingRestore(host, first)
         assertTrue(state.isRestorePending())
+        assertTrue(state.ownsPendingRestore(first))
+        assertFalse(state.ownsPendingRestore(second))
         assertSame(first, state.takePendingRestore()?.listener)
         assertFalse(state.isRestorePending())
         assertNull(state.takePendingRestore())
@@ -145,6 +270,21 @@ class AppleLyricsScrollPresentationStateTest {
     }
 
     @Test
+    fun `pending restore owns its detach cleanup listener for explicit cancellation`() {
+        val state = AppleLyricsScrollPresentationState()
+        val host = Any()
+        val preDraw = Listener()
+        val onDetach = object : View.OnAttachStateChangeListener {
+            override fun onViewAttachedToWindow(view: View) = Unit
+            override fun onViewDetachedFromWindow(view: View) = Unit
+        }
+        state.setPendingRestore(host, preDraw, onDetach)
+        val pending = requireNotNull(state.takePendingRestore())
+        assertSame(preDraw, pending.listener)
+        assertSame(onDetach, pending.attachListener)
+    }
+
+    @Test
     fun `a newer restore replaces the previously pending one`() {
         val state = AppleLyricsScrollPresentationState()
         val host = Any()
@@ -153,6 +293,8 @@ class AppleLyricsScrollPresentationStateTest {
 
         state.setPendingRestore(host, first)
         state.setPendingRestore(host, second)
+        assertFalse(state.ownsPendingRestore(first))
+        assertTrue(state.ownsPendingRestore(second))
         // The older listener no longer owns the pending entry.
         assertFalse(state.clearPendingRestoreIf(first))
         assertTrue(state.isRestorePending())
@@ -202,7 +344,7 @@ class AppleLyricsScrollPresentationStateTest {
     }
 
     @Test
-    fun `stop invalidates only the applied row so a queued turn can still finish`() {
+    fun `stop invalidates applied row including a real no active lyrics gap`() {
         val posted = mutableListOf<Pair<Runnable, Long>>()
         var updates = 0
         val controller = AppleLyricsActiveLineUpdateController(
@@ -211,11 +353,16 @@ class AppleLyricsScrollPresentationStateTest {
             update = { updates++ },
         )
         controller.schedule()
-        controller.markApplied(4)
-        assertEquals(4, controller.lastAppliedIndex())
+        val adapter = Any()
+        assertTrue(controller.applyIfChanged(adapter, 4) {}?.isSuccess == true)
 
         controller.stop()
-        assertEquals(-1, controller.lastAppliedIndex())
+        // -1 is now the legitimate no-active-line state; the reset sentinel
+        // must be distinct so the next update will actually clear stale rows.
+        assertTrue(controller.applyIfChanged(adapter, -1) {}?.isSuccess == true)
+        assertNull(controller.applyIfChanged(adapter, -1) {})
+        controller.stop()
+        assertTrue(controller.applyIfChanged(adapter, -1) {}?.isSuccess == true)
         // The already queued callback is not cancelled by the original contract.
         posted.single().first.run()
         assertEquals(1, updates)

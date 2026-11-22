@@ -36,6 +36,26 @@ class AppleWordReadingAlignmentTest {
         assertEquals("다메", result.words.joinToString("") { it.hangul })
     }
 
+    @Test fun mixedJapaneseLineCanSplitLiteralKanaOnlyWhenIndependentReadingsRejoinExactly() {
+        val result = AppleWordReadingAlignment.align(
+            "駄目あい", listOf("駄目", "あ", "い"),
+            listOf(span(0, 2, "駄目", "다메"), span(2, 4, "あい", "아이")),
+            expectedHangul = "다메아이",
+        )
+        assertTrue(result is WordAlignmentResult.Verified)
+        assertEquals(listOf("다메", "아", "이"),
+            (result as WordAlignmentResult.Verified).words.map { it.hangul })
+    }
+
+    @Test fun kanaDigraphCannotBeSplitByNativeWordClocksWhenReadingsChange() {
+        val result = AppleWordReadingAlignment.align(
+            "駄目きゃ", listOf("駄目", "き", "ゃ"),
+            listOf(span(0, 2, "駄目", "다메"), span(2, 4, "きゃ", "캬")),
+            expectedHangul = "다메캬",
+        )
+        assertTrue(result is WordAlignmentResult.Grouped)
+    }
+
     @Test fun mixedWholeAndSplitTokensRetainExactSoundAndSourceOrder() {
         val result = AppleWordReadingAlignment.align(
             "駄目駄目脳みその中から",

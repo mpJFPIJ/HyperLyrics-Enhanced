@@ -17,6 +17,7 @@ import com.juren233.hyperlyricsenhanced.root.aitrans.AppleNativeReadingProjectio
 import com.juren233.hyperlyricsenhanced.root.aitrans.AppleWordReadingAlignment
 import com.juren233.hyperlyricsenhanced.root.aitrans.SourceReadingSpan
 import com.juren233.hyperlyricsenhanced.root.aitrans.WordAlignmentResult
+import java.lang.ref.WeakReference
 import kotlin.math.abs
 
 
@@ -299,6 +300,7 @@ private fun AppleLyricsSupplementHooks.rememberLineWideApplePronunciation(
     end: Long?,
     timedWords: List<AppleTimedSourceWord>,
     phoneticSpans: List<ApplePronunciationSourceToken>,
+    rawWords: List<String>,
 ) {
     val songId = currentAppleLyricsSongId?.takeIf(String::isNotBlank) ?: return
     val source = originalText?.takeIf(String::isNotBlank) ?: return
@@ -313,6 +315,11 @@ private fun AppleLyricsSupplementHooks.rememberLineWideApplePronunciation(
         lineEndMs = end,
         timedWords = timedWords,
         phoneticSpans = phoneticSpans,
+        nativeDisplay = if (AppleLyricTextTransform.isTransformEnabled()) {
+            AppleNativeReadingSourceDisplay.fromWords(source, rawWords) { word ->
+                AppleLyricTextTransform.transform(word) ?: word
+            }
+        } else null,
     )
     pronunciationState.rememberLineWide(payload, diagnostics.currentBindingContext()?.holder)
     if (lineWideRegisteredDiagnosticCount.incrementAndGet() <= 24) {
@@ -321,6 +328,102 @@ private fun AppleLyricsSupplementHooks.rememberLineWideApplePronunciation(
                 "readingChars=${pronunciation.length} " +
                 "timedWords=${timedWords.size} sourceSpans=${phoneticSpans.size} " +
                 "holderKnown=${if (diagnostics.currentBindingContext()?.holder != null) 1 else 0}",
+        )
+    }
+}
+
+/**
+ * Native layout can settle arbitrarily later than the first two delayed binds,
+ * and a split-screen resize can change Japanese row boundaries without a new
+ * adapter bind. Observe real source-cell layout instead of treating 156ms as a
+ * measurement deadline. Every pending callback is scoped to the exact holder
+ * binding generation and song/revision; weak references avoid retaining rows.
+ */
+internal class AppleNativePronunciationLayoutRecheck(
+    private val hooks: AppleLyricsSupplementHooks,
+) {
+    private data class Subscription(
+        val generation: Long,
+        val sourceViews: List<WeakReference<View>>,
+        val listener: View.OnLayoutChangeListener,
+    )
+
+    private val subscriptions = java.util.WeakHashMap<View, Subscription>()
+
+    fun forget(root: View) {
+        val subscription = subscriptions.remove(root) ?: return
+        subscription.sourceViews.forEach { reference ->
+            reference.get()?.removeOnLayoutChangeListener(subscription.listener)
+        }
+    }
+
+    fun observe(
+        root: View,
+        context: AppleLyricsBindingDiagnosticContext,
+        songId: String?,
+        revision: Long,
+    ) {
+        val generation = hooks.lineWideBindingGeneration[root] ?: return
+        if (subscriptions[root]?.generation == generation) return
+        forget(root)
+        val sourceViews = hooks.lineWidePronunciationRow.nativeSourceLayoutViews(root)
+        if (sourceViews.isEmpty()) return
+        val rootRef = WeakReference(root)
+        val holderRef = context.holder?.let { WeakReference(it) }
+        val hadHolder = context.holder != null
+        val adapterRef = context.adapterInstance?.let { WeakReference(it) }
+        val contextSongId = context.songId
+        val adapterClass = context.adapterClass
+        val adapterIdentity = context.adapterIdentity
+        val methodName = context.methodName
+        val position = context.position
+        val translationEnabled = context.translationEnabled
+        val pronunciationEnabled = context.pronunciationEnabled
+        var previousGeometry = hooks.lineWidePronunciationRow.nativeSourceGeometry(root)
+        var scheduled = false
+        val listener = View.OnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+            if (scheduled) return@OnLayoutChangeListener
+            val currentRoot = rootRef.get() ?: return@OnLayoutChangeListener
+            if (hooks.lineWideBindingGeneration[currentRoot] != generation ||
+                hooks.currentAppleLyricsSongId != songId ||
+                hooks.nativeOnlineTranslationStore.revision() != revision
+            ) return@OnLayoutChangeListener
+            scheduled = true
+            currentRoot.post {
+                scheduled = false
+                val stillCurrent = rootRef.get() ?: return@post
+                if (!stillCurrent.isAttachedToWindow ||
+                    hooks.lineWideBindingGeneration[stillCurrent] != generation ||
+                    hooks.currentAppleLyricsSongId != songId ||
+                    hooks.nativeOnlineTranslationStore.revision() != revision
+                ) return@post
+                // All native layout callbacks for this frame share one
+                // settled measurement. Do not rescan the whole flexbox once
+                // for every individual word child (quadratic UI-thread work).
+                val nextGeometry = hooks.lineWidePronunciationRow.nativeSourceGeometry(stillCurrent)
+                if (nextGeometry == previousGeometry) return@post
+                previousGeometry = nextGeometry
+                if (hadHolder && holderRef?.get() == null) return@post
+                val freshContext = AppleLyricsBindingDiagnosticContext(
+                    songId = contextSongId,
+                    adapterClass = adapterClass,
+                    adapterIdentity = adapterIdentity,
+                    methodName = methodName,
+                    holder = holderRef?.get(),
+                    position = position,
+                    translationEnabled = translationEnabled,
+                    pronunciationEnabled = pronunciationEnabled,
+                    adapterInstance = adapterRef?.get(),
+                )
+                // A layout recheck must not bind a second translation highlighter.
+                hooks.bindLineWidePronunciation(freshContext, stillCurrent, retry = 3)
+            }
+        }
+        sourceViews.forEach { it.addOnLayoutChangeListener(listener) }
+        subscriptions[root] = Subscription(
+            generation = generation,
+            sourceViews = sourceViews.map { WeakReference(it) },
+            listener = listener,
         )
     }
 }
@@ -356,9 +459,9 @@ internal fun AppleLyricsSupplementHooks.bindLineWidePronunciation(
     val trustedHolder = payload != null && payload === holderPayload
     val sourceMatches = payload == null ||
         (if (trustedHolder) AppleLineWidePronunciationRowPolicy.insertionIndex(
-            payload.sourceText, observedCells,
+            payload.displayedSourceText, observedCells,
         ) else AppleLineWidePronunciationRowPolicy.verifiedInsertionIndex(
-            payload.sourceText, observedCells,
+            payload.displayedSourceText, observedCells,
         )) != null
     val shown = lineWidePronunciationRow.bind(
         root = root,
@@ -397,9 +500,29 @@ internal fun AppleLyricsSupplementHooks.bindLineWidePronunciation(
             },
         )
     }
-    if (!shown && retry < 2 && root != null &&
-        (nativeOnlineTranslationStore.hasHangulPronunciation(songId) ||
-            nativeOnlineTranslationStore.hasAiHangulPronunciation(songId))
+    // The holder may bind before the flexbox has its measured line breaks.
+    // Even when the first single-block reading was shown, re-check native
+    // geometry after layout so wrapped Japanese receives per-row Hangul.
+    val canInterleave = payload?.let { candidate ->
+        candidate.phoneticSpans.isNotEmpty() ||
+            AppleInterleavedReadingPolicy.canDeriveKanaRows(
+                candidate.sourceText, candidate.pronunciation,
+            )
+    } == true
+    val needsLayoutRecheck = shown && canInterleave && retry < 2
+    // The flexbox or the payload can first appear during a delayed bind; the
+    // generation-scoped observer deduplicates repeated subscriptions.
+    if (root != null && canInterleave) {
+        lineWideLayoutRecheck.observe(root, context, songId, revision)
+    }
+    // A width change first removes our old full-width children so the native
+    // flexbox can measure source-only rows. That is a deliberate two-phase
+    // reflow and needs one more frame even if the observer was the caller.
+    val maxLayoutRetries = if (canInterleave) 5 else 2
+    if (retry < maxLayoutRetries && root != null &&
+        (needsLayoutRecheck || (!shown &&
+            (canInterleave || nativeOnlineTranslationStore.hasHangulPronunciation(songId) ||
+                nativeOnlineTranslationStore.hasAiHangulPronunciation(songId))))
     ) {
         val generation = lineWideBindingGeneration[root]
         root.postDelayed({
@@ -410,7 +533,7 @@ internal fun AppleLyricsSupplementHooks.bindLineWidePronunciation(
             ) {
                 bindLineWidePronunciation(context, root, retry + 1)
             }
-        }, if (retry == 0) 36L else 120L)
+        }, if (retry == 0) 36L else if (retry == 1) 120L else 40L)
     }
     AppleLyricUiRuntimeProbe.record(
         "native_lyric_holder",
@@ -637,9 +760,15 @@ private fun AppleLyricsSupplementHooks.hookApplePronunciationWordsGetter(
             hasValidOfficialPronunciation = hasCompatibleOfficialWords,
             hasOnlinePronunciation = mainTimingPronunciation != null,
         )
+        // A background-vocal getter may run during the foreground holder bind.
+        // Only the foreground track registers or promotes a line-wide reading.
+        if (onlineFallback && wordTrack != ApplePronunciationWordTrack.MAIN_LINE_TIMING) {
+            pronunciationState.forgetLineWide(
+                currentAppleLyricsSongId, originalText, diagnostics.currentBindingContext()?.holder,
+            )
+        }
         val resolvedWords = when (wordTrack) {
             ApplePronunciationWordTrack.OFFICIAL -> {
-                pronunciationState.forgetLineWide(currentAppleLyricsSongId, originalText)
                 original
             }
             ApplePronunciationWordTrack.MAIN_LINE_TIMING -> {
@@ -675,12 +804,14 @@ private fun AppleLyricsSupplementHooks.hookApplePronunciationWordsGetter(
                     mainTimingPronunciation == nativeOnlineTranslationStore.aiHangulPronunciation(
                         currentAppleLyricsSongId, begin, end, originalText,
                     )
-                val sourceSpans = if (isAiReading) {
-                    nativeOnlineTranslationStore.aiHangulPronunciationSpans(
-                        currentAppleLyricsSongId, begin!!, end!!, originalText,
-                    )
+                val sourceSpans = if (begin != null && end != null) {
+                    nativeOnlineTranslationStore.soundMatchedPronunciationSpans(
+                        currentAppleLyricsSongId, begin, end, originalText, pronunciation,
+                    ) ?: if (isAiReading) nativeOnlineTranslationStore.aiHangulPronunciationSpans(
+                        currentAppleLyricsSongId, begin, end, originalText,
+                    ) else null
                 } else null
-                val alignedWords = if (isAiReading) {
+                val alignedWords = if (!sourceSpans.isNullOrEmpty()) {
                     val fromSource = sourceSpans?.let { spans ->
                         AppleWordReadingAlignment.align(
                             original = originalText.orEmpty(),
@@ -711,7 +842,12 @@ private fun AppleLyricsSupplementHooks.hookApplePronunciationWordsGetter(
                         else -> null
                     }
                 } else null
-                val safeWordReadings = alignedWords?.takeIf { words ->
+                val candidateWords = alignedWords ?: if (sourceSpans.isNullOrEmpty()) {
+                    AppleInterleavedReadingPolicy.verifiedKanaWords(
+                        originalText.orEmpty(), nativeTexts, pronunciation,
+                    )
+                } else null
+                val safeWordReadings = candidateWords?.takeIf { words ->
                     ApplePronunciationPolicy.verifiedNativeSegments(
                         pronunciation, nativeTexts, words,
                     ) != null
@@ -732,18 +868,13 @@ private fun AppleLyricsSupplementHooks.hookApplePronunciationWordsGetter(
                         rememberLineWideApplePronunciation(
                             originalText = originalText,
                             pronunciation = pronunciation,
+                            rawWords = nativeTexts,
                             begin = begin,
                             end = end,
-                            timedWords = nativeMainWordTimings(mainWords).ifEmpty {
-                                // Some native Apple lines have only a real line
-                                // begin/end, without per-word times. Interpolate
-                                // Hangul across that genuine line window rather
-                                // than leaving a visible reading entirely static.
-                                if (begin != null && end != null && end > begin &&
-                                    !originalText.isNullOrBlank()
-                                ) listOf(AppleTimedSourceWord(originalText, begin, end))
-                                else emptyList()
-                            },
+                            // Missing native word clocks remain explicit gaps.
+                            // A separately supplied line clock must not become
+                            // a fake word covering the entire source string.
+                            timedWords = nativeMainWordTimings(mainWords),
                             phoneticSpans = sourceSpans.orEmpty().map { span ->
                                 ApplePronunciationSourceToken(
                                     sourceStart = span.start,
@@ -770,7 +901,9 @@ private fun AppleLyricsSupplementHooks.hookApplePronunciationWordsGetter(
                     }
                     empty ?: original
                 } else {
-                    pronunciationState.forgetLineWide(currentAppleLyricsSongId, originalText)
+                    if (onlineFallback) pronunciationState.forgetLineWide(
+                        currentAppleLyricsSongId, originalText, diagnostics.currentBindingContext()?.holder,
+                    )
                     mainWords?.takeIf { nativeVectorSize(it) > 0 }?.also { vector ->
                         registerApplePronunciationRenderPlan(
                             vector = vector,
@@ -780,14 +913,13 @@ private fun AppleLyricsSupplementHooks.hookApplePronunciationWordsGetter(
                         reportApplePronunciationRuntimeDiagnostic(
                             stage = "word_track_registered",
                             details = "words=${nativeVectorSize(vector)},mode=$presentation," +
-                                "aligned=${if (alignedWords != null) 1 else 0}",
+                                "aligned=${if (safeWordReadings != null) 1 else 0}",
                             dedupeKey = "word_track_registered:$methodName",
                         )
                     } ?: emptyApplePronunciationWords(original, mainWords) ?: original
                 }
             }
             ApplePronunciationWordTrack.HIDDEN -> {
-                pronunciationState.forgetLineWide(currentAppleLyricsSongId, originalText)
                 emptyApplePronunciationWords(
                     originalVector = original,
                     mainWords = null,
@@ -1017,23 +1149,29 @@ private fun AppleLyricsSupplementHooks.nativeMainWordTimings(vector: Any?): List
     AppleLyricTextTransform.withRawReads {
         nativeVectorItems(vector, limit = 256).mapNotNull { word ->
             runCatching {
-                if (lyricsNativeCall(
+                if (runCatching { lyricsNativeCall(
                         word, AppleMusicRuntimeMember.LYRICS_NATIVE_WHITESPACE_METHOD,
-                    ) as? Boolean == true
+                    ) as? Boolean }.getOrNull() == true
                 ) return@mapNotNull null
-                val begin = (
-                    lyricsNativeCall(word, AppleMusicRuntimeMember.LYRICS_NATIVE_BEGIN_METHOD)
-                        as? Number
-                    )?.toLong() ?: return@mapNotNull null
-                val duration = (
-                    lyricsNativeCall(word, AppleMusicRuntimeMember.LYRICS_NATIVE_DURATION_METHOD)
-                        as? Number
-                    )?.toLong() ?: return@mapNotNull null
                 val text = lyricsNativeCall(
                     word, AppleMusicRuntimeMember.LYRICS_NATIVE_LINE_TEXT_METHOD,
                 ) as? String ?: return@mapNotNull null
-                if (duration <= 0L || begin < 0L || text.isBlank()) return@mapNotNull null
-                AppleTimedSourceWord(text, begin, begin + duration)
+                if (text.isBlank()) return@mapNotNull null
+                // Keep the source cursor anchored even when this particular
+                // Apple word has no usable clock. Dropping the word shifts
+                // later identical/repeated words onto the wrong source span.
+                val begin = runCatching { (
+                    lyricsNativeCall(word, AppleMusicRuntimeMember.LYRICS_NATIVE_BEGIN_METHOD)
+                        as? Number
+                    )?.toLong() }.getOrNull() ?: -1L
+                val duration = runCatching { (
+                    lyricsNativeCall(word, AppleMusicRuntimeMember.LYRICS_NATIVE_DURATION_METHOD)
+                        as? Number
+                    )?.toLong() }.getOrNull() ?: -1L
+                val validClock = begin >= 0L && duration > 0L &&
+                    begin <= Long.MAX_VALUE - duration
+                AppleTimedSourceWord(text, if (validClock) begin else -1L,
+                    if (validClock) begin + duration else -1L)
             }.getOrNull()
         }
     }

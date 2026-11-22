@@ -38,6 +38,194 @@ internal object SourceReadingAssembler {
         "heart" to "하트", "world" to "월드", "dream" to "드림",
     )
 
+    /** Native text can omit whitespace/punctuation, but must never omit,
+     * reorder or duplicate any source letter. All ranges use UTF-16 offsets. */
+    private fun nativeWordRanges(source: String, nativeWords: List<String>): List<IntRange>? {
+        if (nativeWords.isEmpty()) return null
+        val ranges = mutableListOf<IntRange>()
+        var cursor = 0
+        var verifiedWords = 0
+        for (word in nativeWords) {
+            if (word.isEmpty()) continue
+            val index = source.indexOf(word, cursor)
+            if (index < cursor || index < 0 ||
+                source.substring(cursor, index).any(Char::isLetterOrDigit)
+            ) return null
+            cursor = index + word.length
+            ranges += index until cursor
+            if (word.any(Char::isLetterOrDigit)) {
+                verifiedWords++
+            }
+        }
+        if (verifiedWords < 2 || source.substring(cursor).any(Char::isLetterOrDigit)) return null
+        return ranges
+    }
+
+    /** The source offsets of authentic Apple word boundaries. */
+    private fun nativeWordBoundaries(source: String, nativeWords: List<String>): Set<Int>? {
+        val ranges = nativeWordRanges(source, nativeWords) ?: return null
+        val boundaries = mutableSetOf<Int>()
+        for (range in ranges) {
+            if (source.substring(range.first, range.last + 1).none(Char::isLetterOrDigit)) continue
+            boundaries += range.first
+            boundaries += range.last + 1
+        }
+        boundaries.remove(0)
+        boundaries.remove(source.length)
+        return boundaries.takeIf { it.isNotEmpty() }
+    }
+
+    /** Last evidence check when even A-mode cannot split a Kanji compound.
+     * Independently reading each authentic native cell is accepted ONLY when
+     * ALL dictionary-proven cells rejoin the existing full-context sound.
+     * Kana and grammatical particles are left to the contextual tokenizer.
+     * A small bounded budget prevents a difficult line causing N² analysis. */
+    fun refineCoarseNativeWords(
+        source: String,
+        nativeWords: List<String>,
+        fullLine: LineReadingResult,
+        analyzeCell: (String) -> LineReadingResult,
+    ): LineReadingResult {
+        if (fullLine.status != LineReadingStatus.COMPLETE) return fullLine
+        val ranges = nativeWordRanges(source, nativeWords) ?: return fullLine
+        var remainingProbes = 16
+        var changed = false
+        val refined = mutableListOf<SourceReadingSpan>()
+        for (span in fullLine.spans) {
+            val parts = ranges.filter { range ->
+                range.first >= span.sourceStart && range.last + 1 <= span.sourceEnd &&
+                    source.substring(range.first, range.last + 1).any(Char::isLetterOrDigit)
+            }
+            val completeCells = parts.size in 2..8 && parts.size <= remainingProbes &&
+                parts.first().first == span.sourceStart &&
+                parts.last().last + 1 == span.sourceEnd &&
+                parts.joinToString("") { range ->
+                    source.substring(range.first, range.last + 1)
+                        .filter(Char::isLetterOrDigit)
+                } == span.sourceText.filter(Char::isLetterOrDigit)
+            if (!completeCells || span.sourceText.none { it in '\u3400'..'\u9fff' }) {
+                refined += span
+                continue
+            }
+            remainingProbes -= parts.size
+            val cellProofs = parts.map { range ->
+                val surface = source.substring(range.first, range.last + 1)
+                val result = runCatching { analyzeCell(surface) }.getOrNull()
+                if (result == null || result.status != LineReadingStatus.COMPLETE || result.spans.isEmpty()) {
+                    null
+                } else {
+                    val coverage = BooleanArray(surface.length)
+                    var lastEnd = 0
+                    val verified = result.spans.all { token ->
+                        val valid = token.sourceStart >= lastEnd && token.sourceEnd > token.sourceStart &&
+                            token.sourceEnd <= surface.length &&
+                            surface.substring(token.sourceStart, token.sourceEnd) == token.sourceText &&
+                            token.hangul.any { it in '가'..'힣' }
+                        if (valid) {
+                            for (offset in token.sourceStart until token.sourceEnd) coverage[offset] = true
+                            lastEnd = token.sourceEnd
+                        }
+                        valid
+                    } && surface.indices.none { surface[it].isLetterOrDigit() && !coverage[it] }
+                    if (!verified) null else result.spans.map { token ->
+                        token.copy(
+                            sourceStart = range.first + token.sourceStart,
+                            sourceEnd = range.first + token.sourceEnd,
+                        )
+                    }
+                }
+            }
+            val pieces = cellProofs.filterNotNull().flatten()
+            val sameFullLineSound = cellProofs.size == cellProofs.count { it != null } &&
+                pieces.joinToString("") { it.hangul.filter { char -> char in '가'..'힣' } } ==
+                    span.hangul.filter { it in '가'..'힣' }
+            if (sameFullLineSound) {
+                refined += pieces
+                changed = true
+            } else refined += span
+        }
+        if (!changed || refined.joinToString("") { it.hangul.filter { c -> c in '가'..'힣' } } !=
+            fullLine.spans.joinToString("") { it.hangul.filter { c -> c in '가'..'힣' } }
+        ) return fullLine
+        return fullLine.copy(spans = refined)
+    }
+
+    /** A host TextView may soft-wrap *inside* one Apple native word. Its
+     * visual glyph boundaries are unknown while this offline analysis runs.
+     * Check potential Japanese character boundaries in advance using the
+     * same strict whole-context sound proof as real native word boundaries.
+     * Unicode code points, not UTF-16 halves, form the test cells. */
+    fun refinePotentialVisualLineBoundaries(
+        source: String,
+        fullLine: LineReadingResult,
+        analyzeCell: (String) -> LineReadingResult,
+    ): LineReadingResult {
+        if (fullLine.status != LineReadingStatus.COMPLETE ||
+            fullLine.spans.none { span ->
+                span.sourceEnd - span.sourceStart > 1 &&
+                    span.sourceText.any { it in '\u3400'..'\u9fff' }
+            }
+        ) return fullLine
+        val characterCells = mutableListOf<String>()
+        var cursor = 0
+        while (cursor < source.length) {
+            val width = Character.charCount(Character.codePointAt(source, cursor))
+            characterCells += source.substring(cursor, cursor + width)
+            cursor += width
+        }
+        return refineCoarseNativeWords(source, characterCells, fullLine, analyzeCell)
+    }
+
+    /** The C-mode dictionary often groups words that Apple times independently.
+     * B/A-mode is safe only if the ENTIRE source remains readable, every spoken
+     * Hangul syllable is unchanged and more boundaries match Apple's own words.
+     * This never estimates a Kanji reading or a karaoke syllable timestamp. */
+    fun retryModesForNativeWords(
+        source: String,
+        nativeWords: List<String>,
+        modeCount: Int,
+        tokenize: (Int) -> List<RawReadingToken>,
+    ): LineReadingResult {
+        val nativeBoundaries = nativeWordBoundaries(source, nativeWords)
+            ?: return retryModes(source, modeCount, tokenize)
+        fun score(reading: LineReadingResult): Int {
+            val splits = reading.spans.flatMap { listOf(it.sourceStart, it.sourceEnd) }.toSet()
+            return nativeBoundaries.count { it in splits }
+        }
+        var firstComplete: LineReadingResult? = null
+        var winner: LineReadingResult? = null
+        var bestScore = -1
+        var failure = LineReadingResult(null, emptyList(), LineReadingStatus.MISSING_UNSUPPORTED)
+        var bestVerifiedCoverage = -1
+        for (mode in 0 until modeCount) {
+            val candidate = runCatching { assemble(source, tokenize(mode)) }.getOrNull()
+                ?: continue
+            if (candidate.status != LineReadingStatus.COMPLETE) {
+                val coverage = candidate.spans.sumOf { it.sourceEnd - it.sourceStart }
+                if (coverage > bestVerifiedCoverage) {
+                    failure = candidate
+                    bestVerifiedCoverage = coverage
+                }
+                continue
+            }
+            if (firstComplete == null) firstComplete = candidate
+            val expected = firstComplete?.text.orEmpty().filter(Char::isLetterOrDigit)
+            if (candidate.text.orEmpty().filter(Char::isLetterOrDigit) != expected) continue
+            val candidateScore = score(candidate)
+            if (candidateScore > bestScore) {
+                winner = candidate
+                bestScore = candidateScore
+            }
+            // Every Apple word boundary is already verified: additional
+            // dictionary passes would waste CPU without improving karaoke.
+            if (bestScore == nativeBoundaries.size) break
+        }
+        val selected = winner ?: return failure
+        // Spacing stays identical to the earliest successful full-line read.
+        // Only proven source↔Hangul token boundaries are refined.
+        return selected.copy(text = firstComplete?.text)
+    }
+
     /** Sudachi's longer C-mode unknown compounds sometimes have valid B/A-mode readings. */
     fun retryModes(
         source: String,
@@ -46,11 +234,19 @@ internal object SourceReadingAssembler {
     ): LineReadingResult {
         if (source.isBlank()) return LineReadingResult(null, emptyList(), LineReadingStatus.EMPTY)
         var failure = LineReadingResult(null, emptyList(), LineReadingStatus.MISSING_UNSUPPORTED)
+        var bestVerifiedCoverage = -1
         for (mode in 0 until modeCount) {
             val analyzed = runCatching { assemble(source, tokenize(mode)) }.getOrNull()
                 ?: continue
             if (analyzed.status == LineReadingStatus.COMPLETE) return analyzed
-            failure = analyzed
+            // Never let the last, worse dictionary split destroy earlier *verified*
+            // source anchors. These spans are not a full-line pronunciation and
+            // must still be presented only through the explicitly partial path.
+            val verifiedCoverage = analyzed.spans.sumOf { it.sourceEnd - it.sourceStart }
+            if (verifiedCoverage > bestVerifiedCoverage) {
+                failure = analyzed
+                bestVerifiedCoverage = verifiedCoverage
+            }
         }
         return failure
     }

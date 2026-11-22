@@ -20,6 +20,14 @@ internal data class AiCachedSongRow(
     val updatedAt: Long,
 )
 
+/** All keys a request can depend on, including the translation it might enrich. */
+internal data class AiCacheScope(val groupId: String, val keys: Set<String>)
+
+internal data class AiCacheWriteTicket(val scope: AiCacheScope, val epoch: Long, val generation: Int) {
+    fun isCurrent(currentGeneration: Int, currentEpoch: Long): Boolean =
+        generation == currentGeneration && epoch == currentEpoch
+}
+
 internal object AiCachedSongCatalog {
     /** Independent of provider song IDs and AI model, but distinct for different lyric bodies. */
     fun groupId(title: String?, artist: String?, lines: List<String>): String {
@@ -36,8 +44,15 @@ internal object AiCachedSongCatalog {
     private fun groupOf(row: AiCachedSongRow): String =
         row.songGroupId ?: "legacy:${row.cacheKey}"
 
-    fun keysForGroup(groupId: String, rows: List<AiCachedSongRow>): Set<String> =
-        rows.asSequence().filter { groupOf(it) == groupId }.map { it.cacheKey }.toSet()
+    /** A legacy UI selection keeps identifying the same row after metadata backfill. */
+    fun deletionScope(groupId: String, rows: List<AiCachedSongRow>): AiCacheScope {
+        val canonicalGroup = if (groupId.startsWith("legacy:")) {
+            val key = groupId.removePrefix("legacy:")
+            rows.firstOrNull { it.cacheKey == key }?.songGroupId ?: groupId
+        } else groupId
+        val keys = rows.asSequence().filter { groupOf(it) == canonicalGroup }.map { it.cacheKey }.toSet()
+        return AiCacheScope(canonicalGroup, keys)
+    }
 
     fun groupRows(rows: List<AiCachedSongRow>): List<AiCachedSong> =
         rows.groupBy(::groupOf).map { (id, variants) ->
@@ -53,18 +68,20 @@ internal object AiCachedSongCatalog {
         }.sortedWith(compareByDescending<AiCachedSong> { it.updatedAt }.thenBy { it.groupId })
 }
 
-/** A per-song write fence: old network callbacks cannot revive deleted cache entries. */
+/** Only deleted identities need tombstones. One clock orders key and group deletions. */
 internal class AiCacheGroupEpochs {
-    private val values = mutableMapOf<String, Long>()
+    private var sequence = 0L
+    private val groupEpochs = mutableMapOf<String, Long>()
+    private val keyEpochs = mutableMapOf<String, Long>()
 
-    @Synchronized fun current(groupId: String): Long = values[groupId] ?: 0L
+    fun current(scope: AiCacheScope): Long = maxOf(
+        groupEpochs[scope.groupId] ?: 0L,
+        scope.keys.maxOfOrNull { keyEpochs[it] ?: 0L } ?: 0L,
+    )
 
-    @Synchronized fun advance(groupId: String): Long {
-        val next = current(groupId) + 1L
-        values[groupId] = next
-        return next
+    fun advance(scope: AiCacheScope) {
+        val epoch = ++sequence
+        groupEpochs[scope.groupId] = epoch
+        scope.keys.forEach { keyEpochs[it] = epoch }
     }
-
-    @Synchronized fun isCurrent(groupId: String, expected: Long): Boolean =
-        current(groupId) == expected
 }

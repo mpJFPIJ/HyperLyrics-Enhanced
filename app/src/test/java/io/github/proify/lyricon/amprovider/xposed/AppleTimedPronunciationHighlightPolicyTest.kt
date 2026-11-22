@@ -298,4 +298,127 @@ class AppleTimedPronunciationHighlightPolicyTest {
         assertEquals(listOf(0, 2), units.map { it.sourceWordIndex })
     }
 
+    @Test fun invalidClockStillConsumesItsRepeatedNativeWord() {
+        val units = AppleTimedPronunciationHighlightPolicy.units(
+            sourceText = "かなかな", pronunciation = "카나카나",
+            timedWords = listOf(
+                AppleTimedSourceWord("かな", -1, -1),
+                AppleTimedSourceWord("かな", 700, 900),
+            ),
+            phoneticSpans = listOf(
+                ApplePronunciationSourceToken(0, 2, "카나", "かな"),
+                ApplePronunciationSourceToken(2, 4, "카나", "かな"),
+            ),
+        )
+        assertEquals(listOf(AppleTimedReadingUnit(2, 4, 700, 900, 1)), units)
+    }
+
+    @Test fun missingRepeatedCellWithoutAnOffsetCannotTimeEitherOccurrence() {
+        assertTrue(AppleTimedPronunciationHighlightPolicy.units(
+            "かなかな", "카나카나", listOf(AppleTimedSourceWord("かな", 700, 900)),
+            listOf(
+                ApplePronunciationSourceToken(0, 2, "카나", "かな"),
+                ApplePronunciationSourceToken(2, 4, "카나", "かな"),
+            ),
+        ).isEmpty())
+    }
+
+    @Test fun sharedBoundariesPreserveManyToOneAndOneToManyClocksTogether() {
+        val units = AppleTimedPronunciationHighlightPolicy.units(
+            sourceText = "あい今日", pronunciation = "아 이 쿄",
+            timedWords = listOf(
+                AppleTimedSourceWord("あい", 100, 300),
+                AppleTimedSourceWord("今", 400, 500),
+                AppleTimedSourceWord("日", 500, 800),
+            ),
+            phoneticSpans = listOf(
+                ApplePronunciationSourceToken(0, 1, "아", "あ"),
+                ApplePronunciationSourceToken(1, 2, "이", "い"),
+                ApplePronunciationSourceToken(2, 4, "쿄", "今日"),
+            ),
+        )
+        assertEquals(listOf(
+            AppleTimedReadingUnit(0, 3, 100, 300, 0),
+            AppleTimedReadingUnit(4, 5, 400, 800),
+        ), units)
+    }
+
+    @Test fun sharedClockNeverBridgesAnUntimedCellOrARealPause() {
+        val sounds = listOf(
+            ApplePronunciationSourceToken(0, 2, "아시타", "明日"),
+            ApplePronunciationSourceToken(2, 3, "우", "う"),
+        )
+        for (middle in listOf(
+            AppleTimedSourceWord("日", -1, -1),
+            AppleTimedSourceWord("日", 500, 600),
+        )) {
+            val units = AppleTimedPronunciationHighlightPolicy.units(
+                "明日う", "아시타 우", listOf(
+                    AppleTimedSourceWord("明", 100, 200),
+                    middle,
+                    AppleTimedSourceWord("う", 700, 900),
+                ), sounds,
+            )
+            assertEquals(listOf(AppleTimedReadingUnit(4, 5, 700, 900, 2)), units)
+        }
+    }
+
+    @Test fun literalKanaKeepsVerifiedNativeClocksAcrossVisualRowsWithoutStoredSpans() {
+        val source = "かなかな"
+        val reading = "카나 카나"
+        val words = listOf(AppleTimedSourceWord("かな", 100, 250),
+            AppleTimedSourceWord("かな", 400, 550))
+        val rows = requireNotNull(AppleInterleavedReadingPolicy.plan(source, reading, listOf(
+            AppleVisualSourceCell("かな", 0, 20), AppleVisualSourceCell("かな", 25, 45),
+        ), emptyList()))
+        val units = AppleTimedPronunciationHighlightPolicy.units(source, reading, words)
+        assertEquals(listOf(
+            AppleTimedReadingUnit(0, 2, 100, 250, 0),
+            AppleTimedReadingUnit(3, 5, 400, 550, 1),
+        ), units)
+        assertEquals(listOf(AppleTimedReadingUnit(0, 2, 400, 550, 1)),
+            AppleInterleavedReadingTimingPolicy.project(listOf(units), reading, rows, rows[1]).single())
+        assertEquals(null, AppleTimedPronunciationHighlightPolicy.activeVariant(300, listOf(units)))
+    }
+
+    @Test fun literalKanaNeverInventsClocksAcrossNonAdditiveSourceBoundaries() {
+        for ((parts, reading) in listOf(
+            listOf("き", "ゃ") to "캬",
+            listOf("か", "ん") to "칸",
+            listOf("そ", "う") to "소",
+            listOf("か", "な") to "카너",
+        )) {
+            val words = parts.mapIndexed { index, part ->
+                AppleTimedSourceWord(part, 100L * index, 100L * index + 100)
+            }
+            val units = AppleTimedPronunciationHighlightPolicy.units(
+                parts.joinToString(""), reading, words,
+            )
+            assertTrue(units.single().isWholeLine)
+        }
+    }
+
+    @Test fun storedLiteralKanaSpanCanKeepTwoSeparateNativeWordClocks() {
+        val words = listOf(AppleTimedSourceWord("かな", 100, 200),
+            AppleTimedSourceWord("かな", 300, 400))
+        val spans = listOf(ApplePronunciationSourceToken(0, 4, "카나카나", "かなかな"))
+        val source = "かなかな"
+        val reading = "카나카나"
+        val units = AppleTimedPronunciationHighlightPolicy.units(source, reading, words, spans)
+        val rows = requireNotNull(AppleInterleavedReadingPolicy.plan(source, reading, listOf(
+            AppleVisualSourceCell("かな", 0, 20), AppleVisualSourceCell("かな", 25, 45),
+        ), spans))
+        assertEquals(listOf(AppleTimedReadingUnit(0, 2, 100, 200, 0)),
+            AppleInterleavedReadingTimingPolicy.project(listOf(units), reading, rows, rows[0]).single())
+        assertEquals(listOf(AppleTimedReadingUnit(0, 2, 300, 400, 1)),
+            AppleInterleavedReadingTimingPolicy.project(listOf(units), reading, rows, rows[1]).single())
+        assertEquals(null, AppleTimedPronunciationHighlightPolicy.activeVariant(250, listOf(units)))
+    }
+
+    @Test fun storedDigraphStillUsesOnlyItsIntactWindow() {
+        val units = AppleTimedPronunciationHighlightPolicy.units("きゃ", "캬", listOf(
+            AppleTimedSourceWord("き", 100, 200), AppleTimedSourceWord("ゃ", 200, 350),
+        ), listOf(ApplePronunciationSourceToken(0, 2, "캬", "きゃ")))
+        assertEquals(listOf(AppleTimedReadingUnit(0, 1, 100, 350)), units)
+    }
 }

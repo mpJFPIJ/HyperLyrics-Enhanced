@@ -19,7 +19,7 @@ internal data class AppleLyricsBlurRuntimeState(
     var adapterRef: WeakReference<Any>? = null,
     var recyclerHeight: Int = 0,
     var settledAnchorTopY: Float? = null,
-    /** Persistent user browsing / pending host recenter, not all native motion. */
+    /** Set only by a user drag. Programmatic requests never enter browse mode. */
     var suspendedForScroll: Boolean = false,
     /** Clear blur once per motion period without mistaking auto-follow for browsing. */
     var motionBlurCleared: Boolean = false,
@@ -51,6 +51,20 @@ internal object AppleLyricsScrollIntentPolicy {
         if (state.motionBlurCleared) return false
         state.motionBlurCleared = true
         return true
+    }
+
+    fun onViewportHeightChanged(state: AppleLyricsBlurRuntimeState, height: Int) {
+        if (height <= 0 || height == state.recyclerHeight) return
+        state.recyclerHeight = height
+        state.settledAnchorTopY = null
+        state.motionBlurCleared = false
+        state.pendingOutgoingPositions = emptySet()
+        state.outgoingZoneTopByPosition = emptyMap()
+    }
+
+    fun requestRecovery(state: AppleLyricsBlurRuntimeState, target: Int, nowMs: Long) {
+        state.pendingProgrammaticRecenterPosition = target
+        state.lastFollowRecoveryAtMs = nowMs
     }
 
     /** Idle clears only motion blur; user browsing still blocks forced recovery. */

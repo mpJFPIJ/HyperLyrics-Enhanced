@@ -13,7 +13,14 @@ internal object AppleMusicSourcePhonetics {
     fun attach(
         line: RichLyricLine,
         sourceText: String,
-        analyzed: LineReadingResult = LocalJapanesePronunciation.generateLine(sourceText),
+        analyzed: LineReadingResult = LocalJapanesePronunciation.generateLine(
+            sourceText,
+            analyzer = { fullLine ->
+                SudachiReadingEngine.analyzeLineForNativeWords(
+                    fullLine, line.words.orEmpty().map { it.text.orEmpty() },
+                )
+            },
+        ),
     ): RichLyricLine {
         if (analyzed.status != LineReadingStatus.COMPLETE) {
             // A single unknown Sudachi token must not erase a useful reading
@@ -73,12 +80,6 @@ internal object AppleMusicSourcePhonetics {
             RomanizationPolicy.sameHangulSounds(ai, verified) &&
                 spacingRespectsSourceTokenBoundaries(ai, analyzed.spans)
         } ?: verified
-        val alignment = AppleWordReadingAlignment.align(
-            original = sourceText,
-            appleWords = line.words.orEmpty().map { it.text.orEmpty() },
-            spans = analyzed.spans,
-            expectedHangul = reading,
-        )
         val projected = AppleNativeReadingProjection.project(
             original = sourceText,
             appleWords = line.words.orEmpty().map { it.text.orEmpty() },

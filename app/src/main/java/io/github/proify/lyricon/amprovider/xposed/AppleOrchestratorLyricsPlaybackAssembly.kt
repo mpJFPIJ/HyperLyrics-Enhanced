@@ -581,12 +581,18 @@ internal class AppleOrchestratorLyricsPlaybackAssembly(
         }.getOrNull()
         val activePlayer = helper?.player?.let { CompositeRemotePlayer(it, directPlayer) }
             ?: directPlayer
-        lyricRequester = LyricRequester(runtime.hookResolver, runtime.application)
+        lyricRequester = LyricRequester(
+            runtime.hookResolver,
+            runtime.application,
+            currentPlaybackVisitEpoch = missingLyricsHooks.supplementReceiptTrack::visitEpoch,
+        )
         PlaybackManager.init(
             remotePlayer = activePlayer,
             requester = lyricRequester,
             hookResolver = runtime.hookResolver,
             onMissingLyricsSupplementBuilt = lyricsHooks::receiveModuleMissingLyrics,
+            onSongVisitChanged = missingLyricsHooks.supplementReceiptTrack::observeSong,
+            currentPlaybackVisitEpoch = missingLyricsHooks.supplementReceiptTrack::visitEpoch,
             hasKnownNativeLyrics = missingLyricsHooks::hasKnownNativeLyricsFor,
         )
         playbackHooks.attachRemotePlayer(activePlayer)

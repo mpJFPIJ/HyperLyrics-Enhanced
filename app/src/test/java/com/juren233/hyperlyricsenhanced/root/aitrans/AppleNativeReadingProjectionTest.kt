@@ -75,6 +75,29 @@ class AppleNativeReadingProjectionTest {
         // pronunciation breakpoint, even when Apple times the two glyphs.
         assertNull(result)
     }
+
+    @Test fun verifiedKanaInsideMixedJapaneseLineUsesNativeWordClocksWithNoApproximation() {
+        val result = AppleNativeReadingProjection.project(
+            "駄目あい", listOf("駄目", "あ", "い"),
+            listOf(
+                SourceReadingSpan(0, 2, "駄目", "ダメ", "다메"),
+                SourceReadingSpan(2, 4, "あい", "アイ", "아이"),
+            ), "다메아이",
+        )
+        assertEquals(listOf("다메", "아", "이"), result?.words?.map { it.hangul })
+        assertFalse(result?.approximate ?: true)
+    }
+    @Test fun punctuationOnlyNativeCellsUseInvisiblePlaceholders() {
+        val result = AppleNativeReadingProjection.project(
+            "ラブ！と", listOf("ラブ", "！", "と"),
+            listOf(
+                SourceReadingSpan(0, 2, "ラブ", "ラブ", "라부"),
+                SourceReadingSpan(3, 4, "と", "ト", "토"),
+            ), "라부토",
+        )
+        assertEquals(listOf("라부", AppleNativeReadingProjection.EMPTY_PRONUNCIATION_CELL, "토"),
+            result?.words?.map { it.hangul })
+    }
     @Test fun oboreCannotLeaveItsFinalSyllableInTheNextNativeCell() {
         val result = AppleNativeReadingProjection.project(
             original = "溺れ死にそう",

@@ -8,11 +8,11 @@ package io.github.proify.lyricon.amprovider.xposed.lyrics
 
 import io.github.proify.lyricon.amprovider.xposed.AppleLyricsRestoreAnchor
 import io.github.proify.lyricon.amprovider.xposed.selectLyricsViewModelPlaybackItem
-import io.github.proify.lyricon.amprovider.xposed.selectAppleLyricsPlaybackAdapterPosition
 import io.github.proify.lyricon.amprovider.xposed.shouldKeepAppleLyricsScrollSnapshot
 import io.github.proify.lyricon.amprovider.xposed.shouldRouteAppleTranslationAsMissingSupplement
 import io.github.proify.lyricon.amprovider.xposed.shouldTreatModuleLyricsResultAsAppleNative
 import io.github.proify.lyricon.amprovider.xposed.selectAppleLyricsRestoreAnchor
+import io.github.proify.lyricon.amprovider.xposed.currentMissingLyricsSupplementSong
 import io.github.proify.lyricon.amprovider.xposed.visibleAdapterRange
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -22,6 +22,18 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AppleLyricsPresentationPolicyTest {
+    @Test
+    fun `translation button responds to current song and refuses a changing queue`() {
+        val supplementIds = setOf("old-song")
+        assertEquals(
+            "old-song",
+            currentMissingLyricsSupplementSong("old-song", "old-song") { it in supplementIds },
+        )
+        assertNull(currentMissingLyricsSupplementSong("old-song", "new-song") { it in supplementIds })
+        assertNull(currentMissingLyricsSupplementSong("new-song", "new-song") { it in supplementIds })
+        assertNull(currentMissingLyricsSupplementSong(null, null) { it in supplementIds })
+    }
+
     private open class LyricsPlaybackItem
     private class CurrentPlaybackItem : LyricsPlaybackItem()
     private class PreviousPlaybackItem : LyricsPlaybackItem()
@@ -237,25 +249,6 @@ class AppleLyricsPresentationPolicyTest {
                 currentActivePositions = emptySet(),
                 itemCount = 4,
                 playbackMappedPosition = 73,
-            ),
-        )
-    }
-
-    @Test
-    fun `playback mapping selects the latest begun logical line`() {
-        assertEquals(
-            1,
-            selectAppleLyricsPlaybackAdapterPosition(
-                lineBeginsMs = listOf(0L, 410L, 2869L, 5328L),
-                playbackPositionMs = 2500L,
-                itemCount = 5,
-            ),
-        )
-        assertNull(
-            selectAppleLyricsPlaybackAdapterPosition(
-                lineBeginsMs = listOf(353L, 6520L),
-                playbackPositionMs = 100L,
-                itemCount = 3,
             ),
         )
     }

@@ -53,7 +53,9 @@ class AppleMusicAiTranslationService : Service() {
     private val json = Json { ignoreUnknownKeys = true; coerceInputValues = true }
     private val requestLock = Any()
     private var requestJob: Job? = null
-    private var activeRequestKey: String? = null
+    private var activeDelivery: AppleMusicAiDelivery? = null
+    private var inferenceStarted = false
+    private var deliveryStarted = false
     private var activeReceiver: IAppleMusicTranslationReceiver? = null
 
     private fun sendProgress(
@@ -67,7 +69,7 @@ class AppleMusicAiTranslationService : Service() {
         )
         if (!enabled) return
         val receiver = synchronized(requestLock) {
-            if (serial == generation.get() && activeRequestKey == requestKey) activeReceiver else null
+            if (serial == generation.get() && activeDelivery?.semanticKey == requestKey) activeReceiver else null
         }
         runCatching {
             receiver?.onAiTranslationProgress(
@@ -106,7 +108,7 @@ class AppleMusicAiTranslationService : Service() {
                 requestJob?.cancel()
                 AITranslator.cancelActiveRequests()
                 requestJob = null
-                activeRequestKey = null
+                activeDelivery = null
                 activeReceiver = null
             }
             LogManager.i(TAG, "stage=request_cancelled")
@@ -136,7 +138,7 @@ class AppleMusicAiTranslationService : Service() {
                 requestJob?.cancel()
                 AITranslator.cancelActiveRequests()
                 requestJob = null
-                activeRequestKey = null
+                activeDelivery = null
                 activeReceiver = null
                 current
             }
@@ -185,11 +187,15 @@ class AppleMusicAiTranslationService : Service() {
                 LogManager.w(TAG, "stage=song_decode_failed type=${error.javaClass.simpleName}")
                 return
             }
-            val requestKey = AppleMusicAiRequestIdentity.key(song)
+            val delivery = AppleMusicAiDelivery(song)
+            val requestKey = delivery.semanticKey
             synchronized(requestLock) {
-                if (requestKey == activeRequestKey && requestJob?.isActive == true) {
-                    // Only the receiver changes; original lyrics and line indexes
-                    // are identical, so one translation can serve both requests.
+                val canReuse = delivery == activeDelivery ||
+                    (inferenceStarted && activeDelivery?.canShareInference(delivery) == true)
+                if (canReuse && !deliveryStarted && requestJob?.isActive == true) {
+                    // The in-flight result carries indexed meanings/readings. Native timing and
+                    // words are attached only after choosing the latest matching delivery.
+                    activeDelivery = delivery
                     activeReceiver = receiver
                     LogManager.i(TAG, "stage=request_coalesced lines=${song.lyrics.orEmpty().size}")
                     return
@@ -197,10 +203,12 @@ class AppleMusicAiTranslationService : Service() {
 
                 val serial = generation.incrementAndGet()
                 requestJob?.cancel()
-                // The scheduler has an independent IO scope: cancelling just
-                // this Binder coroutine leaves the HTTP request running.
-                AITranslator.cancelActiveRequests()
-                activeRequestKey = requestKey
+                // The HTTP result is indexed by source text. A revised clock or provider overlay
+                // needs a fresh delivery, while its translation can still join the shared request.
+                if (activeDelivery?.semanticKey != requestKey) AITranslator.cancelActiveRequests()
+                activeDelivery = delivery
+                inferenceStarted = false
+                deliveryStarted = false
                 activeReceiver = receiver
                 requestJob = scope.launch {
                     try {
@@ -233,21 +241,23 @@ class AppleMusicAiTranslationService : Service() {
                             LogManager.i(TAG, "stage=korean_original_skipped")
                             return@launch
                         }
-                        val hasExisting = song.lyrics.orEmpty()
-                            .any { !it.translation.isNullOrBlank() }
+                        val hasMissingTranslation = delivery.hasMissingTranslation
+                        val hasPronunciationWork = delivery.hasPronunciationWork
                         if (!AppleMusicAiTranslationPolicy.shouldTranslate(
                                 enabled = enabled,
                                 hasLyrics = !song.lyrics.isNullOrEmpty(),
-                                hasExistingTranslation = hasExisting,
+                                hasMissingTranslation = hasMissingTranslation,
                                 skipExisting = skipExisting,
                                 forceOverride = forceOverride,
+                                hasPronunciationWork = hasPronunciationWork,
                             )
                         ) {
                             sendProgress(serial, requestKey, AiTranslationProgress("skipped"))
                             LogManager.i(
                                 TAG, "stage=request_skipped enabled=$enabled " +
                                     "hasLyrics=${!song.lyrics.isNullOrEmpty()} " +
-                                    "hasExisting=$hasExisting skipExisting=$skipExisting"
+                                    "hasMissingTranslation=$hasMissingTranslation " +
+                                    "hasPronunciationWork=$hasPronunciationWork skipExisting=$skipExisting"
                             )
                             return@launch
                         }
@@ -259,30 +269,30 @@ class AppleMusicAiTranslationService : Service() {
                             sendProgress(serial, requestKey, AiTranslationProgress("pronouncing"))
                             LogManager.w(TAG, "stage=config_incomplete_local_phonetics_only")
                         }
+                        synchronized(requestLock) {
+                            if (serial != generation.get()) return@launch
+                            inferenceStarted = true
+                        }
                         LogManager.i(TAG, "stage=translation_started")
                         val translated = AITranslator.translateSongSync(
-                            song = song,
+                            song = AppleMusicAiTranslationPolicy.sourceOnly(song),
                             configs = config,
                             forceOverride = forceOverride,
                             onProgress = { progress -> sendProgress(serial, requestKey, progress) },
                         )
-                        if (serial != generation.get()) {
-                            LogManager.i(TAG, "stage=result_stale")
-                            return@launch
+                        val snapshot = synchronized(requestLock) {
+                            if (serial != generation.get()) return@launch
+                            deliveryStarted = true
+                            activeDelivery ?: return@launch
                         }
-                        // The AI applicator can retain an incoming third-party
-                        // reading. That is not AI output, so do not tag it as
-                        // such in the standalone callback. The receiver keeps
-                        // any provider reading separately for explicit source
-                        // selection, while AI-first displays only fresh Hangul.
-                        val aiOnly = translated.copy(lyrics = translated.lyrics?.mapIndexed { index, line ->
-                            val sourceText = song.lyrics?.getOrNull(index)?.text ?: line.text.orEmpty()
-                            AppleMusicSourcePhonetics.attach(line, sourceText)
+                        val generated = translated.lyrics.orEmpty()
+                        val resultSong = snapshot.song.copy(lyrics = snapshot.song.lyrics?.mapIndexed { index, source ->
+                            val latest = AppleMusicAiTranslationPolicy.applyGeneratedFields(source, generated[index])
+                            val pronounced = AppleMusicSourcePhonetics.attach(latest, source.text.orEmpty())
+                            AppleMusicAiTranslationPolicy.transportLine(source, pronounced, forceOverride)
                         })
-                        val pronouncedLines = aiOnly.lyrics.orEmpty()
-                            .count { !it.roma.isNullOrBlank() }
-                        val translatedLines = aiOnly.lyrics.orEmpty()
-                            .count { !it.translation.isNullOrBlank() }
+                        val pronouncedLines = resultSong.lyrics.orEmpty().count { !it.roma.isNullOrBlank() }
+                        val translatedLines = generated.count { !it.translation.isNullOrBlank() }
                         if (!AppleMusicAiTranslationPolicy.shouldDeliverResult(
                                 translatedLines = translatedLines,
                                 pronouncedLines = pronouncedLines,
@@ -298,29 +308,28 @@ class AppleMusicAiTranslationService : Service() {
                             "stage=translation_completed lines=$translatedLines pronouncedLines=$pronouncedLines"
                         )
                         LogManager.i(TAG, LyricBuildIdentity.safeStage("reading_finished", mapOf(
-                            "originalLines" to aiOnly.lyrics.orEmpty().size,
+                            "originalLines" to resultSong.lyrics.orEmpty().size,
                             "translationLines" to translatedLines,
                             "readingLines" to pronouncedLines,
-                            "alignedLines" to aiOnly.lyrics.orEmpty().count { it.pronunciationStatus == "ALIGNED" },
-                            "lineWideLines" to aiOnly.lyrics.orEmpty().count { it.pronunciationStatus == "LINE_WIDE" },
-                            "missingLines" to aiOnly.lyrics.orEmpty().count {
+                            "alignedLines" to resultSong.lyrics.orEmpty().count { it.pronunciationStatus == "ALIGNED" },
+                            "lineWideLines" to resultSong.lyrics.orEmpty().count { it.pronunciationStatus == "LINE_WIDE" },
+                            "missingLines" to resultSong.lyrics.orEmpty().count {
                                 it.pronunciationStatus == "MISSING_UNSUPPORTED"
                             },
                         )))
 
-                        val result = json.encodeToString(aiOnly)
+                        val result = json.encodeToString(resultSong)
                             .toByteArray(Charsets.UTF_8).deflate()
                         if (result.size > MAX_COMPRESSED_BYTES ||
                             serial != generation.get()
                         ) return@launch
                         // Deliver to the most recent bound receiver for this song.
                         val target = synchronized(requestLock) {
-                            if (serial == generation.get() && activeRequestKey == requestKey)
-                                activeReceiver else null
+                            if (serial == generation.get() && activeDelivery === snapshot) activeReceiver else null
                         }
                         target?.onOnlineTranslationResult(result)
                         if (target != null) {
-                            val expectedReadingLines = aiOnly.lyrics.orEmpty().count { line ->
+                            val expectedReadingLines = resultSong.lyrics.orEmpty().count { line ->
                                 line.text.orEmpty().any(Char::isLetter)
                             }
                             sendProgress(serial, requestKey, AiTranslationProgress(
@@ -342,8 +351,8 @@ class AppleMusicAiTranslationService : Service() {
                         DiagnosticUploadScheduler.onTranslationFailure(this@AppleMusicAiTranslationService)
                     } finally {
                         synchronized(requestLock) {
-                            if (serial == generation.get() && activeRequestKey == requestKey) {
-                                activeRequestKey = null
+                            if (serial == generation.get() && activeDelivery?.semanticKey == requestKey) {
+                                activeDelivery = null
                                 activeReceiver = null
                                 requestJob = null
                             }

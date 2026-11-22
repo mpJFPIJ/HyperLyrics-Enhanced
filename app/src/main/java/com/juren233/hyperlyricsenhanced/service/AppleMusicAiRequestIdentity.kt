@@ -1,6 +1,18 @@
 package com.juren233.hyperlyricsenhanced.service
 
 import com.juren233.hyperlyricsenhanced.lyric.model.Song
+import com.juren233.hyperlyricsenhanced.root.aitrans.AIPronunciationPolicy
+
+/** Decoded service inputs are private snapshots. Equality includes the native line and word clocks. */
+internal data class AppleMusicAiDelivery(val song: Song) {
+    val semanticKey: String = AppleMusicAiRequestIdentity.key(song)
+    val hasMissingTranslation = song.lyrics.orEmpty().any { it.translation.isNullOrBlank() }
+    val hasPronunciationWork = AIPronunciationPolicy.shouldEnrich(song)
+
+    fun canShareInference(other: AppleMusicAiDelivery): Boolean =
+        semanticKey == other.semanticKey && hasPronunciationWork == other.hasPronunciationWork &&
+            (hasPronunciationWork || hasMissingTranslation == other.hasMissingTranslation)
+}
 
 /**
  * In-flight request de-duplication only. Metadata, translations and existing

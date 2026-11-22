@@ -36,8 +36,13 @@ internal object AppleNativeReadingProjection {
     ): Result? {
         if (appleWords.count { word -> word.any(Char::isLetterOrDigit) } < 2) return null
         if (spans.isNotEmpty()) {
-            return project(original, appleWords, spans, pronunciation)
+            val anchored = project(original, appleWords, spans, pronunciation)
                 ?: projectAnchored(original, appleWords, spans, pronunciation)
+            if (anchored != null) return anchored
+            // Incomplete provider spans can disagree with a separately
+            // supplied *complete* line pronunciation. Never call those spans
+            // verified, but don't make one bad token strand every Korean row
+            // below the Japanese paragraph. Rebuild from source-matched cells.
         }
         // Without a dictionary map, entire native KANA words still have a
         // deterministic phonetic reading. Pin only uniquely occurring sounds

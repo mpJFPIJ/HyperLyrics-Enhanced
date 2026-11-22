@@ -70,6 +70,17 @@ class AppleNativeReadingProjectionTest {
         assertEquals(listOf("키미", "노", "나와"), native?.words?.map { it.hangul })
     }
 
+    @Test fun aContradictoryPartialDictionarySpanCannotForceTheWholeReadingToTheBottom() {
+        val native = AppleNativeReadingProjection.projectForNativeKaraoke(
+            "君の名は", listOf("君", "の", "名は"),
+            listOf(SourceReadingSpan(0, 1, "君", "キミ", "미소")), "키미노나와",
+        )
+        // Wrong spans must not be trusted as verified, but the complete
+        // source-matching Korean reading can still use native word clocks.
+        assertEquals(listOf("키미", "노", "나와"), native?.words?.map { it.hangul })
+        assertTrue(native?.approximate == true)
+    }
+
     @Test fun withoutDictionarySpansNativeWordsStillAvoidAWholeLineHangulBlock() {
         val native = AppleNativeReadingProjection.projectForNativeKaraoke(
             "やたらとしんどい恋", listOf("やたら", "と", "しんどい", "恋"),

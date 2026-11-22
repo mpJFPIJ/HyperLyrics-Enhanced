@@ -19,10 +19,10 @@ class LyricRequester internal constructor(
 
     fun requestedMediaId(instance: Any?): String? = requestOwner.requestedSongId(instance)
 
-    fun receipt(instance: Any?): AppleModuleLyricsRequestOwner.Receipt? =
+    internal fun receipt(instance: Any?): AppleModuleLyricsRequestOwner.Receipt? =
         requestOwner.receipt(instance)
 
-    fun isCurrentReceipt(
+    internal fun isCurrentReceipt(
         receipt: AppleModuleLyricsRequestOwner.Receipt?,
         resultSongId: String?,
         activeVisitEpoch: Long,

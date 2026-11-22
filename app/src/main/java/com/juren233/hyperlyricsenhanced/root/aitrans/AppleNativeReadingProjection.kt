@@ -16,6 +16,33 @@ internal object AppleNativeReadingProjection {
     data class Result(val words: List<LyricWordPronunciation>, val approximate: Boolean)
 
     /**
+     * Prefer the native lyric word renderer so a wrapped line never becomes
+     * several Japanese rows followed by one unrelated block of Hangul.
+     *
+     * An independently verified source boundary always wins. When Sudachi
+     * groups several native words, anchor the group's entire verified sound
+     * before distributing its still-ambiguous internal boundary. With no
+     * spans, the original word clocks are safer visually than a single
+     * sentence-wide highlight, but the resulting segmentation is explicitly
+     * approximate. Never borrow a reading from another source line, or guess
+     * inside a single internally wrapped native cell: that case still needs
+     * its separate measured-line treatment.
+     */
+    fun projectForNativeKaraoke(
+        original: String,
+        appleWords: List<String>,
+        spans: List<SourceReadingSpan>,
+        pronunciation: String,
+    ): Result? {
+        if (appleWords.count { word -> word.any(Char::isLetterOrDigit) } < 2) return null
+        if (spans.isNotEmpty()) {
+            return project(original, appleWords, spans, pronunciation)
+                ?: projectAnchored(original, appleWords, spans, pronunciation)
+        }
+        return projectApproximate(original, appleWords, pronunciation)
+    }
+
+    /**
      * Last-resort karaoke-cell mapping when the song has a complete Hangul
      * line but Sudachi/Apple source spans are unavailable. This is an
      * explicit approximation: original native word timestamps remain intact.

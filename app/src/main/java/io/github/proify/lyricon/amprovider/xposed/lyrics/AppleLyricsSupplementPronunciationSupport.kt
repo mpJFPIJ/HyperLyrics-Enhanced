@@ -14,9 +14,7 @@ import com.juren233.hyperlyricsenhanced.common.RootConstants
 import com.juren233.hyperlyricsenhanced.common.lyric.RomanizationPolicy
 import com.juren233.hyperlyricsenhanced.root.aitrans.JapaneseRomajiToHangul
 import com.juren233.hyperlyricsenhanced.root.aitrans.AppleNativeReadingProjection
-import com.juren233.hyperlyricsenhanced.root.aitrans.AppleWordReadingAlignment
 import com.juren233.hyperlyricsenhanced.root.aitrans.SourceReadingSpan
-import com.juren233.hyperlyricsenhanced.root.aitrans.WordAlignmentResult
 import java.lang.ref.WeakReference
 import kotlin.math.abs
 
@@ -811,38 +809,15 @@ private fun AppleLyricsSupplementHooks.hookApplePronunciationWordsGetter(
                         currentAppleLyricsSongId, begin, end, originalText,
                     ) else null
                 } else null
-                val alignedWords = if (!sourceSpans.isNullOrEmpty()) {
-                    val fromSource = sourceSpans?.let { spans ->
-                        AppleWordReadingAlignment.align(
-                            original = originalText.orEmpty(),
-                            appleWords = nativeTexts,
-                            spans = spans.map { span ->
-                                SourceReadingSpan(
-                                    span.start, span.end, span.source, "", span.hangul,
-                                )
-                            },
-                            expectedHangul = pronunciation,
-                        )
-                    }
-                    val projected = sourceSpans?.let { spans ->
-                        AppleNativeReadingProjection.project(
-                            original = originalText.orEmpty(),
-                            appleWords = nativeTexts,
-                            spans = spans.map {
-                                SourceReadingSpan(it.start, it.end, it.source, "", it.hangul)
-                            },
-                            expectedHangul = pronunciation,
-                        )
-                    }
-                    projected?.words ?: when (fromSource) {
-                        is WordAlignmentResult.Verified -> fromSource.words
-                        // Grouped readings have no independent timestamp for
-                        // the continuation cells. Do not revive cached,
-                        // proportionally divided phonetics as "verified".
-                        else -> null
-                    }
-                } else null
-                val candidateWords = alignedWords ?: if (sourceSpans.isNullOrEmpty()) {
+                val nativeProjection = AppleNativeReadingProjection.projectForNativeKaraoke(
+                    original = originalText.orEmpty(),
+                    appleWords = nativeTexts,
+                    spans = sourceSpans.orEmpty().map { span ->
+                        SourceReadingSpan(span.start, span.end, span.source, "", span.hangul)
+                    },
+                    pronunciation = pronunciation,
+                )
+                val candidateWords = nativeProjection?.words ?: if (sourceSpans.isNullOrEmpty()) {
                     AppleInterleavedReadingPolicy.verifiedKanaWords(
                         originalText.orEmpty(), nativeTexts, pronunciation,
                     )
@@ -851,6 +826,14 @@ private fun AppleLyricsSupplementHooks.hookApplePronunciationWordsGetter(
                     ApplePronunciationPolicy.verifiedNativeSegments(
                         pronunciation, nativeTexts, words,
                     ) != null
+                }
+                if (nativeProjection?.approximate == true && safeWordReadings != null) {
+                    reportApplePronunciationRuntimeDiagnostic(
+                        stage = "native_reading_approximate_fallback",
+                        details = "words=${nativeTexts.size},sourceSpans=${sourceSpans?.size ?: 0}," +
+                            "readingChars=${pronunciation.length}",
+                        dedupeKey = "native_reading_approximate_fallback:$methodName",
+                    )
                 }
                 // Reuse Apple's own native pronunciation-cell renderer whenever
                 // every original word has a verified Hangul counterpart. This

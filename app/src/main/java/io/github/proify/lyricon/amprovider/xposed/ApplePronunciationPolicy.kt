@@ -23,10 +23,14 @@ internal object ApplePronunciationPolicy {
                     // grouped morpheme or punctuation gap as a timed word.
                     reading.hangul.isNotBlank() &&
                     (RomanizationPolicy.isHangulPronunciation(reading.hangul) ||
-                        (source.none(Char::isLetterOrDigit) &&
-                            reading.hangul ==
-                                com.juren233.hyperlyricsenhanced.root.aitrans
-                                    .AppleNativeReadingProjection.EMPTY_PRONUNCIATION_CELL))
+                        // An explicitly invisible cell produced by the
+                        // position-preserving projection is different from an
+                        // accidentally empty grouped morpheme. Apple must not
+                        // reveal its original Japanese glyph in a silent
+                        // pronunciation cell, including a long-vowel mark.
+                        reading.hangul ==
+                            com.juren233.hyperlyricsenhanced.root.aitrans
+                                .AppleNativeReadingProjection.EMPTY_PRONUNCIATION_CELL)
             }
         ) return null
         return alignedWords.map { it.hangul }.takeIf {

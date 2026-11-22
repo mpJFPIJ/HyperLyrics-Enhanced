@@ -45,6 +45,48 @@ class AppleNativeReadingProjectionTest {
         assertEquals("키미노나와", result?.words?.joinToString("") { it.hangul }
             ?.replace(AppleNativeReadingProjection.EMPTY_PRONUNCIATION_CELL, ""))
     }
+    @Test fun mixedKanjiCompoundThatCrossesNativeCellsStillUsesNativeKaraoke() {
+        val spans = listOf(
+            SourceReadingSpan(0, 2, "駄目", "ダメ", "다메"),
+            SourceReadingSpan(2, 3, "脳", "ノウ", "노"),
+            SourceReadingSpan(3, 5, "みそ", "ミソ", "미소"),
+        )
+        // A compound is not independently proved at Apple's boundary. Keep
+        // the source-anchored reading on Apple's *actual* word clocks, rather
+        // than painting all Hangul after the last Japanese visual row.
+        val native = AppleNativeReadingProjection.projectForNativeKaraoke(
+            "駄目脳みそ", listOf("駄", "目", "脳", "みそ"), spans, "다메노미소",
+        )
+        assertEquals(listOf("다", "메", "노", "미소"),
+            native?.words?.map { it.hangul })
+        assertTrue(native?.approximate == true)
+    }
+
+    @Test fun partialSourceAnchorsKeepKanjiPronunciationOnTheCorrectNativeWord() {
+        val native = AppleNativeReadingProjection.projectForNativeKaraoke(
+            "君の名は", listOf("君", "の", "名は"),
+            listOf(SourceReadingSpan(0, 1, "君", "キミ", "키미")), "키미노나와",
+        )
+        assertEquals(listOf("키미", "노", "나와"), native?.words?.map { it.hangul })
+    }
+
+    @Test fun withoutDictionarySpansNativeWordsStillAvoidAWholeLineHangulBlock() {
+        val native = AppleNativeReadingProjection.projectForNativeKaraoke(
+            "やたらとしんどい恋", listOf("やたら", "と", "しんどい", "恋"),
+            emptyList(), "야타라토신도이코이",
+        )
+        assertEquals(4, native?.words?.size)
+        assertEquals("야타라토신도이코이", native?.words?.joinToString("") { it.hangul })
+        assertTrue(native?.approximate == true)
+        assertNull(AppleNativeReadingProjection.projectForNativeKaraoke(
+            "やたらとしんどい恋", listOf("やたらとしんどい恋"),
+            emptyList(), "야타라토신도이코이",
+        ))
+        assertNull(AppleNativeReadingProjection.projectForNativeKaraoke(
+            "やたらとしんどい恋", listOf("別の", "歌"),
+            emptyList(), "야타라토신도이코이",
+        ))
+    }
     @Test fun anUnrelatedSourceCannotReceiveARecycledJapanesePronunciation() {
         assertNull(AppleNativeReadingProjection.projectApproximate(
             original = "君の名は", appleWords = listOf("別の", "歌"),

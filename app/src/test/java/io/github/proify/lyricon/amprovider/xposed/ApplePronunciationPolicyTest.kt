@@ -114,6 +114,21 @@ class ApplePronunciationPolicyTest {
             "다메노미소", nativeWords, mapped.words,
         ))
     }
+    @Test fun `explicit invisible approximate cells keep karaoke word layout without leaking Japanese`() {
+        val words = listOf(
+            com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation("ダ", "다"),
+            com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation("ー", "\u200B"),
+            com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation("リン", "린"),
+        )
+        assertEquals(listOf("다", "\u200B", "린"),
+            ApplePronunciationPolicy.verifiedNativeSegments(
+                "다린", listOf("ダ", "ー", "リン"), words,
+            ))
+        assertEquals(ApplePronunciationPresentationMode.ALIGNED_WORDS,
+            ApplePronunciationPolicy.presentationMode(
+                "다린", false, listOf("ダ", "ー", "リン"), words,
+            ))
+    }
     @Test
     fun `refreshes official pronunciation when it arrives after the first presentation`() {
         assertEquals(

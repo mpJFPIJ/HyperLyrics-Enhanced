@@ -31,6 +31,11 @@ class AppleInterleavedReadingPolicyTest {
         assertEquals(listOf(3, 4), result.map { it.insertAfterSourceCell })
         assertEquals(listOf("도코 바치 히라이테 오보레", "시니소"),
             result.map { it.text })
+        assertEquals(pronunciation.substring(result[0].readingStart, result[0].readingEnd),
+            result[0].text)
+        assertEquals(pronunciation.substring(result[1].readingStart, result[1].readingEnd),
+            result[1].text)
+        assertEquals(pronunciation.indexOf("시니소"), result[1].readingStart)
         assertEquals("도코바치히라이테오보레시니소",
             result.joinToString("") { it.text }.filter(Char::isLetterOrDigit))
     }
@@ -81,5 +86,39 @@ class AppleInterleavedReadingPolicyTest {
                 AppleVisualSourceCell("瞳孔バチ", 0, 0),
                 AppleVisualSourceCell("開いて溺れ死にそう", 0, 0),
             ), spans))
+    }
+
+    @Test fun `three Japanese rows produce three immediate reading placements`() {
+        val result = requireNotNull(AppleInterleavedReadingPolicy.plan(
+            "あいうえお", "아 이 우 에 오",
+            listOf(
+                AppleVisualSourceCell("あい", 0, 42),
+                AppleVisualSourceCell("うえ", 51, 94),
+                AppleVisualSourceCell("お", 105, 148),
+            ),
+            listOf(
+                ApplePronunciationSourceToken(0, 1, "아", "あ"),
+                ApplePronunciationSourceToken(1, 2, "이", "い"),
+                ApplePronunciationSourceToken(2, 3, "우", "う"),
+                ApplePronunciationSourceToken(3, 4, "에", "え"),
+                ApplePronunciationSourceToken(4, 5, "오", "お"),
+            ),
+        ))
+        assertEquals(listOf(0, 1, 2), result.map { it.insertAfterSourceCell })
+        assertEquals(listOf("아 이", "우 에", "오"), result.map { it.text })
+    }
+
+    @Test fun `native baseline jitter inside a row does not create false rows`() {
+        val result = requireNotNull(AppleInterleavedReadingPolicy.plan(
+            source, pronunciation,
+            listOf(
+                AppleVisualSourceCell("瞳孔", 0, 42),
+                AppleVisualSourceCell("バチ", 3, 45),
+                AppleVisualSourceCell("開いて", 1, 43),
+                AppleVisualSourceCell("溺れ", 2, 44),
+                AppleVisualSourceCell("死にそう", 55, 99),
+            ), spans,
+        ))
+        assertEquals(listOf(3, 4), result.map { it.insertAfterSourceCell })
     }
 }

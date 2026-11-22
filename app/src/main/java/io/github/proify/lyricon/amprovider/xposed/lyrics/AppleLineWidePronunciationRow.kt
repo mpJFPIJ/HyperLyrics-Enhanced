@@ -215,6 +215,9 @@ internal class AppleLineWidePronunciationRow {
         var playbackPositionMs: (() -> Long?)? = null
         var sourceWords: List<TextView> = emptyList()
         var boundPayload: AppleLineWidePronunciationPayload? = null
+        var sourceCellAbove: View? = null
+        var readingStart = 0
+        var readingEnd = 0
         private var paintRoot: ViewGroup? = null
         private var outerForeground: AppleHangulReadingForeground? = null
         private val updatePaintLayer = Runnable { syncPaintLayer() }
@@ -576,7 +579,13 @@ internal class AppleLineWidePronunciationRow {
             return false
         }
 
-        val childText = visibleNativeCellTexts(root).orEmpty()
+        // Rebinding may happen after we have already interleaved one or more
+        // reading children. They must not count as Apple-native source cells.
+        val nativeChildren = (0 until anchor.childCount)
+            .map(anchor::getChildAt).filterNot { it is ReadingView }
+        val childText = nativeChildren.map { child ->
+            nativeWordTexts(child).joinToString("") { it.text.toString() }
+        }
         val insertionIndex = (if (trustedHolder)
             AppleLineWidePronunciationRowPolicy.insertionIndex(
                 payload?.sourceText.orEmpty(), childText,
@@ -586,8 +595,9 @@ internal class AppleLineWidePronunciationRow {
             clear(root)
             return false
         }
-        val sourceWords = (0 until insertionIndex).flatMap { index ->
-            nativeWordTexts(anchor.getChildAt(index))
+        val sourceChildren = nativeChildren.take(insertionIndex)
+        val sourceWords = sourceChildren.flatMap { child ->
+            nativeWordTexts(child)
         }
         val sourceStyle = sourceWords.firstOrNull() ?: run {
             clear(root)
@@ -598,78 +608,127 @@ internal class AppleLineWidePronunciationRow {
                 clear(root)
                 return false
             }
+        // Use the host's measured flex rows, never a guessed character count.
+        // A native TextView that wraps internally cannot be safely divided
+        // without replacing Apple's own word/shader renderer.
+        val rows = if (anchor.width > 0 && sourceChildren.isNotEmpty() &&
+            sourceChildren.all { it.width > 0 && it.height > 0 } &&
+            sourceWords.all { it.layout != null && it.layout!!.lineCount <= 1 }
+        ) AppleInterleavedReadingPolicy.plan(
+            sourceText = payload!!.sourceText,
+            pronunciation = text,
+            cells = sourceChildren.map { child ->
+                AppleVisualSourceCell(
+                    text = nativeWordTexts(child).joinToString("") { it.text.toString() },
+                    top = child.top,
+                    bottom = child.bottom,
+                )
+            },
+            spans = payload.phoneticSpans,
+        ) else null
+        val desiredRows = rows ?: listOf(AppleInterleavedReadingRow(
+            insertAfterSourceCell = insertionIndex - 1,
+            text = text,
+            readingStart = 0,
+            readingEnd = text.length,
+        ))
         val existing = (0 until anchor.childCount)
-            .map(anchor::getChildAt).filterIsInstance<ReadingView>().singleOrNull()
-        if (existing != null && AppleLineWidePronunciationRowPolicy.canReuseReading(
-                boundPayload = existing.boundPayload,
-                requestedPayload = payload!!,
-                oldWords = existing.sourceWords,
-                newWords = sourceWords,
-                currentIndex = anchor.indexOfChild(existing),
-                insertionIndex = insertionIndex,
-            ) && kotlin.math.abs(existing.textSize -
-                AppleLineWidePronunciationRowPolicy.readingTextPx(sourceStyle.textSize)) < 0.8f
-        ) {
-            existing.playbackPositionMs = playbackPositionMs
-            existing.bindPaintRoot(root)
-            readingViews.add(existing)
+            .map(anchor::getChildAt).filterIsInstance<ReadingView>()
+        val targetTextSize = AppleLineWidePronunciationRowPolicy.readingTextPx(sourceStyle.textSize)
+        val canReuse = existing.size == desiredRows.size &&
+            existing.zip(desiredRows).all { (view, row) ->
+                val previous = sourceChildren[row.insertAfterSourceCell]
+                view.boundPayload == payload && view.sourceCellAbove === previous &&
+                    view.readingStart == row.readingStart &&
+                    view.readingEnd == row.readingEnd && view.text.toString() == row.text &&
+                    view.sourceWords.size == sourceWords.size &&
+                    sourceWords.indices.all { view.sourceWords[it] === sourceWords[it] } &&
+                    anchor.indexOfChild(view) == anchor.indexOfChild(previous) + 1 &&
+                    kotlin.math.abs(view.textSize - targetTextSize) < 0.8f
+            }
+        if (canReuse) {
+            existing.forEach { reading ->
+                reading.playbackPositionMs = playbackPositionMs
+                reading.bindPaintRoot(root)
+                readingViews.add(reading)
+            }
             return true
         }
         clear(root)
-        val reading = ReadingView(anchor.context).apply {
-            this.playbackPositionMs = playbackPositionMs
-            this.sourceWords = sourceWords
-            this.boundPayload = payload
-            bindPaintRoot(root)
-            setTextSize(
-                TypedValue.COMPLEX_UNIT_PX,
-                AppleLineWidePronunciationRowPolicy.readingTextPx(sourceStyle.textSize),
-            )
-            // Any syllable with no verified native timing stays visibly dim.
-            setTextColor(Color.rgb(110, 110, 110))
-            typeface = sourceStyle?.typeface
-            gravity = Gravity.START
-            // Leave ascender/descender space when the native flexbox measures
-            // this hidden layout-only copy and the outer holder repaints it.
-            includeFontPadding = true
-            setSingleLine(false)
-            maxLines = Int.MAX_VALUE
-            ellipsize = null
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                breakStrategy = LineBreaker.BREAK_STRATEGY_HIGH_QUALITY
-                hyphenationFrequency = Layout.HYPHENATION_FREQUENCY_NONE
+        val timedVariants = (listOf(payload!!.timedWords) + payload.repeatTimings)
+            .mapIndexed { index, native ->
+                val (begin, end) = AppleLineWidePronunciationRowPolicy.lineWindowForVariant(
+                    payload, index,
+                )
+                AppleTimedPronunciationHighlightPolicy.units(
+                    sourceText = payload.sourceText,
+                    pronunciation = text,
+                    timedWords = native,
+                    phoneticSpans = payload.phoneticSpans,
+                    lineBeginMs = begin,
+                    lineEndMs = end,
+                )
             }
-            if (Build.VERSION.SDK_INT >= 33) {
-                setLineBreakWordStyle(android.graphics.text.LineBreakConfig.LINE_BREAK_WORD_STYLE_PHRASE)
+        desiredRows.forEach { row ->
+            val precedingNativeCell = sourceChildren[row.insertAfterSourceCell]
+            val reading = ReadingView(anchor.context).apply {
+                this.playbackPositionMs = playbackPositionMs
+                this.sourceWords = sourceWords
+                this.boundPayload = payload
+                this.sourceCellAbove = precedingNativeCell
+                this.readingStart = row.readingStart
+                this.readingEnd = row.readingEnd
+                bindPaintRoot(root)
+                setTextSize(TypedValue.COMPLEX_UNIT_PX, targetTextSize)
+                // Any syllable with no verified native timing stays visibly dim.
+                setTextColor(Color.rgb(110, 110, 110))
+                typeface = sourceStyle.typeface
+                gravity = Gravity.START
+                // The native flexbox measures the layout; the holder overlay
+                // repaints the same glyphs without its horizontal gradient mask.
+                includeFontPadding = true
+                setSingleLine(false)
+                maxLines = Int.MAX_VALUE
+                ellipsize = null
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    breakStrategy = LineBreaker.BREAK_STRATEGY_HIGH_QUALITY
+                    hyphenationFrequency = Layout.HYPHENATION_FREQUENCY_NONE
+                }
+                if (Build.VERSION.SDK_INT >= 33) {
+                    setLineBreakWordStyle(
+                        android.graphics.text.LineBreakConfig.LINE_BREAK_WORD_STYLE_PHRASE,
+                    )
+                }
+                setTimedText(row.text, timedVariants.map { variant ->
+                    variant.filter { unit ->
+                        unit.start >= row.readingStart && unit.end <= row.readingEnd
+                    }.map { unit ->
+                        unit.copy(
+                            start = unit.start - row.readingStart,
+                            end = unit.end - row.readingStart,
+                        )
+                    }
+                })
             }
-            setTimedText(
-                text,
-                (listOf(payload!!.timedWords) + payload.repeatTimings).mapIndexed { index, native ->
-                    val (begin, end) = AppleLineWidePronunciationRowPolicy.lineWindowForVariant(
-                        payload, index,
-                    )
-                    AppleTimedPronunciationHighlightPolicy.units(
-                        sourceText = payload.sourceText,
-                        pronunciation = text,
-                        timedWords = native,
-                        phoneticSpans = payload.phoneticSpans,
-                        lineBeginMs = begin,
-                        lineEndMs = end,
-                    )
-                },
+            // Source rows remain unmodified and in their original order.
+            // Inserting after each native row means the next native row now
+            // naturally follows its preceding Korean reading.
+            anchor.addView(
+                reading,
+                anchor.indexOfChild(precedingNativeCell) + 1,
+                ViewGroup.LayoutParams(
+                    AppleLineWidePronunciationRowPolicy.fullWidth(anchor.width),
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                ),
             )
+            readingViews.add(reading)
         }
-        // MATCH_PARENT takes the whole karaoke flexbox width, unlike native
-        // lyrics_pronunciation_vertical_container cells (~206–373px in the device log).
-        anchor.addView(
-            reading,
-            insertionIndex,
-            ViewGroup.LayoutParams(
-                AppleLineWidePronunciationRowPolicy.fullWidth(anchor.width),
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-            ),
+        if (rows != null) AppleLyricUiRuntimeProbe.record(
+            "linewide_visual_rows_interleaved",
+            "sourceCells=${sourceChildren.size} visualRows=${rows.size} " +
+                "readingChars=${text.length} nativeTimedWords=${payload.timedWords.size}",
+            root,
         )
-        readingViews.add(reading)
         return true
     }
 
@@ -677,9 +736,11 @@ internal class AppleLineWidePronunciationRow {
     /** Cell boundaries are needed to distinguish the source from any translation script. */
     fun visibleNativeCellTexts(root: View?): List<String>? {
         val group = anchor(root) ?: return null
-        return (0 until group.childCount).map { index ->
-            nativeWordTexts(group.getChildAt(index)).joinToString("") { it.text.toString() }
-        }
+        return (0 until group.childCount).map(group::getChildAt)
+            .filterNot { it is ReadingView }
+            .map { child ->
+                nativeWordTexts(child).joinToString("") { it.text.toString() }
+            }
     }
 
     private fun anchor(root: View?): ViewGroup? {

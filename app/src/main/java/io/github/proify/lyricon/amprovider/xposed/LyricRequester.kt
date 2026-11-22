@@ -10,17 +10,33 @@ import android.app.Application
 
 class LyricRequester internal constructor(
     private val hookResolver: AppleMusicHookResolver,
-    private val application: Application
+    private val application: Application,
+    private val currentPlaybackVisitEpoch: () -> Long,
 ) {
-    private var playerLyricsViewModel: Any? = null
+    private val requestOwner = AppleModuleLyricsRequestOwner()
 
-    @Volatile
-    private var requestedMediaId: String? = null
+    fun ownsViewModel(instance: Any?): Boolean = requestOwner.owns(instance)
 
-    fun ownsViewModel(instance: Any?): Boolean = instance === playerLyricsViewModel
+    fun requestedMediaId(instance: Any?): String? = requestOwner.requestedSongId(instance)
 
-    fun requestedMediaId(instance: Any?): String? =
-        requestedMediaId.takeIf { ownsViewModel(instance) }
+    internal fun receipt(instance: Any?): AppleModuleLyricsRequestOwner.Receipt? =
+        requestOwner.receipt(instance)
+
+    internal fun isCurrentReceipt(
+        receipt: AppleModuleLyricsRequestOwner.Receipt?,
+        resultSongId: String?,
+        activeVisitEpoch: Long,
+        activeQueueId: Long?,
+    ): Boolean = requestOwner.isCurrentReceipt(
+        receipt, resultSongId, activeVisitEpoch, activeQueueId,
+    )
+
+    fun isCurrentRequest(
+        instance: Any?,
+        resultSongId: String?,
+        activeVisitEpoch: Long,
+        activeQueueId: Long?,
+    ): Boolean = requestOwner.isCurrent(instance, resultSongId, activeVisitEpoch, activeQueueId)
 
     /**
      * 欺骗 Apple Music 触发歌词下载
@@ -59,17 +75,21 @@ class LyricRequester internal constructor(
                 true,
             )
 
-            if (playerLyricsViewModel == null) {
-                playerLyricsViewModel = hookResolver
-                    .resolveClass(AppleMusicHookPoint.PLAYER_LYRICS_VIEW_MODEL_CLASS)
-                    .clazz
-                    .getConstructor(Application::class.java)
-                    .newInstance(application)
-            }
-
-            requestedMediaId = mediaId
+            // A1 -> B -> A2 can finish in a different order. Reusing one ViewModel
+            // overwrites the origin of every outstanding callback with the latest ID.
+            val requestViewModel = hookResolver
+                .resolveClass(AppleMusicHookPoint.PLAYER_LYRICS_VIEW_MODEL_CLASS)
+                .clazz
+                .getConstructor(Application::class.java)
+                .newInstance(application)
+            requestOwner.register(
+                viewModel = requestViewModel,
+                songId = mediaId,
+                queueId = queueId,
+                visitEpoch = currentPlaybackVisitEpoch(),
+            )
             hookResolver.resolveMethod(AppleMusicHookPoint.LYRICS_VIEW_MODEL_LOAD).method.invoke(
-                requireNotNull(playerLyricsViewModel),
+                requestViewModel,
                 song,
             )
             ProviderLogger.debug("LyricRequester: Triggered download for $mediaId, queueId=$queueId")

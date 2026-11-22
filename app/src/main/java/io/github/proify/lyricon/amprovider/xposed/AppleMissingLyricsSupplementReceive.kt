@@ -188,17 +188,22 @@ internal fun AppleMissingLyricsHooks.receiveSupplement(song: Song) {
     )
 }
 
-internal fun AppleMissingLyricsHooks.clearSupplement(songId: String?) {
-    candidates.invalidateRestoreWindow()
-    songId?.takeIf(String::isNotBlank)?.let { id ->
-        candidates.revokeAcceptance(id)
-        candidates.revokeAvailability(id)
-        candidates.forgetRestore(id)
-        DiskSongManager.deleteMissingLyrics(id)
-    }
-    if (store.clear(songId)) {
-        ProviderLogger.debug("Apple Music 无歌词补充已清除: id=$songId")
-        refreshNowPlaying(songId)
+internal fun AppleMissingLyricsHooks.clearSupplement(
+    songId: String?,
+    isCurrent: (String?) -> Boolean = { true },
+) {
+    supplementReceiptTrack.clearIfCurrent(guard = { isCurrent(songId) }) {
+        candidates.invalidateRestoreWindow()
+        songId?.takeIf(String::isNotBlank)?.let { id ->
+            candidates.revokeAcceptance(id)
+            candidates.revokeAvailability(id)
+            candidates.forgetRestore(id)
+            DiskSongManager.deleteMissingLyrics(id)
+        }
+        if (store.clear(songId)) {
+            ProviderLogger.debug("Apple Music 无歌词补充已清除: id=$songId")
+            refreshNowPlaying(songId)
+        }
     }
 }
 

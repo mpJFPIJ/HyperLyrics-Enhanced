@@ -78,39 +78,15 @@ class AppleLyricsProviderPolicyTest {
     }
 
     @Test
-    fun `lyrics blur resumes only after Apples requested target is laid out active`() {
-        assertTrue(
-            shouldCompleteAppleLyricsProgrammaticRecenter(
-                suspendedForScroll = true,
-                scrollState = 0,
-                pendingTargetPosition = 12,
-                focusPositions = setOf(12),
-            )
-        )
-        assertFalse(
-            shouldCompleteAppleLyricsProgrammaticRecenter(
-                suspendedForScroll = true,
-                scrollState = 0,
-                pendingTargetPosition = 12,
-                focusPositions = setOf(11),
-            )
-        )
-        assertFalse(
-            shouldCompleteAppleLyricsProgrammaticRecenter(
-                suspendedForScroll = true,
-                scrollState = 1,
-                pendingTargetPosition = 12,
-                focusPositions = setOf(12),
-            )
-        )
-        assertFalse(
-            shouldCompleteAppleLyricsProgrammaticRecenter(
-                suspendedForScroll = false,
-                scrollState = 0,
-                pendingTargetPosition = 12,
-                focusPositions = setOf(12),
-            )
-        )
+    fun `recenter completes only after an idle layout visibly contains the focused target`() {
+        fun completed(scrollState: Int, focus: Set<Int>, visible: Set<Int>) =
+            shouldCompleteAppleLyricsProgrammaticRecenter(scrollState, 12, focus, visible)
+
+        assertTrue(completed(0, setOf(12), setOf(10, 11, 12)))
+        assertFalse(completed(0, setOf(12), setOf(3, 4, 5)))
+        assertFalse(completed(0, setOf(11), setOf(12)))
+        assertFalse(completed(1, setOf(12), setOf(12)))
+        assertFalse(shouldCompleteAppleLyricsProgrammaticRecenter(0, null, setOf(12), setOf(12)))
     }
 
     @Test
@@ -194,6 +170,16 @@ class AppleLyricsProviderPolicyTest {
                 isPendingOutgoing = false,
                 rowBottomY = 321f,
                 currentZoneTopY = 220f,
+            )
+        )
+        // Once the playing row is positively known, the departing row must
+        // not remain just as sharp as that one even during a slow scroll.
+        assertFalse(
+            shouldDeferAppleLyricsOutgoingBlur(
+                isPendingOutgoing = true,
+                rowBottomY = 321f,
+                currentZoneTopY = 220f,
+                currentFocusResolved = true,
             )
         )
     }

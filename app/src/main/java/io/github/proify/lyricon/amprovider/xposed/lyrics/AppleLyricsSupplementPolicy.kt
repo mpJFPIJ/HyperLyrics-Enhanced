@@ -24,6 +24,18 @@ internal const val APPLE_LYRICS_REQUEST_SOURCE_APPLE = "apple"
 internal const val APPLE_LYRICS_REQUEST_SOURCE_MODULE = "module"
 internal const val APPLE_LYRICS_DIAGNOSTIC_SOURCE_MODULE_NATIVE = "module_native"
 
+/** A reused native View must follow the current song, never its original registration song. */
+internal fun currentMissingLyricsSupplementSong(
+    visibleSongId: String?,
+    queueSongId: String?,
+    hasSupplement: (String) -> Boolean,
+): String? {
+    val visible = visibleSongId?.takeIf(String::isNotBlank)
+    val queued = queueSongId?.takeIf(String::isNotBlank)
+    if (visible != null && queued != null && visible != queued) return null
+    return (queued ?: visible)?.takeIf(hasSupplement)
+}
+
 /**
  * 模块自建 ViewModel 仍调用 Apple 的真实 loadLyrics。只有请求 ID、返回模型 ID 与
  * 当前队列身份一致，且返回指针不是模块补充指针时，才能把这次 module 请求提升为
@@ -81,20 +93,6 @@ internal data class AppleLyricsRestoreAnchor(
     val offset: Int,
     val activePosition: Int?,
 )
-
-internal fun selectAppleLyricsPlaybackAdapterPosition(
-    lineBeginsMs: List<Long?>,
-    playbackPositionMs: Long,
-    itemCount: Int,
-): Int? {
-    if (itemCount <= 0) return null
-    val logicalLinePosition = lineBeginsMs.indexOfLast { beginMs ->
-        beginMs != null && beginMs <= playbackPositionMs
-    }
-    return logicalLinePosition
-        .takeIf { it >= 0 }
-        ?.coerceIn(0, itemCount - 1)
-}
 
 internal fun selectAppleLyricsRestoreAnchor(
     savedPosition: Int,

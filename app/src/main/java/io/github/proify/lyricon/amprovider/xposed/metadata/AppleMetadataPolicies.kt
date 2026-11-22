@@ -528,15 +528,12 @@ internal fun appleNativeSupplementTracks(
 }
 
 internal fun shouldCompleteAppleLyricsProgrammaticRecenter(
-    suspendedForScroll: Boolean,
     scrollState: Int,
     pendingTargetPosition: Int?,
     focusPositions: Set<Int>,
-): Boolean =
-    suspendedForScroll &&
-        scrollState == 0 &&
-        pendingTargetPosition != null &&
-        pendingTargetPosition in focusPositions
+    visiblePositions: Set<Int>,
+): Boolean = scrollState == 0 && pendingTargetPosition != null &&
+    pendingTargetPosition in focusPositions && pendingTargetPosition in visiblePositions
 
 internal fun appleLyricsBlurFocusPositions(
     activePositions: Set<Int>,
@@ -551,12 +548,113 @@ internal fun appleLyricsBlurFocusPositions(
     return activePositions + trailingWritersCredits
 }
 
+/** A host may report both outgoing and incoming karaoke rows as active.
+ * Keep the outgoing visual focus until it actually leaves the native set. */
+internal object AppleLyricsBlurTransitionPolicy {
+    fun singleActiveFocus(nativeActive: Set<Int>, previousFocus: Int?): Int? =
+        previousFocus?.takeIf(nativeActive::contains) ?: nativeActive.minOrNull()
+
+    /** A valid native song clock wins over a lingering outgoing active row.
+     * If the adapter clock cannot be resolved, retain the host's previous
+     * focus until it leaves the active set. */
+    fun clockAwareFocus(
+        nativeActive: Set<Int>,
+        playbackAdapterPosition: Int?,
+        previousFocus: Int?,
+    ): Int? = playbackAdapterPosition?.takeIf(nativeActive::contains)
+        ?: singleActiveFocus(nativeActive, previousFocus)
+}
+
+/** Adapter row positions are NOT logical lyric indexes: Apple inserts
+ * instrumental/header/credits rows. Only a line observed in the native
+ * holder's own binding stack is a safe position↔clock mapping. */
+internal class AppleLyricsTimedAdapterWindowIndex {
+    private data class Window(val beginMs: Long, val endMs: Long)
+    private var songId: String? = null
+    private var revision = -1L
+    private val windows = LinkedHashMap<Int, Window>()
+
+    @Synchronized
+    fun remember(
+        currentSongId: String?,
+        currentRevision: Long,
+        adapterPosition: Int,
+        beginMs: Long,
+        endMs: Long,
+    ) {
+        if (currentSongId.isNullOrBlank() || adapterPosition < 0 || beginMs < 0L ||
+            endMs <= beginMs
+        ) return
+        if (songId != currentSongId || revision != currentRevision || windows.size > 512) {
+            songId = currentSongId
+            revision = currentRevision
+            windows.clear()
+        }
+        windows[adapterPosition] = Window(beginMs, endMs)
+    }
+
+    @Synchronized
+    fun matchesKnownWindow(
+        currentSongId: String?, adapterPosition: Int, playbackPositionMs: Long?,
+    ): Boolean? {
+        if (songId != currentSongId || playbackPositionMs == null) return null
+        val window = windows[adapterPosition] ?: return null
+        return playbackPositionMs >= window.beginMs && playbackPositionMs < window.endMs
+    }
+
+    @Synchronized
+    fun focus(
+        currentSongId: String?,
+        nativeActive: Set<Int>,
+        playbackPositionMs: Long?,
+    ): Int? {
+        if (currentSongId != songId || playbackPositionMs == null) return null
+        return nativeActive.filter { position ->
+            windows[position]?.let { window ->
+                playbackPositionMs >= window.beginMs && playbackPositionMs < window.endMs
+            } == true
+        }.maxWithOrNull(compareBy<Int> { windows[it]?.beginMs ?: -1L }.thenBy { it })
+    }
+}
+
+internal object AppleLyricsBlurOwnershipPolicy {
+    fun shouldSkipZeroRadiusRequest(
+        radiusPx: Int,
+        previouslyBlurred: Boolean,
+        hasAppliedMode: Boolean,
+    ): Boolean = radiusPx <= 0 && !previouslyBlurred && !hasAppliedMode
+
+    fun shouldClearNativeEffect(
+        knownBlurred: Boolean,
+        hasAppliedMode: Boolean,
+        trackedBlurred: Boolean,
+    ): Boolean = knownBlurred || hasAppliedMode || trackedBlurred
+}
+
+/** Recovery is permitted only after the native follow has failed to settle;
+ * never override a lyric list being scrolled or browsed by the listener. */
+internal object AppleLyricsFollowRecoveryPolicy {
+    fun shouldRecover(
+        active: Set<Int>,
+        visible: Set<Int>,
+        scrollState: Int,
+        suspendedForBrowse: Boolean,
+        playing: Boolean,
+        nowMs: Long,
+        lastRecoveryAtMs: Long,
+    ): Boolean = playing && !suspendedForBrowse && scrollState == 0 &&
+        active.isNotEmpty() && visible.isNotEmpty() &&
+        active.none(visible::contains) &&
+        (lastRecoveryAtMs == 0L || nowMs - lastRecoveryAtMs >= 4_000L)
+}
+
 internal fun shouldDeferAppleLyricsOutgoingBlur(
     isPendingOutgoing: Boolean,
     rowBottomY: Float?,
     currentZoneTopY: Float?,
+    currentFocusResolved: Boolean = false,
 ): Boolean =
-    isPendingOutgoing &&
+    isPendingOutgoing && !currentFocusResolved &&
         (rowBottomY == null || currentZoneTopY == null || rowBottomY > currentZoneTopY)
 
 internal fun resolvePlaybackPositionSource(

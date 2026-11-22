@@ -152,6 +152,7 @@ internal object AppleMusicProviderOrchestrator {
             phases?.mark("inAppMetadata")
             // 4) 跨领域生命周期收尾：偏好监听、屏幕状态、远程播放器与 Hook 安装顺序。
             initializeContentUiLanguage()
+            AppleAiProgressOverlay.install(application, catalogLanguage.contentUiLanguagePrefs)
             phases?.mark("contentUiLanguage")
             lyricsPlayback.playbackHooks.initializeScreenStateMonitor()
             phases?.mark("screenState")

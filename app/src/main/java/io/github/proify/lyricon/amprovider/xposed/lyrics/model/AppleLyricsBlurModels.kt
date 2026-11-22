@@ -19,9 +19,14 @@ internal data class AppleLyricsBlurRuntimeState(
     var adapterRef: WeakReference<Any>? = null,
     var recyclerHeight: Int = 0,
     var settledAnchorTopY: Float? = null,
+    /** Set only by a user drag. Programmatic requests never enter browse mode. */
     var suspendedForScroll: Boolean = false,
+    /** Clear blur once per motion period without mistaking auto-follow for browsing. */
+    var motionBlurCleared: Boolean = false,
     var pendingProgrammaticRecenterPosition: Int? = null,
     var lastActivePositions: Set<Int> = emptySet(),
+    var lastFocusedActivePosition: Int? = null,
+    var lastFollowRecoveryAtMs: Long = 0L,
     var pendingOutgoingPositions: Set<Int> = emptySet(),
     var outgoingZoneTopByPosition: Map<Int, Float> = emptyMap(),
     var pendingApplyBlur: Runnable? = null,
@@ -31,3 +36,39 @@ internal data class AppleLyricsBlurRuntimeState(
     var targetBlurRadius: Float = 0f,
     var blurAnimator: ValueAnimator? = null,
 )
+
+/** `onScrolled` and SETTLING also occur during Apple's own auto-follow.
+ * Only an explicit DRAGGING state proves that the listener is browsing. */
+internal object AppleLyricsScrollIntentPolicy {
+    private const val SCROLL_STATE_DRAGGING = 1
+
+    /** True once per motion period when existing native blur needs clearing. */
+    fun recordMovement(state: AppleLyricsBlurRuntimeState, scrollState: Int): Boolean {
+        if (scrollState == SCROLL_STATE_DRAGGING) {
+            state.suspendedForScroll = true
+            state.pendingProgrammaticRecenterPosition = null
+        }
+        if (state.motionBlurCleared) return false
+        state.motionBlurCleared = true
+        return true
+    }
+
+    fun onViewportHeightChanged(state: AppleLyricsBlurRuntimeState, height: Int) {
+        if (height <= 0 || height == state.recyclerHeight) return
+        state.recyclerHeight = height
+        state.settledAnchorTopY = null
+        state.motionBlurCleared = false
+        state.pendingOutgoingPositions = emptySet()
+        state.outgoingZoneTopByPosition = emptyMap()
+    }
+
+    fun requestRecovery(state: AppleLyricsBlurRuntimeState, target: Int, nowMs: Long) {
+        state.pendingProgrammaticRecenterPosition = target
+        state.lastFollowRecoveryAtMs = nowMs
+    }
+
+    /** Idle clears only motion blur; user browsing still blocks forced recovery. */
+    fun endMotion(state: AppleLyricsBlurRuntimeState) {
+        state.motionBlurCleared = false
+    }
+}

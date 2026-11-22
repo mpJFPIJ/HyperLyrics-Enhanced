@@ -97,22 +97,56 @@ import kotlin.math.abs
 import kotlin.math.roundToInt
 
 internal fun AppleMusicProviderOrchestrator.startHooks() {
-    val costs = if (BuildConfig.DEBUG) mutableListOf<StartupHookModuleCost>() else null
-    hookModules().asSequence()
-        .filter { hookModule -> !hookModule.debugOnly || BuildConfig.DEBUG }
-        .forEach { hookModule ->
+    val userDiagnostics = BuildConfig.DEBUG && BuildConfig.HLE_BUILD_RUN == "local"
+    val costs = if (userDiagnostics) mutableListOf<StartupHookModuleCost>() else null
+    val failures = installIndependentAppleHookModules(
+        modules = hookModules().filter { hookModule -> !hookModule.debugOnly || userDiagnostics },
+        install = { hookModule ->
             val startNs = if (costs != null) System.nanoTime() else 0L
-            hookRegistrar.withModule(hookModule.id, hookModule::installHooks)
-            costs?.add(
-                StartupHookModuleCost(
-                    id = hookModule.id,
-                    debugOnly = hookModule.debugOnly,
-                    wallNs = System.nanoTime() - startNs,
-                    installed = hookRegistrar.installCost.snapshot(hookModule.id),
+            try {
+                hookRegistrar.withModule(hookModule.id, hookModule::installHooks)
+            } finally {
+                costs?.add(
+                    StartupHookModuleCost(
+                        id = hookModule.id,
+                        debugOnly = hookModule.debugOnly,
+                        wallNs = System.nanoTime() - startNs,
+                        installed = hookRegistrar.installCost.snapshot(hookModule.id),
+                    )
                 )
-            )
-        }
+            }
+        },
+        onFailure = { moduleId, failure ->
+            ProviderLogger.error("Apple Music Hook 模块安装失败，继续其他模块: id=$moduleId", failure)
+        },
+    )
     costs?.let(::logStartupHookCosts)
+    if (failures.isNotEmpty()) {
+        ProviderLogger.info("Apple Music Hook 部分模块安装失败: count=${failures.size}, ids=$failures")
+    }
+}
+
+/** One missing host signature must not abort unrelated already-selected hooks. */
+internal fun installIndependentAppleHookModules(
+    modules: Iterable<io.github.proify.lyricon.amprovider.xposed.hooks.AppleMusicHookModule>,
+    install: (io.github.proify.lyricon.amprovider.xposed.hooks.AppleMusicHookModule) -> Unit,
+    onFailure: (String, Throwable) -> Unit,
+): List<String> {
+    val failed = mutableListOf<String>()
+    modules.forEach { hookModule ->
+        try {
+            install(hookModule)
+        } catch (failure: Throwable) {
+            if (failure is VirtualMachineError || failure is ThreadDeath) throw failure
+            if (failure is InterruptedException) {
+                Thread.currentThread().interrupt()
+                throw failure
+            }
+            failed += hookModule.id
+            onFailure(hookModule.id, failure)
+        }
+    }
+    return failed
 }
 
 private class StartupHookModuleCost(
@@ -146,9 +180,12 @@ private fun logStartupHookCosts(costs: List<StartupHookModuleCost>) {
     )
 }
 
-internal fun AppleMusicProviderOrchestrator.hookModuleIdsForBuild(debug: Boolean): List<String> =
+internal fun AppleMusicProviderOrchestrator.hookModuleIdsForBuild(
+    debug: Boolean,
+    ciBuildRun: String = "local",
+): List<String> =
     hookModules()
-        .filter { hookModule -> !hookModule.debugOnly || debug }
+        .filter { hookModule -> !hookModule.debugOnly || (debug && ciBuildRun == "local") }
         .map { hookModule -> hookModule.id }
 
 internal fun AppleMusicProviderOrchestrator.hookModules() = listOf(
@@ -335,8 +372,10 @@ internal fun AppleMusicProviderOrchestrator.hookModules() = listOf(
         installer = { lyricsPlayback.lyricsHooks.hookAppleLyricsUiDiagnostics() },
     ),
     FunctionalAppleMusicHookModule(
+        // Release also needs this holder lifecycle hook: it owns the
+        // Korean translation and line-wide Hangul highlight render path.
+        // Only its diagnostic probes may remain debug-only.
         "hookAppleLyricsBindingDiagnostics",
-        debugOnly = true,
         installer = { lyricsPlayback.lyricsHooks.hookAppleLyricsBindingDiagnostics() },
     ),
     FunctionalAppleMusicHookModule(

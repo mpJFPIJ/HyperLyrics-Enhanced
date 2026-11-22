@@ -123,3 +123,41 @@ internal object AppleInterleavedReadingPolicy {
         return result
     }
 }
+
+/** Preserve verified word windows, and preserve the old whole-line fallback. */
+internal object AppleInterleavedReadingTimingPolicy {
+    fun project(
+        variants: List<List<AppleTimedReadingUnit>>,
+        fullPronunciation: String,
+        rows: List<AppleInterleavedReadingRow>,
+        row: AppleInterleavedReadingRow,
+    ): List<List<AppleTimedReadingUnit>> {
+        val pronounced = fullPronunciation.indices.filter {
+            fullPronunciation[it].isLetterOrDigit()
+        }
+        val fullStart = pronounced.firstOrNull()
+        val fullEnd = pronounced.lastOrNull()?.plus(1)
+        return variants.map { units ->
+            // A single whole-line window is the existing, explicitly coarse
+            // fallback. If duplicated into visually separate TextViews, its
+            // SAME clock must continue styling the entire Hangul sentence.
+            // This does not claim per-word native timing or invent row clocks.
+            val coarseLine = rows.size > 1 && units.size == 1 &&
+                fullStart != null && fullEnd != null &&
+                units[0].sourceWordIndex == -1 &&
+                units[0].start == fullStart && units[0].end == fullEnd
+            units.mapNotNull { unit ->
+                val start = if (coarseLine) maxOf(unit.start, row.readingStart)
+                    else unit.start
+                val end = if (coarseLine) minOf(unit.end, row.readingEnd)
+                    else unit.end
+                if (start < row.readingStart || end > row.readingEnd || start >= end ||
+                    start < 0 || end > fullPronunciation.length
+                ) null else unit.copy(
+                    start = start - row.readingStart,
+                    end = end - row.readingStart,
+                )
+            }
+        }
+    }
+}

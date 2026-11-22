@@ -608,13 +608,38 @@ internal class AppleLineWidePronunciationRow {
                 clear(root)
                 return false
             }
+        val existing = (0 until anchor.childCount)
+            .map(anchor::getChildAt).filterIsInstance<ReadingView>()
         // Use the host's measured flex rows, never a guessed character count.
         // A native TextView that wraps internally cannot be safely divided
         // without replacing Apple's own word/shader renderer.
-        val rows = if (anchor.width > 0 && sourceChildren.isNotEmpty() &&
-            sourceChildren.all { it.width > 0 && it.height > 0 } &&
-            sourceWords.all { it.layout != null && it.layout!!.lineCount <= 1 }
-        ) AppleInterleavedReadingPolicy.plan(
+        val geometryPending = anchor.width <= 0 || sourceChildren.isEmpty() ||
+            anchor.isLayoutRequested || root?.isLayoutRequested == true ||
+            sourceChildren.any {
+                it.isLayoutRequested || it.width <= 0 || it.height <= 0
+            } || sourceWords.any { it.isLayoutRequested || it.layout == null }
+        // A source TextView wrapping internally is NOT a transient layout
+        // state. It cannot be split by moving flexbox child boundaries.
+        val geometrySupported = sourceWords.all { it.layout?.lineCount == 1 }
+        val geometryStable = !geometryPending && geometrySupported
+        // During a pending holder remeasure, old coordinates are stale. Keep
+        // the already-bound reading rows temporarily, rather than collapsing
+        // them back to one block and triggering another unnecessary reflow.
+        if (geometryPending && existing.isNotEmpty() && existing.all { reading ->
+                reading.boundPayload == payload &&
+                    reading.sourceCellAbove in sourceChildren &&
+                    reading.sourceWords.size == sourceWords.size &&
+                    sourceWords.indices.all { reading.sourceWords[it] === sourceWords[it] }
+            }
+        ) {
+            existing.forEach { reading ->
+                reading.playbackPositionMs = playbackPositionMs
+                reading.bindPaintRoot(root)
+                readingViews.add(reading)
+            }
+            return true
+        }
+        val rows = if (geometryStable) AppleInterleavedReadingPolicy.plan(
             sourceText = payload!!.sourceText,
             pronunciation = text,
             cells = sourceChildren.map { child ->
@@ -632,8 +657,6 @@ internal class AppleLineWidePronunciationRow {
             readingStart = 0,
             readingEnd = text.length,
         ))
-        val existing = (0 until anchor.childCount)
-            .map(anchor::getChildAt).filterIsInstance<ReadingView>()
         val targetTextSize = AppleLineWidePronunciationRowPolicy.readingTextPx(sourceStyle.textSize)
         val canReuse = existing.size == desiredRows.size &&
             existing.zip(desiredRows).all { (view, row) ->
@@ -644,6 +667,8 @@ internal class AppleLineWidePronunciationRow {
                     view.sourceWords.size == sourceWords.size &&
                     sourceWords.indices.all { view.sourceWords[it] === sourceWords[it] } &&
                     anchor.indexOfChild(view) == anchor.indexOfChild(previous) + 1 &&
+                    view.layoutParams?.width ==
+                        AppleLineWidePronunciationRowPolicy.fullWidth(anchor.width) &&
                     kotlin.math.abs(view.textSize - targetTextSize) < 0.8f
             }
         if (canReuse) {
@@ -699,16 +724,12 @@ internal class AppleLineWidePronunciationRow {
                         android.graphics.text.LineBreakConfig.LINE_BREAK_WORD_STYLE_PHRASE,
                     )
                 }
-                setTimedText(row.text, timedVariants.map { variant ->
-                    variant.filter { unit ->
-                        unit.start >= row.readingStart && unit.end <= row.readingEnd
-                    }.map { unit ->
-                        unit.copy(
-                            start = unit.start - row.readingStart,
-                            end = unit.end - row.readingStart,
-                        )
-                    }
-                })
+                setTimedText(row.text, AppleInterleavedReadingTimingPolicy.project(
+                    variants = timedVariants,
+                    fullPronunciation = text,
+                    rows = desiredRows,
+                    row = row,
+                ))
             }
             // Source rows remain unmodified and in their original order.
             // Inserting after each native row means the next native row now

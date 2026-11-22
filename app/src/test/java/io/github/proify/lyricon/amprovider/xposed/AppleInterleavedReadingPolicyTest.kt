@@ -121,4 +121,40 @@ class AppleInterleavedReadingPolicyTest {
         ))
         assertEquals(listOf(3, 4), result.map { it.insertAfterSourceCell })
     }
+
+    @Test fun `coarse whole line clock survives visual row interleaving unchanged`() {
+        val first = AppleInterleavedReadingRow(0, "도코 바치", 0, 5)
+        val second = AppleInterleavedReadingRow(1, "시니소", 6, 9)
+        val timing = listOf(listOf(AppleTimedReadingUnit(0, 9, 1000L, 4000L)))
+        val firstUnits = AppleInterleavedReadingTimingPolicy.project(
+            variants = timing,
+            fullPronunciation = "도코 바치 시니소",
+            rows = listOf(first, second),
+            row = first,
+        )
+        val secondUnits = AppleInterleavedReadingTimingPolicy.project(
+            variants = timing,
+            fullPronunciation = "도코 바치 시니소",
+            rows = listOf(first, second),
+            row = second,
+        )
+        assertEquals(listOf(AppleTimedReadingUnit(0, 5, 1000L, 4000L)),
+            firstUnits.single())
+        assertEquals(listOf(AppleTimedReadingUnit(0, 3, 1000L, 4000L)),
+            secondUnits.single())
+    }
+
+    @Test fun `unknown cross row word timing is never sliced into invented syllable clocks`() {
+        val first = AppleInterleavedReadingRow(0, "도코", 0, 2)
+        val second = AppleInterleavedReadingRow(1, "바치", 3, 5)
+        val timing = listOf(listOf(AppleTimedReadingUnit(1, 5, 1000L, 3000L)))
+        assertEquals(emptyList<AppleTimedReadingUnit>(),
+            AppleInterleavedReadingTimingPolicy.project(
+                timing, "도코 바치", listOf(first, second), first,
+            ).single())
+        assertEquals(emptyList<AppleTimedReadingUnit>(),
+            AppleInterleavedReadingTimingPolicy.project(
+                timing, "도코 바치", listOf(first, second), second,
+            ).single())
+    }
 }

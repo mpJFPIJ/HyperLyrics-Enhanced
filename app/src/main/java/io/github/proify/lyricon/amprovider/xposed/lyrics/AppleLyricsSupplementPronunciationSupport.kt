@@ -397,9 +397,14 @@ internal fun AppleLyricsSupplementHooks.bindLineWidePronunciation(
             },
         )
     }
-    if (!shown && retry < 2 && root != null &&
-        (nativeOnlineTranslationStore.hasHangulPronunciation(songId) ||
-            nativeOnlineTranslationStore.hasAiHangulPronunciation(songId))
+    // The holder may bind before the flexbox has its measured line breaks.
+    // Even when the first single-block reading was shown, re-check native
+    // geometry after layout so wrapped Japanese receives per-row Hangul.
+    val needsLayoutRecheck = shown && payload?.phoneticSpans?.isNotEmpty() == true
+    if (retry < 2 && root != null &&
+        (needsLayoutRecheck || (!shown &&
+            (nativeOnlineTranslationStore.hasHangulPronunciation(songId) ||
+                nativeOnlineTranslationStore.hasAiHangulPronunciation(songId))))
     ) {
         val generation = lineWideBindingGeneration[root]
         root.postDelayed({

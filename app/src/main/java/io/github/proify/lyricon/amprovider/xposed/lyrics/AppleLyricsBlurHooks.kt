@@ -945,7 +945,7 @@ internal class AppleLyricsBlurHooks(
                                         completeAppleLyricsProgrammaticRecenter(recyclerView)
                                     }
                                     if (name == "onLayout" || name == "onAttachedToWindow") {
-                                        maybeRecoverAppleLyricsNativeFollow(recyclerView)
+                                        (recyclerView as? View)?.let(::maybeRecoverAppleLyricsNativeFollow)
                                     }
                                     scheduleAppleLyricsBlur(recyclerView)
                                 }

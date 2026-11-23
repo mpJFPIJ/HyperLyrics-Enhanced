@@ -36,10 +36,10 @@
 **Interfaces:**
 - Produces: `AppleSoftWrapResumeGeometry` and `AppleSoftWrapResumePolicy.canResume(...)` for checked source snapshots.
 
-- [ ] Write tests for matching bounds, changed bounds/text/font/width, pending layout, and line-spacing ownership.
-- [ ] Run those tests and verify expected RED (or record Gradle unavailable and use remote CI).
-- [ ] Implement the minimal pure geometry validation in the overlay source.
-- [ ] Run tests and verify GREEN.
+- [x] Write tests for matching bounds, changed bounds/text/font/width, pending layout, and line-spacing ownership.
+- [x] Run those tests and verify expected RED (CI #269).
+- [x] Implement the minimal pure geometry validation in the overlay source.
+- [x] Run tests and verify GREEN (CI #270).
 
 ### Task 2: Restore the installed overlay on the next valid attached layout
 
@@ -52,8 +52,23 @@
 - Consumes: `AppleSoftWrapResumePolicy.canResume(...)`.
 - Produces: `AppleNativeSoftWrapReadingOverlay.resumeIfCompatible(): Boolean`.
 
-- [ ] Add a regression case for a detached reading that still has the same verified source geometry and a recycled holder that does not.
-- [ ] Run the RED test remotely if local Gradle remains unavailable.
-- [ ] Keep the verified overlay reference across temporary detach; clear drawing/spacing, then attempt conditional reinstall on attached paint/layout callbacks. Full unbind still releases it.
-- [ ] Run focused and full tests, Lint and APK CI; inspect all failures and resolve before completion.
+- [x] Add a regression case for a detached reading that still has the same verified source geometry and a recycled holder that does not.
+- [x] Run the RED test remotely (CI #269).
+- [x] Keep the verified overlay reference across temporary detach; clear drawing/spacing, then attempt conditional reinstall on attached paint/layout callbacks. Full unbind still releases it.
+- [x] Run initial full tests, Lint and APK CI (#270); independent review identified further cases addressed in Task 3.
 - [ ] Leave work unmerged pending the target-phone test of detach/reattach, scrolling, seeking, grouped karaoke and translation.
+
+### Task 3: Independent-review Important fixes
+
+**Files:**
+- Test: `app/src/test/java/io/github/proify/lyricon/amprovider/xposed/AppleSoftWrapResumePolicyTest.kt`
+- Modify: `app/src/main/java/io/github/proify/lyricon/amprovider/xposed/lyrics/AppleNativeSoftWrapReadingOverlay.kt`
+- Modify: `app/src/main/java/io/github/proify/lyricon/amprovider/xposed/lyrics/AppleLineWidePronunciationRow.kt`
+- Modify: `app/src/main/java/io/github/proify/lyricon/amprovider/xposed/lyrics/AppleLyricsSupplementPronunciationSupport.kt`
+
+**Interfaces:**
+- Produces: explicit `RESUME/WAIT/REBIND` outcome, current song/revision/holder generation guard, and a rebind callback protected against stale attachment.
+
+- [x] RED: same line count but changed font/padding/letter-spacing, stale owner, detached reading, and settled-but-invalid geometry must refuse unsafe reuse (CI #271, expected unresolved references).
+- [x] Implement: distinguish waiting from invalid, prevent stale owner restoration, and schedule one guarded rebind when the geometry is invalid.
+- [ ] Run complete test/Lint/APK CI and separate device verification gate.

@@ -435,6 +435,14 @@ internal fun AppleLyricsSupplementHooks.bindLineWidePronunciation(
     val songId = currentAppleLyricsSongId
     val observedCells = lineWidePronunciationRow.visibleNativeCellTexts(root).orEmpty()
     val revision = nativeOnlineTranslationStore.revision()
+    val bindingGeneration = root?.let { lineWideBindingGeneration[it] }
+    val bindingIsCurrent = {
+        currentAppleLyricsSongId == songId &&
+            nativeOnlineTranslationStore.revision() == revision &&
+            (root == null || lineWideBindingGeneration[root] == bindingGeneration) &&
+            requestedAppleLyricsRowVisibility().pronunciation &&
+            showHangulSupplementPronunciation() && !shouldHideMandarinPronunciation()
+    }
     val payload = pronunciationState.lineWideForHolder(
         holder = context.holder,
         songId = songId,
@@ -471,6 +479,16 @@ internal fun AppleLyricsSupplementHooks.bindLineWidePronunciation(
         currentSourcePriority = pronunciationSourcePriority(),
         trustedHolder = trustedHolder,
         playbackPositionMs = { appleLyricsCurrentPlaybackPositionMs() },
+        isCurrentBinding = bindingIsCurrent,
+        onNeedsRebind = {
+            if (root != null && bindingIsCurrent()) root.post {
+                if (root.isAttachedToWindow && bindingIsCurrent()) {
+                    // A settled native geometry change needs the same guarded
+                    // two-phase source-only remeasure as an adapter rebind.
+                    bindLineWidePronunciation(context, root, retry = 3)
+                }
+            }
+        },
     )
     // The built-in Apple pronunciation text is often much smaller than the
     // Japanese text. Keep its native position and timing, scale text only.

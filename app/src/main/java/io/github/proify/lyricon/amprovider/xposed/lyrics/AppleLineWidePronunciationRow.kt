@@ -393,6 +393,9 @@ internal class AppleLineWidePronunciationRow {
         var targetReadingTextPx = 0f
         var inlineWrapOverlay: AppleNativeSoftWrapReadingOverlay? = null
         var inlineVisualRows: List<AppleInterleavedReadingRow>? = null
+        var isCurrentBinding: () -> Boolean = { true }
+        var onNeedsRebind: (() -> Unit)? = null
+        private var rebindScheduled = false
         private var paintRoot: ViewGroup? = null
         private var outerForeground: AppleHangulReadingForeground? = null
         private val updatePaintLayer = Runnable { syncPaintLayer() }
@@ -405,6 +408,10 @@ internal class AppleLineWidePronunciationRow {
         private val highlightPulse = object : Runnable {
             override fun run() {
                 if (!isAttachedToWindow) return
+                if (!bindingCurrent()) {
+                    syncPaintLayer()
+                    return
+                }
                 syncPaintLayer()
                 val onScreen = (isShown && getGlobalVisibleRect(visibleBounds)) ||
                     inlineWrapOverlay?.isSourceVisibleOnScreen() == true
@@ -474,6 +481,10 @@ internal class AppleLineWidePronunciationRow {
             post(updatePaintLayer)
         }
 
+        private fun bindingCurrent(): Boolean = runCatching {
+            isCurrentBinding()
+        }.getOrDefault(false)
+
         private fun detachOuterForeground() {
             outerForeground?.let { foreground ->
                 paintRoot?.overlay?.remove(foreground)
@@ -484,11 +495,34 @@ internal class AppleLineWidePronunciationRow {
 
         private fun syncPaintLayer() {
             val root = paintRoot ?: return
+            if (!bindingCurrent()) {
+                inlineWrapOverlay?.clear()
+                detachOuterForeground()
+                alpha = 0f
+                return
+            }
             // The outer ViewOverlay and the extra Japanese line spacing were
             // removed on detach. A normal viewport reattach does not
             // necessarily trigger another holder bind, so recover the same
             // measured overlay here without guessing new phonetic boundaries.
-            inlineWrapOverlay?.resumeIfCompatible(root)
+            val resume = inlineWrapOverlay?.resumeIfCompatible(
+                root, readingAttached = isAttachedToWindow, ownerCurrent = true,
+            )
+            if (resume == AppleSoftWrapResumeDecision.REBIND) {
+                detachOuterForeground()
+                alpha = 0f
+                if (!rebindScheduled) {
+                    rebindScheduled = true
+                    post {
+                        if (!isAttachedToWindow || !root.isAttachedToWindow) {
+                            rebindScheduled = false
+                            return@post
+                        }
+                        if (bindingCurrent()) onNeedsRebind?.invoke()
+                    }
+                }
+                return
+            }
             val measured = isAttachedToWindow && isShown && root.isAttachedToWindow &&
                 layout != null && width > 0 && height > 0 &&
                 root.width > 0 && root.height > 0
@@ -593,6 +627,7 @@ internal class AppleLineWidePronunciationRow {
             removeCallbacks(updatePaintLayer)
             detachOuterForeground()
             inlineWrapOverlay?.clear()
+            rebindScheduled = false
             // Keep the immutable source/row snapshot for a temporary viewport
             // detach. An actual holder rebind calls clear(root), which still
             // disposes the old overlay before inserting a different reading.
@@ -799,7 +834,17 @@ internal class AppleLineWidePronunciationRow {
                     add(word.textSize.toBits())
                     add(word.width)
                     add(word.height)
-                    add(word.layout?.lineCount ?: -1)
+                    add(word.compoundPaddingLeft)
+                    add(word.compoundPaddingRight)
+                    add(word.letterSpacing.toBits())
+                    add(word.textScaleX.toBits())
+                    add(System.identityHashCode(word.typeface))
+                    val lines = word.layout
+                    add(lines?.lineCount ?: -1)
+                    if (lines != null) for (index in 0 until lines.lineCount) {
+                        add(lines.getLineStart(index))
+                        add(lines.getLineEnd(index))
+                    }
                 }
             }
         }
@@ -814,6 +859,8 @@ internal class AppleLineWidePronunciationRow {
         currentSourcePriority: Int,
         trustedHolder: Boolean = false,
         playbackPositionMs: () -> Long? = { null },
+        isCurrentBinding: () -> Boolean = { true },
+        onNeedsRebind: () -> Unit = {},
     ): Boolean {
         val anchor = anchor(root) ?: return false
         if (!AppleLineWidePronunciationRowPolicy.shouldDisplay(
@@ -890,6 +937,7 @@ internal class AppleLineWidePronunciationRow {
         // them back to one block and triggering another unnecessary reflow.
         val hasCompatibleExistingRows = existing.isNotEmpty() && existing.all { reading ->
                 reading.boundPayload == payload &&
+                    runCatching { reading.isCurrentBinding() }.getOrDefault(false) &&
                     reading.sourceCellAbove in sourceChildren &&
                     reading.sourceWords.size == sourceWords.size &&
                     sourceWords.indices.all { reading.sourceWords[it] === sourceWords[it] }
@@ -897,6 +945,8 @@ internal class AppleLineWidePronunciationRow {
         if (geometryPending && hasCompatibleExistingRows) {
             existing.forEach { reading ->
                 reading.playbackPositionMs = playbackPositionMs
+                reading.isCurrentBinding = isCurrentBinding
+                reading.onNeedsRebind = onNeedsRebind
                 reading.bindPaintRoot(root)
                 readingViews.add(reading)
             }
@@ -994,11 +1044,20 @@ internal class AppleLineWidePronunciationRow {
                         AppleLineWidePronunciationRowPolicy.fullWidth(nativeMeasureKey.contentWidth) &&
                     view.inlineVisualRows == softWrapRows &&
                     (softWrapRows == null || view.inlineWrapOverlay != null) &&
-                    kotlin.math.abs(view.targetReadingTextPx - targetTextSize) < 0.8f
+                    kotlin.math.abs(view.targetReadingTextPx - targetTextSize) < 0.8f &&
+                    runCatching { view.isCurrentBinding() }.getOrDefault(false) &&
+                    (softWrapRows == null || view.inlineWrapOverlay?.resumeIfCompatible(
+                        currentHolder = root as? ViewGroup,
+                        readingAttached = view.isAttachedToWindow,
+                        ownerCurrent = true,
+                        installWhenReady = false,
+                    ) != AppleSoftWrapResumeDecision.REBIND)
             }
         if (canReuse) {
             existing.forEach { reading ->
                 reading.playbackPositionMs = playbackPositionMs
+                reading.isCurrentBinding = isCurrentBinding
+                reading.onNeedsRebind = onNeedsRebind
                 reading.bindPaintRoot(root)
                 readingViews.add(reading)
             }
@@ -1038,6 +1097,8 @@ internal class AppleLineWidePronunciationRow {
             val precedingNativeCell = sourceChildren[row.insertAfterSourceCell]
             val reading = ReadingView(anchor.context).apply {
                 this.playbackPositionMs = playbackPositionMs
+                this.isCurrentBinding = isCurrentBinding
+                this.onNeedsRebind = onNeedsRebind
                 this.sourceWords = sourceWords
                 this.boundPayload = payload
                 this.sourceCellAbove = precedingNativeCell

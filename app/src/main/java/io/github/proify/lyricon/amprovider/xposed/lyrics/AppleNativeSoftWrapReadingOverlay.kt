@@ -30,21 +30,57 @@ internal data class AppleSoftWrapResumeGeometry(
     val lineBounds: List<Pair<Int, Int>>,
     val lineSpacingExtra: Float,
     val lineSpacingMultiplier: Float,
+    val typefaceIdentity: Any? = null,
+    val contentWidth: Int = width,
+    val compoundPaddingLeft: Int = 0,
+    val compoundPaddingRight: Int = 0,
+    val letterSpacing: Float = 0f,
+    val textScaleX: Float = 1f,
 )
 
+internal enum class AppleSoftWrapResumeDecision { RESUME, WAIT, REBIND }
+
 internal object AppleSoftWrapResumePolicy {
+    /** WAIT is a transient detach/layout; REBIND is a settled stale owner or geometry. */
+    fun decision(
+        saved: AppleSoftWrapResumeGeometry,
+        current: AppleSoftWrapResumeGeometry?,
+        readingAttached: Boolean,
+        sourceAttached: Boolean,
+        holderAttached: Boolean,
+        layoutPending: Boolean,
+        ownerCurrent: Boolean,
+    ): AppleSoftWrapResumeDecision {
+        if (!ownerCurrent) return AppleSoftWrapResumeDecision.REBIND
+        if (!readingAttached || !sourceAttached || !holderAttached || layoutPending ||
+            current == null
+        ) return AppleSoftWrapResumeDecision.WAIT
+        return if (saved.text == current.text && saved.width > 0 &&
+            saved.width == current.width && saved.contentWidth > 0 &&
+            saved.contentWidth == current.contentWidth &&
+            saved.compoundPaddingLeft == current.compoundPaddingLeft &&
+            saved.compoundPaddingRight == current.compoundPaddingRight &&
+            saved.typefaceIdentity == current.typefaceIdentity &&
+            saved.lineBounds.size > 1 && saved.lineBounds == current.lineBounds &&
+            abs(saved.textSizePx - current.textSizePx) < 0.5f &&
+            abs(saved.lineSpacingExtra - current.lineSpacingExtra) < 0.5f &&
+            abs(saved.lineSpacingMultiplier - current.lineSpacingMultiplier) < 0.01f &&
+            abs(saved.letterSpacing - current.letterSpacing) < 0.001f &&
+            abs(saved.textScaleX - current.textScaleX) < 0.001f
+        ) AppleSoftWrapResumeDecision.RESUME else AppleSoftWrapResumeDecision.REBIND
+    }
+
     fun canResume(
         saved: AppleSoftWrapResumeGeometry,
         current: AppleSoftWrapResumeGeometry,
         sourceAttached: Boolean,
         holderAttached: Boolean,
         layoutPending: Boolean,
-    ): Boolean = sourceAttached && holderAttached && !layoutPending &&
-        saved.text == current.text && saved.width > 0 && saved.width == current.width &&
-        saved.lineBounds.size > 1 && saved.lineBounds == current.lineBounds &&
-        abs(saved.textSizePx - current.textSizePx) < 0.5f &&
-        abs(saved.lineSpacingExtra - current.lineSpacingExtra) < 0.5f &&
-        abs(saved.lineSpacingMultiplier - current.lineSpacingMultiplier) < 0.01f
+    ): Boolean = decision(
+        saved, current, readingAttached = true, sourceAttached = sourceAttached,
+        holderAttached = holderAttached, layoutPending = layoutPending,
+        ownerCurrent = true,
+    ) == AppleSoftWrapResumeDecision.RESUME
 }
 
 /** Paint the readings of all but the last *measured* line of one native
@@ -103,6 +139,13 @@ internal class AppleNativeSoftWrapReadingOverlay(
             },
             lineSpacingExtra = source.lineSpacingExtra,
             lineSpacingMultiplier = source.lineSpacingMultiplier,
+            typefaceIdentity = source.typeface,
+            contentWidth = (source.width - source.compoundPaddingLeft -
+                source.compoundPaddingRight).coerceAtLeast(0),
+            compoundPaddingLeft = source.compoundPaddingLeft,
+            compoundPaddingRight = source.compoundPaddingRight,
+            letterSpacing = source.letterSpacing,
+            textScaleX = source.textScaleX,
         )
     }
 
@@ -166,23 +209,55 @@ internal class AppleNativeSoftWrapReadingOverlay(
     /** A holder can leave and re-enter the viewport without another native
      * adapter bind. Restore its painter only after the SAME source and exact
      * soft-line offsets are measured again. A recycled holder must fail closed. */
-    fun resumeIfCompatible(currentHolder: ViewGroup?): Boolean {
-        if (currentHolder !== holderRoot) return false
-        if (installed) return true
-        val geometry = currentGeometry() ?: return false
-        if (!AppleSoftWrapResumePolicy.canResume(
-                saved = originalGeometry,
-                current = geometry,
-                sourceAttached = source.isAttachedToWindow,
-                holderAttached = holderRoot.isAttachedToWindow &&
-                    holderRoot.width > 0 && holderRoot.height > 0,
-                layoutPending = source.isLayoutRequested || holderRoot.isLayoutRequested,
-            )
-        ) return false
+    fun resumeIfCompatible(
+        currentHolder: ViewGroup?,
+        readingAttached: Boolean,
+        ownerCurrent: Boolean,
+        installWhenReady: Boolean = true,
+    ): AppleSoftWrapResumeDecision {
+        if (currentHolder !== holderRoot) {
+            clear()
+            return AppleSoftWrapResumeDecision.REBIND
+        }
         var parent: View? = source
         while (parent != null && parent !== holderRoot) parent = parent.parent as? View
-        if (parent !== holderRoot) return false
-        return install()
+        if (source.isAttachedToWindow && holderRoot.isAttachedToWindow &&
+            parent !== holderRoot
+        ) {
+            clear()
+            return AppleSoftWrapResumeDecision.REBIND
+        }
+        // An installed overlay owns an extra line-spacing slot. Compare with
+        // that expected spacing, not the pre-install value from the snapshot.
+        val expected = if (installed) originalGeometry.copy(
+            lineSpacingExtra = originalLineSpacingExtra + reservedGapPx,
+        ) else originalGeometry
+        val decision = AppleSoftWrapResumePolicy.decision(
+            saved = expected,
+            current = currentGeometry(),
+            readingAttached = readingAttached,
+            sourceAttached = source.isAttachedToWindow,
+            holderAttached = holderRoot.isAttachedToWindow &&
+                holderRoot.width > 0 && holderRoot.height > 0,
+            layoutPending = source.isLayoutRequested || holderRoot.isLayoutRequested,
+            ownerCurrent = ownerCurrent,
+        )
+        if (decision == AppleSoftWrapResumeDecision.REBIND) {
+            clear()
+            return decision
+        }
+        if (decision == AppleSoftWrapResumeDecision.WAIT) {
+            if (!readingAttached || !source.isAttachedToWindow ||
+                !holderRoot.isAttachedToWindow
+            ) clear()
+            return decision
+        }
+        if (installed || !installWhenReady) return AppleSoftWrapResumeDecision.RESUME
+        if (parent !== holderRoot || !install()) {
+            clear()
+            return AppleSoftWrapResumeDecision.REBIND
+        }
+        return AppleSoftWrapResumeDecision.RESUME
     }
 
     /** A recycled holder must never retain modified source line spacing. */

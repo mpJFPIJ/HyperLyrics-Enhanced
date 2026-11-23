@@ -316,11 +316,15 @@ internal class AppleLyricsSupplementHooks(
     }
     internal val lineWidePronunciationRow = AppleLineWidePronunciationRow()
     internal val lineWideLayoutRecheck by lazy { AppleNativePronunciationLayoutRecheck(this) }
-    internal val translationLineHighlight = AppleNativeTranslationHighlight { recyclerView ->
-        appleRecyclerAdapter(recyclerView)?.let { adapter ->
-            blurHooks.appleLyricsNativeActiveAdapterPositionsOrNull(adapter)
-        }
-    }
+    internal val translationLineHighlight = AppleNativeTranslationHighlight(
+        nativeActivePositions = { recyclerView ->
+            appleRecyclerAdapter(recyclerView)?.let { adapter ->
+                blurHooks.appleLyricsNativeActiveAdapterPositionsOrNull(adapter)
+            }
+        },
+        presentedSongId = { currentAppleLyricsSongId },
+        presentedRevision = { nativeOnlineTranslationStore.revision() },
+    )
     private val profiledNativeItemChanged by lazy {
         val point = AppleMusicHookPoint.RECYCLER_NOTIFY_ITEM_CHANGED
         if (AppleMusicHookProfiles.exactTargets(hookResolver.version, point).isEmpty()) null

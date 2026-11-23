@@ -71,4 +71,52 @@ class AppleSoftWrapResumePolicyTest {
             sourceAttached = true, holderAttached = true, layoutPending = false,
         ))
     }
+
+    @Test fun settledButIncompatibleGeometryRequiresRebindingRatherThanWaitingForever() {
+        assertTrue(AppleSoftWrapResumePolicy.decision(
+            saved = original,
+            current = original.copy(textSizePx = 38.6f),
+            readingAttached = true, sourceAttached = true, holderAttached = true,
+            layoutPending = false, ownerCurrent = true,
+        ) == AppleSoftWrapResumeDecision.REBIND)
+        assertTrue(AppleSoftWrapResumePolicy.decision(
+            saved = original, current = original,
+            readingAttached = true, sourceAttached = true, holderAttached = true,
+            layoutPending = true, ownerCurrent = true,
+        ) == AppleSoftWrapResumeDecision.WAIT)
+    }
+
+    @Test fun detachedReadingCannotReinstallItsOwnPainterEvenWithAttachedSource() {
+        assertTrue(AppleSoftWrapResumePolicy.decision(
+            saved = original, current = original,
+            readingAttached = false, sourceAttached = true, holderAttached = true,
+            layoutPending = false, ownerCurrent = true,
+        ) == AppleSoftWrapResumeDecision.WAIT)
+    }
+
+    @Test fun sameLyricTextFromAnotherSongOrHolderGenerationMustNotRestore() {
+        assertTrue(AppleSoftWrapResumePolicy.decision(
+            saved = original, current = original,
+            readingAttached = true, sourceAttached = true, holderAttached = true,
+            layoutPending = false, ownerCurrent = false,
+        ) == AppleSoftWrapResumeDecision.REBIND)
+    }
+
+    @Test fun sameWrapOffsetsButChangedTypefacePaddingOrGlyphWidthInvalidatesPainter() {
+        val changes = listOf(
+            original.copy(typefaceIdentity = "new-font"),
+            original.copy(contentWidth = 392),
+            original.copy(compoundPaddingLeft = 9),
+            original.copy(compoundPaddingRight = 7),
+            original.copy(letterSpacing = 0.08f),
+            original.copy(textScaleX = 1.1f),
+        )
+        changes.forEach { changed ->
+            assertTrue(AppleSoftWrapResumePolicy.decision(
+                saved = original, current = changed,
+                readingAttached = true, sourceAttached = true, holderAttached = true,
+                layoutPending = false, ownerCurrent = true,
+            ) == AppleSoftWrapResumeDecision.REBIND)
+        }
+    }
 }

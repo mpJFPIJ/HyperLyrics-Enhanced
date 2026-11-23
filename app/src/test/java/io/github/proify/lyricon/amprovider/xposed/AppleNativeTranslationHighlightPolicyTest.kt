@@ -518,4 +518,35 @@ class AppleNativeTranslationHighlightPolicyTest {
         assertFalse(AppleNativeTranslationHighlightPolicy.fragmentMatches(full, "미소노 나카카라"))
         assertFalse(AppleNativeTranslationHighlightPolicy.fragmentMatches(full, "の"))
     }
+
+    @Test fun previousSongIndexedTranslationCannotHighlightOnNewPlaybackClock() {
+        // The new song can start before its native meaning getter refreshes
+        // the occurrence cache. Old cache identity alone must never focus it.
+        assertFalse(AppleTranslationLivePresentationPolicy.canFocus(
+            pulseSongId = "old-song", pulseRevision = 4L,
+            presentedSongId = "new-song", presentedRevision = 4L,
+            indexedSongId = "old-song", indexedRevision = 4L,
+        ))
+    }
+
+    @Test fun previousTranslationRevisionCannotFocusEvenBeforeFreshGetterArrives() {
+        assertFalse(AppleTranslationLivePresentationPolicy.canFocus(
+            pulseSongId = "song", pulseRevision = 4L,
+            presentedSongId = "song", presentedRevision = 5L,
+            indexedSongId = "song", indexedRevision = 4L,
+        ))
+    }
+
+    @Test fun currentIndexedTranslationKeepsItsNativeWordClock() {
+        assertTrue(AppleTranslationLivePresentationPolicy.canFocus(
+            pulseSongId = "song", pulseRevision = 5L,
+            presentedSongId = "song", presentedRevision = 5L,
+            indexedSongId = "song", indexedRevision = 5L,
+        ))
+        assertFalse(AppleTranslationLivePresentationPolicy.canFocus(
+            pulseSongId = "song", pulseRevision = 5L,
+            presentedSongId = null, presentedRevision = 5L,
+            indexedSongId = "song", indexedRevision = 5L,
+        ))
+    }
 }

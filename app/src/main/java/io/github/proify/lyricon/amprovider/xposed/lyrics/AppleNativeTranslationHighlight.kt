@@ -90,6 +90,22 @@ internal object AppleTranslationFocusPolicy {
     }
 }
 
+/** The last native translation getter can still describe the OUTGOING song.
+ * A retained holder must not borrow the new player's clock until both the
+ * presentation and indexed line occurrence own that same song/revision. */
+internal object AppleTranslationLivePresentationPolicy {
+    fun canFocus(
+        pulseSongId: String,
+        pulseRevision: Long,
+        presentedSongId: String?,
+        presentedRevision: Long,
+        indexedSongId: String?,
+        indexedRevision: Long,
+    ): Boolean = presentedSongId != null &&
+        pulseSongId == presentedSongId && pulseRevision == presentedRevision &&
+        pulseSongId == indexedSongId && pulseRevision == indexedRevision
+}
+
 /** A holder's bind entry invalidates cached source data, not its live painter. */
 internal class AppleTranslationBindingLifecycle {
     private var generation = 0L
@@ -418,6 +434,8 @@ internal class AppleTranslationContextResolver(
 
 internal class AppleNativeTranslationHighlight(
     private val nativeActivePositions: (View) -> Set<Int>? = { null },
+    private val presentedSongId: () -> String? = { null },
+    private val presentedRevision: () -> Long = { -1L },
 ) {
     private val byHolder = AppleTranslationLineContextStore()
     // A strong Pulse value owns its root and child TextViews; that defeats a
@@ -758,7 +776,15 @@ internal class AppleNativeTranslationHighlight(
      * UI work grow quadratically with visible lyric row count. */
     private fun refreshVisibleGroups(): Boolean {
         val snapshot = livePulses()
-        snapshot.filterNot(Pulse::textsIntact).forEach { stale ->
+        val currentSong = presentedSongId()
+        val currentRevision = presentedRevision()
+        snapshot.filter { stale ->
+            !stale.textsIntact() || stale.ctx.songId != currentSong ||
+                stale.ctx.revision != currentRevision
+        }.forEach { stale ->
+            // The native holder may still be attached during a track swap.
+            // Remove its old foreground before the new playback clock can
+            // accidentally focus the outgoing song's meaning.
             stale.stop()
             if (pulseAt(stale.root) === stale) {
                 pulses.remove(stale.root)
@@ -774,8 +800,14 @@ internal class AppleNativeTranslationHighlight(
             // previous revision. There must be just one focused meaning for
             // this entire RecyclerView, never one per revision group.
             val songRows = rows.filter { pulse ->
-                pulse.ctx.songId == occurrenceIndex.indexedSongId &&
-                    pulse.ctx.revision == occurrenceIndex.indexedRevision
+                AppleTranslationLivePresentationPolicy.canFocus(
+                    pulseSongId = pulse.ctx.songId,
+                    pulseRevision = pulse.ctx.revision,
+                    presentedSongId = currentSong,
+                    presentedRevision = currentRevision,
+                    indexedSongId = occurrenceIndex.indexedSongId,
+                    indexedRevision = occurrenceIndex.indexedRevision,
+                )
             }
             val nativeActive = if (AppleTranslationRecyclerOwnerPolicy.isNativeRecyclerView(owner))
                 nativeActivePositions(owner) else null

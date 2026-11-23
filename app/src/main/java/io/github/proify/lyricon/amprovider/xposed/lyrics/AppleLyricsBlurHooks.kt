@@ -432,6 +432,7 @@ internal class AppleLyricsBlurHooks(
         (recyclerView as? View)?.let { view ->
             blurState.withRuntimeState(view, AppleLyricsScrollIntentPolicy::endMotion)
             completeAppleLyricsProgrammaticRecenter(view)
+            maybeRecoverAppleLyricsNativeFollow(view)
         }
         scheduleAppleLyricsBlur(
             recyclerView = recyclerView,
@@ -444,80 +445,103 @@ internal class AppleLyricsBlurHooks(
         val recyclerView = blurState.recyclerFor(adapter) ?: return
         val activePositions = appleLyricsActiveAdapterPositions(adapter)
         val changed = blurState.withRuntimeState(recyclerView) { state ->
-            updateAppleLyricsActivePositions(state, activePositions)
+            AppleLyricsScrollIntentPolicy.adoptAdapter(state, adapter)
+            updateAppleLyricsActivePositions(state, activePositions).also { changed ->
+                if (changed) {
+                    state.pendingNativeFollowCheck =
+                        if (state.suspendedForScroll) null
+                        else AppleLyricsFollowRecheckPolicy.begin(
+                            adapter, currentSongId(), activePositions,
+                            SystemClock.elapsedRealtime(),
+                        )
+                }
+            }
         }
         if (changed) {
             scheduleAppleLyricsBlur(recyclerView)
             if (activePositions.isNotEmpty()) {
                 // Give the host's normal auto-follow time to settle. A stuck
                 // idle native list may be recentered once, but never while the
-                // listener is browsing or the RecyclerView is in motion.
-                val observedAdapter = WeakReference(adapter)
-                val expectedActive = activePositions.toSet()
-                recyclerView.postDelayed({
-                    val latestAdapter = observedAdapter.get() ?: return@postDelayed
-                    if (!recyclerView.isAttachedToWindow ||
-                        appleRecyclerAdapter(recyclerView) !== latestAdapter
-                    ) return@postDelayed
-                    val latestActive = appleLyricsActiveAdapterPositions(latestAdapter)
-                    if (latestActive != expectedActive) return@postDelayed
-                    val visible = appleLyricsOnScreenChildren(recyclerView)
-                        .mapTo(mutableSetOf()) { it.first }
-                    val scrollState = appleLyricsRecyclerScrollState(recyclerView)
-                    if (scrollState == APPLE_LYRICS_SCROLL_STATE_IDLE &&
-                        latestActive.none(visible::contains)
-                    ) {
-                        AppleLyricUiRuntimeProbe.record(
-                            "native_follow_offscreen_candidate",
-                            "active=${latestActive.sorted()} visible=${visible.sorted()} " +
-                                "scrollState=$scrollState " +
-                                "playbackMs=${appleLyricsCurrentPlaybackPositionMs() ?: -1}",
-                        )
-                        val now = SystemClock.elapsedRealtime()
-                        val eligible = blurState.withRuntimeState(recyclerView) { state ->
-                            AppleLyricsFollowRecoveryPolicy.shouldRecover(
-                                active = latestActive,
-                                visible = visible,
-                                scrollState = scrollState,
-                                suspendedForBrowse = state.suspendedForScroll,
-                                playing = playbackHooks().isPlaying(),
-                                nowMs = now,
-                                lastRecoveryAtMs = state.lastFollowRecoveryAtMs,
-                            )
-                        }
-                        val targetPosition = latestActive.maxOrNull()
-                        if (eligible && targetPosition != null) {
-                            val manager = runCatching {
-                                AppleReflection.call(recyclerView, "getLayoutManager")
-                            }.getOrNull()
-                            if (manager != null) {
-                                blurState.withRuntimeState(recyclerView) { state ->
-                                    AppleLyricsScrollIntentPolicy.requestRecovery(state, targetPosition, now)
-                                }
-                                val method = appleLyricsScrollToPositionWithOffset(
-                                    layoutManager = manager,
-                                    position = targetPosition,
-                                    offset = (recyclerView.height *
-                                        APPLE_LYRICS_INITIAL_ANCHOR_Y_FRACTION).roundToInt(),
-                                )
-                                if (method == null) {
-                                    blurState.withRuntimeState(recyclerView) { state ->
-                                        if (state.pendingProgrammaticRecenterPosition == targetPosition) {
-                                            state.pendingProgrammaticRecenterPosition = null
-                                        }
-                                    }
-                                } else {
-                                    AppleLyricUiRuntimeProbe.record(
-                                        "native_follow_recovery_requested",
-                                        "target=$targetPosition method=$method playbackMs=" +
-                                            "${appleLyricsCurrentPlaybackPositionMs() ?: -1}",
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }, 750L)
+                // listener is browsing. Keep this check through transient
+                // SETTLING or empty layout; a later IDLE/layout reruns it.
+                recyclerView.postDelayed(
+                    { maybeRecoverAppleLyricsNativeFollow(recyclerView) },
+                    AppleLyricsFollowRecheckPolicy.NATIVE_SETTLE_MS,
+                )
             }
+        }
+    }
+
+    private fun maybeRecoverAppleLyricsNativeFollow(recyclerView: View) {
+        val state = blurState.runtimeStateOrNull(recyclerView) ?: return
+        val pending = state.pendingNativeFollowCheck ?: return
+        if (!recyclerView.isAttachedToWindow) return
+        val adapter = appleRecyclerAdapter(recyclerView)
+        val songId = currentSongId()
+        val active = adapter?.let { appleLyricsActiveAdapterPositions(it) } ?: emptySet()
+        if (AppleLyricsFollowRecheckPolicy.isStale(
+                pending, adapter, songId, active,
+                userBrowsing = state.suspendedForScroll,
+            )
+        ) {
+            if (state.pendingNativeFollowCheck === pending) {
+                state.pendingNativeFollowCheck = null
+            }
+            return
+        }
+        val now = SystemClock.elapsedRealtime()
+        if (!AppleLyricsFollowRecheckPolicy.shouldEvaluate(
+                pending, adapter, songId, active, now,
+            )
+        ) return
+        val scrollState = appleLyricsRecyclerScrollState(recyclerView)
+        // Keep a pending check until native settling finishes; an active-line
+        // callback is not guaranteed to fire again once the list becomes idle.
+        if (scrollState != APPLE_LYRICS_SCROLL_STATE_IDLE) return
+        val visible = appleLyricsOnScreenChildren(recyclerView)
+            .mapTo(mutableSetOf()) { it.first }
+        if (visible.isEmpty()) return
+        if (active.any(visible::contains)) {
+            state.pendingNativeFollowCheck = null
+            return
+        }
+        AppleLyricUiRuntimeProbe.record(
+            "native_follow_offscreen_candidate",
+            "active=${active.sorted()} visible=${visible.sorted()} " +
+                "scrollState=$scrollState playbackMs=${appleLyricsCurrentPlaybackPositionMs() ?: -1}",
+        )
+        val eligible = AppleLyricsFollowRecoveryPolicy.shouldRecover(
+            active = active,
+            visible = visible,
+            scrollState = scrollState,
+            suspendedForBrowse = state.suspendedForScroll,
+            playing = playbackHooks().isPlaying(),
+            nowMs = now,
+            lastRecoveryAtMs = state.lastFollowRecoveryAtMs,
+        )
+        val targetPosition = active.maxOrNull()
+        if (!eligible || targetPosition == null) return
+        val manager = runCatching {
+            AppleReflection.call(recyclerView, "getLayoutManager")
+        }.getOrNull() ?: return
+        AppleLyricsScrollIntentPolicy.requestRecovery(state, targetPosition, now)
+        val method = appleLyricsScrollToPositionWithOffset(
+            layoutManager = manager,
+            position = targetPosition,
+            offset = (recyclerView.height *
+                APPLE_LYRICS_INITIAL_ANCHOR_Y_FRACTION).roundToInt(),
+        )
+        if (method == null) {
+            if (state.pendingProgrammaticRecenterPosition == targetPosition) {
+                state.pendingProgrammaticRecenterPosition = null
+            }
+        } else {
+            state.pendingNativeFollowCheck = null
+            AppleLyricUiRuntimeProbe.record(
+                "native_follow_recovery_requested",
+                "target=$targetPosition method=$method playbackMs=" +
+                    "${appleLyricsCurrentPlaybackPositionMs() ?: -1}",
+            )
         }
     }
 
@@ -590,18 +614,7 @@ internal class AppleLyricsBlurHooks(
         }
         blurState.rememberRecycler(adapter, recyclerView)
         blurState.withRuntimeState(recyclerView) { currentState ->
-            if (currentState.adapterRef?.get() !== adapter) {
-                currentState.adapterRef = WeakReference(adapter)
-                currentState.settledAnchorTopY = null
-                currentState.suspendedForScroll = false
-                currentState.motionBlurCleared = false
-                currentState.pendingProgrammaticRecenterPosition = null
-                currentState.lastActivePositions = emptySet()
-                currentState.lastFocusedActivePosition = null
-                currentState.lastFollowRecoveryAtMs = 0L
-                currentState.pendingOutgoingPositions = emptySet()
-                currentState.outgoingZoneTopByPosition = emptyMap()
-            }
+            AppleLyricsScrollIntentPolicy.adoptAdapter(currentState, adapter)
             AppleLyricsScrollIntentPolicy.onViewportHeightChanged(currentState, recyclerView.height)
         }
         val scrollState = appleLyricsRecyclerScrollState(recyclerView)
@@ -931,6 +944,9 @@ internal class AppleLyricsBlurHooks(
                                         rememberAppleLyricsRecyclerAdapter(recyclerView)
                                         completeAppleLyricsProgrammaticRecenter(recyclerView)
                                     }
+                                    if (name == "onLayout" || name == "onAttachedToWindow") {
+                                        (recyclerView as? View)?.let(::maybeRecoverAppleLyricsNativeFollow)
+                                    }
                                     scheduleAppleLyricsBlur(recyclerView)
                                 }
                             }
@@ -954,6 +970,7 @@ internal class AppleLyricsBlurHooks(
                             recordAppleLyricsScrollMotion(
                                 recyclerView, appleLyricsRecyclerScrollState(recyclerView),
                             )
+                            (recyclerView as? View)?.let(::maybeRecoverAppleLyricsNativeFollow)
                             scheduleAppleLyricsBlur(
                                 recyclerView = recyclerView,
                                 delayMs = APPLE_LYRICS_IDLE_RECHECK_DELAY_MS,

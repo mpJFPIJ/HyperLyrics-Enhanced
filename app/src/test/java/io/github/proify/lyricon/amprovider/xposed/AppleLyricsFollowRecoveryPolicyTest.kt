@@ -46,4 +46,53 @@ class AppleLyricsFollowRecoveryPolicyTest {
             nowMs = 12_000, lastRecoveryAtMs = 10_000,
         ))
     }
+
+    @Test fun pendingFollowCheckWaitsForNativeSettleAndCanRunOnLaterLayout() {
+        val adapter = Any()
+        val pending = AppleLyricsFollowRecheckPolicy.begin(
+            adapter = adapter,
+            active = setOf(17),
+            nowMs = 1_000L,
+        )!!
+        assertFalse(AppleLyricsFollowRecheckPolicy.shouldEvaluate(
+            pending, adapter, setOf(17), nowMs = 1_500L,
+        ))
+        assertTrue(AppleLyricsFollowRecheckPolicy.shouldEvaluate(
+            pending, adapter, setOf(17), nowMs = 1_750L,
+        ))
+        // A settling/empty first sample must leave the same check available to
+        // the next IDLE or layout event; there may be no new active-line update.
+        assertTrue(AppleLyricsFollowRecheckPolicy.shouldEvaluate(
+            pending, adapter, setOf(17), nowMs = 2_100L,
+        ))
+    }
+
+    @Test fun pendingFollowCheckCannotMoveAReusedRecyclerToAnOldSong() {
+        val previousAdapter = Any()
+        val pending = AppleLyricsFollowRecheckPolicy.begin(
+            previousAdapter, setOf(4), nowMs = 1_000L,
+        )!!
+        assertTrue(AppleLyricsFollowRecheckPolicy.isStale(
+            pending, Any(), setOf(4), userBrowsing = false,
+        ))
+        assertTrue(AppleLyricsFollowRecheckPolicy.isStale(
+            pending, previousAdapter, setOf(5), userBrowsing = false,
+        ))
+        assertFalse(AppleLyricsFollowRecheckPolicy.shouldEvaluate(
+            pending, previousAdapter, setOf(5), nowMs = 3_000L,
+        ))
+    }
+
+    @Test fun userDragCancelsTheDeferredFollowInsteadOfRecentering() {
+        val adapter = Any()
+        val pending = AppleLyricsFollowRecheckPolicy.begin(
+            adapter, setOf(9), nowMs = 5_000L,
+        )!!
+        assertTrue(AppleLyricsFollowRecheckPolicy.isStale(
+            pending, adapter, setOf(9), userBrowsing = true,
+        ))
+        assertFalse(AppleLyricsFollowRecheckPolicy.begin(
+            adapter, emptySet(), nowMs = 5_000L,
+        ) != null)
+    }
 }

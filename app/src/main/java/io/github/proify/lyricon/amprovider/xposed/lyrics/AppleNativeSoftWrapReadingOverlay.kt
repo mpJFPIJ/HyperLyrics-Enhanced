@@ -20,6 +20,33 @@ import android.view.ViewGroup
 import kotlin.math.abs
 import kotlin.math.ceil
 
+/** Immutable native text geometry from before the soft-wrap painter reserves gaps.
+ * Matching only lineCount is unsafe: a recycled word can keep two visual lines
+ * but wrap at different UTF-16 offsets. */
+internal data class AppleSoftWrapResumeGeometry(
+    val text: String,
+    val width: Int,
+    val textSizePx: Float,
+    val lineBounds: List<Pair<Int, Int>>,
+    val lineSpacingExtra: Float,
+    val lineSpacingMultiplier: Float,
+)
+
+internal object AppleSoftWrapResumePolicy {
+    fun canResume(
+        saved: AppleSoftWrapResumeGeometry,
+        current: AppleSoftWrapResumeGeometry,
+        sourceAttached: Boolean,
+        holderAttached: Boolean,
+        layoutPending: Boolean,
+    ): Boolean = sourceAttached && holderAttached && !layoutPending &&
+        saved.text == current.text && saved.width > 0 && saved.width == current.width &&
+        saved.lineBounds.size > 1 && saved.lineBounds == current.lineBounds &&
+        abs(saved.textSizePx - current.textSizePx) < 0.5f &&
+        abs(saved.lineSpacingExtra - current.lineSpacingExtra) < 0.5f &&
+        abs(saved.lineSpacingMultiplier - current.lineSpacingMultiplier) < 0.01f
+}
+
 /** Paint the readings of all but the last *measured* line of one native
  * internally wrapped TextView. Android still draws the original Japanese
  * TextView, including its own word shader and click target; extra line spacing
@@ -65,6 +92,23 @@ internal class AppleNativeSoftWrapReadingOverlay(
     }
     private val measuredWidth = (source.width - source.compoundPaddingLeft -
         source.compoundPaddingRight).coerceAtLeast(0)
+    private fun currentGeometry(): AppleSoftWrapResumeGeometry? {
+        val native = source.layout ?: return null
+        return AppleSoftWrapResumeGeometry(
+            text = source.text.toString(),
+            width = source.width,
+            textSizePx = source.textSize,
+            lineBounds = (0 until native.lineCount).map { index ->
+                native.getLineStart(index) to native.getLineEnd(index)
+            },
+            lineSpacingExtra = source.lineSpacingExtra,
+            lineSpacingMultiplier = source.lineSpacingMultiplier,
+        )
+    }
+
+    private val originalGeometry = requireNotNull(currentGeometry()) {
+        "Native soft-wrap reading requires a measured source layout"
+    }
     private val paintedRows: List<PaintedRow>
     private val reservedGapPx: Int
     private var installed = false
@@ -117,6 +161,28 @@ internal class AppleNativeSoftWrapReadingOverlay(
             runCatching { holderRoot.overlay.remove(this) }
             restoreOriginalSpacingIfOwned()
         }.isSuccess
+    }
+
+    /** A holder can leave and re-enter the viewport without another native
+     * adapter bind. Restore its painter only after the SAME source and exact
+     * soft-line offsets are measured again. A recycled holder must fail closed. */
+    fun resumeIfCompatible(currentHolder: ViewGroup?): Boolean {
+        if (currentHolder !== holderRoot) return false
+        if (installed) return true
+        val geometry = currentGeometry() ?: return false
+        if (!AppleSoftWrapResumePolicy.canResume(
+                saved = originalGeometry,
+                current = geometry,
+                sourceAttached = source.isAttachedToWindow,
+                holderAttached = holderRoot.isAttachedToWindow &&
+                    holderRoot.width > 0 && holderRoot.height > 0,
+                layoutPending = source.isLayoutRequested || holderRoot.isLayoutRequested,
+            )
+        ) return false
+        var parent: View? = source
+        while (parent != null && parent !== holderRoot) parent = parent.parent as? View
+        if (parent !== holderRoot) return false
+        return install()
     }
 
     /** A recycled holder must never retain modified source line spacing. */

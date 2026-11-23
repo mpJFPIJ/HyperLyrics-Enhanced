@@ -484,6 +484,11 @@ internal class AppleLineWidePronunciationRow {
 
         private fun syncPaintLayer() {
             val root = paintRoot ?: return
+            // The outer ViewOverlay and the extra Japanese line spacing were
+            // removed on detach. A normal viewport reattach does not
+            // necessarily trigger another holder bind, so recover the same
+            // measured overlay here without guessing new phonetic boundaries.
+            inlineWrapOverlay?.resumeIfCompatible(root)
             val measured = isAttachedToWindow && isShown && root.isAttachedToWindow &&
                 layout != null && width > 0 && height > 0 &&
                 root.width > 0 && root.height > 0
@@ -588,8 +593,9 @@ internal class AppleLineWidePronunciationRow {
             removeCallbacks(updatePaintLayer)
             detachOuterForeground()
             inlineWrapOverlay?.clear()
-            inlineWrapOverlay = null
-            inlineVisualRows = null
+            // Keep the immutable source/row snapshot for a temporary viewport
+            // detach. An actual holder rebind calls clear(root), which still
+            // disposes the old overlay before inserting a different reading.
             super.onDetachedFromWindow()
         }
 

@@ -1,6 +1,7 @@
 package io.github.proify.lyricon.amprovider.xposed
 
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -51,48 +52,78 @@ class AppleLyricsFollowRecoveryPolicyTest {
         val adapter = Any()
         val pending = AppleLyricsFollowRecheckPolicy.begin(
             adapter = adapter,
+            songId = "song-a",
             active = setOf(17),
             nowMs = 1_000L,
         )!!
         assertFalse(AppleLyricsFollowRecheckPolicy.shouldEvaluate(
-            pending, adapter, setOf(17), nowMs = 1_500L,
+            pending, adapter, "song-a", setOf(17), nowMs = 1_500L,
         ))
         assertTrue(AppleLyricsFollowRecheckPolicy.shouldEvaluate(
-            pending, adapter, setOf(17), nowMs = 1_750L,
+            pending, adapter, "song-a", setOf(17), nowMs = 1_750L,
         ))
         // A settling/empty first sample must leave the same check available to
         // the next IDLE or layout event; there may be no new active-line update.
         assertTrue(AppleLyricsFollowRecheckPolicy.shouldEvaluate(
-            pending, adapter, setOf(17), nowMs = 2_100L,
+            pending, adapter, "song-a", setOf(17), nowMs = 2_100L,
         ))
     }
 
     @Test fun pendingFollowCheckCannotMoveAReusedRecyclerToAnOldSong() {
         val previousAdapter = Any()
         val pending = AppleLyricsFollowRecheckPolicy.begin(
-            previousAdapter, setOf(4), nowMs = 1_000L,
+            previousAdapter, "song-a", setOf(4), nowMs = 1_000L,
         )!!
         assertTrue(AppleLyricsFollowRecheckPolicy.isStale(
-            pending, Any(), setOf(4), userBrowsing = false,
+            pending, Any(), "song-a", setOf(4), userBrowsing = false,
         ))
         assertTrue(AppleLyricsFollowRecheckPolicy.isStale(
-            pending, previousAdapter, setOf(5), userBrowsing = false,
+            pending, previousAdapter, "song-a", setOf(5), userBrowsing = false,
+        ))
+        assertTrue(AppleLyricsFollowRecheckPolicy.isStale(
+            pending, previousAdapter, "song-b", setOf(4), userBrowsing = false,
         ))
         assertFalse(AppleLyricsFollowRecheckPolicy.shouldEvaluate(
-            pending, previousAdapter, setOf(5), nowMs = 3_000L,
+            pending, previousAdapter, "song-a", setOf(5), nowMs = 3_000L,
         ))
     }
 
     @Test fun userDragCancelsTheDeferredFollowInsteadOfRecentering() {
         val adapter = Any()
         val pending = AppleLyricsFollowRecheckPolicy.begin(
-            adapter, setOf(9), nowMs = 5_000L,
+            adapter, "song-a", setOf(9), nowMs = 5_000L,
         )!!
         assertTrue(AppleLyricsFollowRecheckPolicy.isStale(
-            pending, adapter, setOf(9), userBrowsing = true,
+            pending, adapter, "song-a", setOf(9), userBrowsing = true,
         ))
-        assertFalse(AppleLyricsFollowRecheckPolicy.begin(
-            adapter, emptySet(), nowMs = 5_000L,
-        ) != null)
+        val state = AppleLyricsBlurRuntimeState(pendingNativeFollowCheck = pending)
+        AppleLyricsScrollIntentPolicy.recordMovement(state, scrollState = 1)
+        assertNull(state.pendingNativeFollowCheck)
+        assertNull(AppleLyricsFollowRecheckPolicy.begin(
+            adapter, "song-a", emptySet(), nowMs = 5_000L,
+        ))
+        assertNull(AppleLyricsFollowRecheckPolicy.begin(
+            adapter, null, setOf(9), nowMs = 5_000L,
+        ))
+    }
+
+    @Test fun laterBlurFrameMustNotDiscardCurrentAdaptersPendingFollow() {
+        val oldAdapter = Any()
+        val currentAdapter = Any()
+        val state = AppleLyricsBlurRuntimeState()
+        AppleLyricsScrollIntentPolicy.adoptAdapter(state, oldAdapter)
+        val old = AppleLyricsFollowRecheckPolicy.begin(
+            oldAdapter, "song-a", setOf(8), nowMs = 1_000L,
+        )!!
+        state.pendingNativeFollowCheck = old
+        AppleLyricsScrollIntentPolicy.adoptAdapter(state, currentAdapter)
+        assertNull(state.pendingNativeFollowCheck)
+
+        val current = AppleLyricsFollowRecheckPolicy.begin(
+            currentAdapter, "song-b", setOf(10), nowMs = 3_000L,
+        )!!
+        state.pendingNativeFollowCheck = current
+        AppleLyricsScrollIntentPolicy.adoptAdapter(state, currentAdapter)
+        assertTrue(state.pendingNativeFollowCheck === current)
     }
 }

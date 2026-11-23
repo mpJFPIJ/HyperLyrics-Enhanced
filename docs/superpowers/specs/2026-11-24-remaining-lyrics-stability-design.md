@@ -31,3 +31,18 @@ The current `AppleNativeTranslationHighlight.refreshVisibleGroups` compares a pu
 `AppleLyricsBlurHooks.onAppleLyricsActiveLinesUpdated` performs a single delayed offscreen recovery check per changed active-position set. If it runs while the list is settling or layout has no visible rows, the same active row can remain stranded without another check.
 
 Neither static fact proves all historical device symptoms. Translation detach/reattach and visual line alignment require target-device evidence; preserve existing behavior until a corresponding test or diagnostic confirms a safe correction.
+
+## Required target-device acceptance matrix
+
+Target: Galaxy Buddy3 / Android 16, Apple Music 6.5.3 with the currently used NPatch injection route and module settings. Keep screenshots/video and the bounded `[HLE_UX_TRACE]` log stages for any failing case, without sharing lyric text or credentials.
+
+1. Single-row Japanese: original above reading above Korean translation; all three correct and no duplicate overlay.
+2. Flexbox-wrapped and internally soft-wrapped Japanese: each **verified** Hangul fragment follows its Japanese visual row; no clipped, dropped, repeated or overlapping text. Identify any ambiguous Kanji token mapping that intentionally retains a whole-line fallback.
+3. Long mixed Kanji/kana and punctuation: original text remains correct; no guessed Hangul boundary or misplaced translation.
+4. Per-word karaoke: play normally, jump forward/backward, pause/resume and rapid seek; only the currently sung native word/meaning is active; no old clock after a seek.
+5. Switch tracks while the previous translation/painter is still attached: old focus must clear immediately and new track must not borrow old timing.
+6. Auto-scroll while playing and native list settling: active row eventually enters the visible viewport; native scrolling is preserved. Manual drag/browse must never be forcibly recentered by the recovery hook.
+7. Recycle holders, rotate/reopen lyric view and background/foreground app: no duplicate Hangul/meaning, stale overlays, permanent blanks or repeated pulse timers.
+8. Watch frame smoothness on dense lyrics: no new jank and no continuous recovery scroll requests.
+
+Passing JVM tests/Lint/APK verification is a prerequisite for this test matrix, **not** a substitute for it.

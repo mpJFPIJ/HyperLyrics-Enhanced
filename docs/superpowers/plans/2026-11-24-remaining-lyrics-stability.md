@@ -24,6 +24,7 @@
 - Same source line/adapter with unchanged revision: existing pulse remains eligible for reuse.
 - Idle native list after layout transient: pending active line gets a later recheck without repeated continuous scrolling.
 - Explicit user drag or song/adapter change before retry: pending recenter must be cancelled.
+- Active-line callback arriving before the next blur frame: later adapter adoption must not erase the new pending check.
 
 ---
 
@@ -35,7 +36,7 @@
 - Modify: `app/src/main/java/io/github/proify/lyricon/amprovider/xposed/lyrics/AppleLyricsSupplementHooks.kt`
 
 **Interfaces:**
-- Produce: `AppleTranslationPresentationOwnerPolicy.isCurrent(pulseSongId, pulseRevision, currentSongId, currentRevision): Boolean`.
+- Produce: `AppleTranslationLivePresentationPolicy.canFocus(...)` including live presentation and indexed owner.
 - Consume: live current song ID and native online translation revision from the hook.
 
 - [x] RED: test that an old pulse is ineligible after song/revision switch even if an old indexed cache still matches.
@@ -48,14 +49,15 @@
 **Files:**
 - Test: `app/src/test/java/io/github/proify/lyricon/amprovider/xposed/AppleLyricsFollowRecoveryPolicyTest.kt`
 - Modify: `app/src/main/java/io/github/proify/lyricon/amprovider/xposed/lyrics/AppleLyricsBlurHooks.kt`
-- Modify if necessary: `app/src/main/java/io/github/proify/lyricon/amprovider/xposed/metadata/AppleMetadataPolicies.kt`
+- Modify: `app/src/main/java/io/github/proify/lyricon/amprovider/xposed/lyrics/model/AppleLyricsBlurModels.kt`
 
 **Interfaces:**
 - Consume: host-reported active positions, visible child positions, native scroll state, playing state, user browsing state and owner adapter identity.
 - Produce: a bounded, generation-safe follow recheck only when an active row is demonstrably offscreen.
 
-- [ ] RED: test that a transient settling/no-children sample is retried after idle, but explicit drag or adapter change cannot recenter.
-- [ ] Verify expected RED with CI, then implement the smallest guarded recheck.
+- [x] RED: test that a transient settling/no-children sample is retried after idle, but explicit drag or adapter change cannot recenter.
+- [x] Verify expected RED (CI #276: unresolved `AppleLyricsFollowRecheckPolicy` during Kotlin unit test compilation).
+- [x] Implement the guarded same-song/adapter active-line recheck on native IDLE/layout and preserve pending state across adapter adoption.
 - [ ] GREEN: full tests/Lint/APK; no repeated recenter/extra row painting.
 
 ### Task 3: Device-only issues and verification gate

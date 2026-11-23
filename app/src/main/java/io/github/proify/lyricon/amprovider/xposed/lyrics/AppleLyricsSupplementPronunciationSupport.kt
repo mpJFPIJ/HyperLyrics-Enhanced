@@ -481,12 +481,11 @@ internal fun AppleLyricsSupplementHooks.bindLineWidePronunciation(
         playbackPositionMs = { appleLyricsCurrentPlaybackPositionMs() },
         isCurrentBinding = bindingIsCurrent,
         onNeedsRebind = {
-            if (root != null && bindingIsCurrent()) root.post {
-                if (root.isAttachedToWindow && bindingIsCurrent()) {
-                    // A settled native geometry change needs the same guarded
-                    // two-phase source-only remeasure as an adapter rebind.
-                    bindLineWidePronunciation(context, root, retry = 3)
-                }
+            if (root != null && root.isAttachedToWindow && bindingIsCurrent()) {
+                // ReadingView already posts this outside layout; binding at
+                // retry=1 avoids duplicating the translation highlight while
+                // preserving delayed native-measurement retry windows.
+                bindLineWidePronunciation(context, root, retry = 1)
             }
         },
     )

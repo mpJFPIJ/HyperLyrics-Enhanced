@@ -393,6 +393,7 @@ internal class AppleLineWidePronunciationRow {
         var targetReadingTextPx = 0f
         var inlineWrapOverlay: AppleNativeSoftWrapReadingOverlay? = null
         var inlineVisualRows: List<AppleInterleavedReadingRow>? = null
+        var staleWrapSnapshot = false
         var isCurrentBinding: () -> Boolean = { true }
         var onNeedsRebind: (() -> Unit)? = null
         private var rebindScheduled = false
@@ -505,10 +506,14 @@ internal class AppleLineWidePronunciationRow {
             // removed on detach. A normal viewport reattach does not
             // necessarily trigger another holder bind, so recover the same
             // measured overlay here without guessing new phonetic boundaries.
-            val resume = inlineWrapOverlay?.resumeIfCompatible(
-                root, readingAttached = isAttachedToWindow, ownerCurrent = true,
-            )
+            val resume = if (staleWrapSnapshot) AppleSoftWrapResumeDecision.REBIND
+                else inlineWrapOverlay?.resumeIfCompatible(
+                    root, readingAttached = isAttachedToWindow, ownerCurrent = true,
+                )
             if (resume == AppleSoftWrapResumeDecision.REBIND) {
+                // Do not allow a pending-layout early reuse to silently
+                // cancel this invalidation after the source changes spacing.
+                staleWrapSnapshot = true
                 detachOuterForeground()
                 alpha = 0f
                 if (!rebindScheduled) {
@@ -518,7 +523,11 @@ internal class AppleLineWidePronunciationRow {
                             rebindScheduled = false
                             return@post
                         }
-                        if (bindingCurrent()) onNeedsRebind?.invoke()
+                        try {
+                            if (bindingCurrent()) onNeedsRebind?.invoke()
+                        } finally {
+                            rebindScheduled = false
+                        }
                     }
                 }
                 return
@@ -863,6 +872,14 @@ internal class AppleLineWidePronunciationRow {
         onNeedsRebind: () -> Unit = {},
     ): Boolean {
         val anchor = anchor(root) ?: return false
+        // An adapter bind advances the holder generation even when this is
+        // still exactly the same lyric row. The incoming bind owns the new
+        // generation; the existing ReadingView's OLD callback must not veto
+        // safe row reuse before we replace it with the new callback below.
+        if (!runCatching { isCurrentBinding() }.getOrDefault(false)) {
+            clear(root)
+            return false
+        }
         if (!AppleLineWidePronunciationRowPolicy.shouldDisplay(
                 payload, currentSongId, currentRevision, visible, currentSourcePriority,
         )) {
@@ -937,7 +954,7 @@ internal class AppleLineWidePronunciationRow {
         // them back to one block and triggering another unnecessary reflow.
         val hasCompatibleExistingRows = existing.isNotEmpty() && existing.all { reading ->
                 reading.boundPayload == payload &&
-                    runCatching { reading.isCurrentBinding() }.getOrDefault(false) &&
+                    !reading.staleWrapSnapshot &&
                     reading.sourceCellAbove in sourceChildren &&
                     reading.sourceWords.size == sourceWords.size &&
                     sourceWords.indices.all { reading.sourceWords[it] === sourceWords[it] }
@@ -1035,6 +1052,7 @@ internal class AppleLineWidePronunciationRow {
             existing.zip(desiredRows).all { (view, row) ->
                 val previous = sourceChildren[row.insertAfterSourceCell]
                 view.boundPayload == payload && view.sourceCellAbove === previous &&
+                    !view.staleWrapSnapshot &&
                     view.readingStart == row.readingStart &&
                     view.readingEnd == row.readingEnd && view.text.toString() == row.text &&
                     view.sourceWords.size == sourceWords.size &&
@@ -1045,7 +1063,6 @@ internal class AppleLineWidePronunciationRow {
                     view.inlineVisualRows == softWrapRows &&
                     (softWrapRows == null || view.inlineWrapOverlay != null) &&
                     kotlin.math.abs(view.targetReadingTextPx - targetTextSize) < 0.8f &&
-                    runCatching { view.isCurrentBinding() }.getOrDefault(false) &&
                     (softWrapRows == null || view.inlineWrapOverlay?.resumeIfCompatible(
                         currentHolder = root as? ViewGroup,
                         readingAttached = view.isAttachedToWindow,

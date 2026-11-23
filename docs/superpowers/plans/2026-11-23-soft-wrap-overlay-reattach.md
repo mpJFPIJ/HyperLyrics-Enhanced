@@ -72,3 +72,8 @@
 - [x] RED: same line count but changed font/padding/letter-spacing, stale owner, detached reading, and settled-but-invalid geometry must refuse unsafe reuse (CI #271, expected unresolved references).
 - [x] Implement: distinguish waiting from invalid, prevent stale owner restoration, and schedule one guarded rebind when the geometry is invalid.
 - [ ] Run complete test/Lint/APK CI and separate device verification gate.
+
+Second read-only review found two further rebinding races before final approval:
+
+- A native adapter bind always increments the generation. The **incoming** binding must be authorized before reusing identical existing rows; the **previous** closure is only for asynchronous old-view work. Fixed without forcing a source-only remeasure on every normal bind.
+- A settled-invalid painter can have a transient source remeasure. Keep a stale-snapshot flag until the reading is discarded, so the pending-layout early return does not preserve an invalid reading indefinitely. A rebind runs on the next view-post, releases its one-shot flag, and retains bounded delayed retry.

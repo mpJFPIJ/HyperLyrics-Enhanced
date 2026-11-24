@@ -210,10 +210,17 @@ internal object AppleInterleavedReadingPolicy {
         source: String,
         fragments: List<List<Int>>,
         fullSound: String,
+    ): List<String>? = verifiedFragmentSounds(fragments.map { offsets ->
+        source.substring(offsets.first(), offsets.last() + 1)
+    }, fullSound)
+
+    /** Exact text fragments may come from measured visual rows *or* Apple's
+     * independently timed native word cells. Keep one shared phonetic proof
+     * so row placement and native karaoke use identical guarded boundaries. */
+    internal fun verifiedFragmentSounds(
+        surfaces: List<String>,
+        fullSound: String,
     ): List<String>? {
-        val surfaces = fragments.map { offsets ->
-            source.substring(offsets.first(), offsets.last() + 1)
-        }
         val literalSounds = surfaces.map { fragment ->
             if (fragment.any { it !in '\u3040'..'\u30ff' && it != 'ー' }) null
             else JapaneseToHangul.fromKana(fragment)?.filter(Char::isLetterOrDigit)

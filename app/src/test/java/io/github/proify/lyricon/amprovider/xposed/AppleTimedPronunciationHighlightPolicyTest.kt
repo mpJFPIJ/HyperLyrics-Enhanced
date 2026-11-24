@@ -37,6 +37,51 @@ class AppleTimedPronunciationHighlightPolicyTest {
         assertEquals(-1, units.single().sourceWordIndex)
     }
 
+    @Test fun `verified kanji kana native words keep their individual clocks through a real rest`() {
+        val units = AppleTimedPronunciationHighlightPolicy.units(
+            sourceText = "脳みそ", pronunciation = "노미소",
+            timedWords = listOf(
+                AppleTimedSourceWord("脳", 1000L, 1300L),
+                AppleTimedSourceWord("みそ", 1500L, 1900L),
+            ),
+            phoneticSpans = listOf(ApplePronunciationSourceToken(0, 3, "노미소", "脳みそ")),
+        )
+        assertEquals(listOf("노", "미소"), units.map { "노미소".substring(it.start, it.end) })
+        assertEquals(listOf(1000L, 1500L), units.map { it.beginMs })
+        assertEquals(listOf(1300L, 1900L), units.map { it.endMs })
+        assertEquals(listOf(0, 1), units.map { it.sourceWordIndex })
+        assertEquals(null, AppleTimedPronunciationHighlightPolicy.speakingVariant(
+            1400L, listOf(units),
+        ))
+    }
+
+    @Test fun `two unknown kanji native fragments never inherit invented split clocks`() {
+        val units = AppleTimedPronunciationHighlightPolicy.units(
+            sourceText = "世界", pronunciation = "세카이",
+            timedWords = listOf(
+                AppleTimedSourceWord("世", 1000L, 1300L),
+                AppleTimedSourceWord("界", 1500L, 1900L),
+            ),
+            phoneticSpans = listOf(ApplePronunciationSourceToken(0, 2, "세카이", "世界")),
+        )
+        assertEquals(1, units.size)
+        assertTrue(units.single().isWholeLine)
+    }
+
+    @Test fun `nonmonotonic native word clocks cannot be split at a single apparent rest`() {
+        val units = AppleTimedPronunciationHighlightPolicy.units(
+            sourceText = "脳みそよ", pronunciation = "노미소요",
+            timedWords = listOf(
+                AppleTimedSourceWord("脳", 1000L, 1300L),
+                AppleTimedSourceWord("みそ", 1500L, 1900L),
+                AppleTimedSourceWord("よ", 1600L, 2000L),
+            ),
+            phoneticSpans = listOf(ApplePronunciationSourceToken(0, 4, "노미소요", "脳みそよ")),
+        )
+        assertEquals(1, units.size)
+        assertTrue(units.single().isWholeLine)
+    }
+
     @Test fun `no phonetic map only reveals full line at real line bounds`() {
         val timed = listOf(
             AppleTimedSourceWord("みその中", 1_000L, 2_000L),

@@ -142,6 +142,9 @@ internal object AppleTimedPronunciationHighlightPolicy {
 
     // A dictionary token can contain more than one native word, even across
     // a real rest. Its original sound anchors both ends of any finer mapping.
+    // A mixed Kanji+kana token can split at a real native word rest only if
+    // the literal kana independently determines *every* remaining syllable.
+    // Continuous native words keep their original combined token clock.
     private fun splitVerifiedKana(
         source: String,
         readingLetters: String,
@@ -154,21 +157,39 @@ internal object AppleTimedPronunciationHighlightPolicy {
         return sounds.flatMap { sound ->
             val first = wordsByStart[sound.sourceStart]
             if (first == null || first.sourceEnd >= sound.sourceEnd) return@flatMap listOf(sound)
-            val cells = mutableListOf<AppleTimedSourceWord>()
+            val cells = mutableListOf<LocatedWord>()
             var cursor = sound.sourceStart
             while (cursor < sound.sourceEnd) {
                 val word = wordsByStart[cursor] ?: return@flatMap listOf(sound)
                 if (word.sourceEnd > sound.sourceEnd) return@flatMap listOf(sound)
-                cells += nativeWords[word.nativeIndex]
+                cells += word
                 cursor = word.sourceEnd
             }
+            val nativeCells = cells.map { nativeWords[it.nativeIndex] }
             val fragment = source.substring(sourceOffsets[sound.sourceStart],
                 sourceOffsets[sound.sourceEnd - 1] + 1)
             val expected = readingLetters.substring(sound.readingStart, sound.readingEnd)
-            val finer = literalKanaSounds(fragment, expected, cells)
-            if (finer.isEmpty()) listOf(sound) else finer.map { local ->
+            val finer = literalKanaSounds(fragment, expected, nativeCells)
+            if (finer.isNotEmpty()) finer.map { local ->
                 LocatedSound(sound.sourceStart + local.sourceStart, sound.sourceStart + local.sourceEnd,
                     sound.readingStart + local.readingStart, sound.readingStart + local.readingEnd)
+            } else if (cells.zipWithNext().all { (left, right) ->
+                    right.beginMs >= left.endMs && right.endMs >= left.endMs
+                } && cells.zipWithNext().any { (left, right) ->
+                    right.beginMs > left.endMs
+                }
+            ) {
+                val verified = AppleInterleavedReadingPolicy.verifiedFragmentSounds(
+                    nativeCells.map { it.text.filter(Char::isLetterOrDigit) }, expected,
+                ) ?: return@flatMap listOf(sound)
+                var readingCursor = sound.readingStart
+                cells.zip(verified).map { (word, token) ->
+                    val start = readingCursor
+                    readingCursor += token.length
+                    LocatedSound(word.sourceStart, word.sourceEnd, start, readingCursor)
+                }.takeIf { readingCursor == sound.readingEnd } ?: listOf(sound)
+            } else {
+                listOf(sound)
             }
         }
     }

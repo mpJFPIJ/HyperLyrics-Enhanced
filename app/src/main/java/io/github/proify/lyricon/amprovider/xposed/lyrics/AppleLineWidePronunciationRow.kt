@@ -1237,6 +1237,17 @@ internal class AppleLineWidePronunciationRow {
                 "readingChars=${text.length} nativeTimedWords=${payload.timedWords.size}",
             root,
         )
+        if (rows == null && visibleSoftRows == null) AppleLyricUiRuntimeProbe.record(
+            "linewide_fallback_geometry",
+            "sourceCells=${sourceChildren.size} " +
+                "nativeWrappedCells=${sourceWords.count { (it.layout?.lineCount ?: 0) > 1 }} " +
+                "sourcePhoneticSpans=${payload.phoneticSpans.size} " +
+                "verifiedProjection=${if (hasVerifiedProjection) 1 else 0} " +
+                "rawCellValid=${if (rawCells != null) 1 else 0} " +
+                "geometryPending=${if (geometryPending) 1 else 0} " +
+                "readingChars=${text.length}",
+            root,
+        )
         if (rows == null && visibleSoftRows == null && maxSourceLines > 1) AppleLyricUiRuntimeProbe.record(
             "linewide_internal_wrap_fallback",
             "maxSourceLines=$maxSourceLines sourceCells=${sourceChildren.size} customPaint=true",

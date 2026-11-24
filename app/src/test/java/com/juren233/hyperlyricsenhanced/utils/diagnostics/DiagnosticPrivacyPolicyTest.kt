@@ -140,4 +140,17 @@ class DiagnosticPrivacyPolicyTest {
         assertTrue(safe.contains("nativeTopClippedCount=2"))
         assertFalse(safe.contains("PRIVATE"))
     }
+
+    @Test fun failedVisualRowProjectionReportsOnlyBoundedLayoutFacts() {
+        val event = DiagnosticPrivacyPolicy.event(
+            "11-25 10:20:30.123", "app",
+            "stage=linewide_fallback_geometry sourceCells=5 nativeWrappedCells=2 " +
+                "sourcePhoneticSpans=3 verifiedProjection=1 rawCellValid=1 " +
+                "geometryPending=0 readingChars=25 sourceLyrics=PRIVATE",
+        )!!
+        assertTrue(event.contains("nativeWrappedCells=2"))
+        assertTrue(event.contains("sourcePhoneticSpans=3"))
+        assertTrue(event.contains("verifiedProjection=1"))
+        assertFalse(event.contains("sourceLyrics="))
+    }
 }

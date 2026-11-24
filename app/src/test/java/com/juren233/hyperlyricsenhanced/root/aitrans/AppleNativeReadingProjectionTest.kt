@@ -30,6 +30,42 @@ class AppleNativeReadingProjectionTest {
         ))
     }
 
+    @Test fun verifiedParticleReadingKeepsItsCorrectAppleClock() {
+        val result = AppleNativeReadingProjection.projectForNativeKaraoke(
+            "鳥は羽", listOf("鳥", "は", "羽"),
+            listOf(
+                SourceReadingSpan(0, 1, "鳥", "トリ", "토리"),
+                SourceReadingSpan(1, 2, "は", "ワ", "와"),
+                SourceReadingSpan(2, 3, "羽", "ハネ", "하네"),
+            ), "토리와하네",
+        )
+        assertEquals(listOf("토리", "와", "하네"), result?.words?.map { it.hangul })
+        assertFalse(result?.approximate ?: true)
+    }
+
+    @Test fun contradictoryPartialSpansCannotMakeAnUnverifiedParticleSoundSafe() {
+        // A partial provider may attribute the particle's 와 to 鳥 and
+        // steal 羽's 하 for は. Exact full-line sound is still not proof.
+        assertNull(AppleNativeReadingProjection.projectForNativeKaraoke(
+            "鳥は羽", listOf("鳥", "は", "羽"),
+            listOf(
+                SourceReadingSpan(0, 1, "鳥", "トリ", "토리와"),
+                SourceReadingSpan(2, 3, "羽", "ハネ", "네"),
+            ), "토리와하네",
+        ))
+    }
+
+    @Test fun contradictoryPartialSpansCannotMakeASilentLongVowelSoundSafe() {
+        // The isolated う is silent in こう; the next Kanji owns 우.
+        assertNull(AppleNativeReadingProjection.projectForNativeKaraoke(
+            "行こう海", listOf("行こ", "う", "海"),
+            listOf(
+                SourceReadingSpan(0, 2, "行こ", "イコ", "이코"),
+                SourceReadingSpan(3, 4, "海", "ウミ", "미"),
+            ), "이코우미",
+        ))
+    }
+
     @Test fun noPhoneticProofCannotShiftOboreSyllablesIntoTheNextNativeClock() {
         // This is a real lyric shape from the reported wrapped karaoke line.
         // The complete Korean text establishes its overall sound, not the

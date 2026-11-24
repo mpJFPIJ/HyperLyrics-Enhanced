@@ -214,7 +214,7 @@ jobs:
         run: |
           set -euo pipefail
           for attempt in $(seq 1 12); do
-            if gh api --silent "repos/$REPOSITORY/actions/runs/$RUN_ID/artifacts" \
+            if gh api "repos/$REPOSITORY/actions/runs/$RUN_ID/artifacts" \
                 | jq -e --arg name "$APK_NAME" \
                     'any(.artifacts[]?; .name == $name and .expired == false)' >/dev/null; then
               echo "Hosted direct APK indexed (attempt $attempt)."

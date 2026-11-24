@@ -141,7 +141,8 @@ internal object AppleNativeReadingProjection {
         for (span in spans) {
             if (span.sourceStart < sourceOffset || span.sourceEnd > original.length ||
                 span.sourceEnd <= span.sourceStart ||
-                original.substring(span.sourceStart, span.sourceEnd) != span.sourceText
+                original.substring(span.sourceStart, span.sourceEnd) != span.sourceText ||
+                span.sourceText.none(Char::isLetterOrDigit)
             ) return null
             val anchor = span.hangul.filter { it in '가'..'힣' }
             if (anchor.isEmpty()) return null
@@ -186,6 +187,21 @@ internal object AppleNativeReadingProjection {
                 if (right > left) index to (left until right) else null
             }
             val fragment = original.substring(piece.start, piece.end)
+            val soundedSource = fragment.filter(Char::isLetterOrDigit)
+            // A punctuation-only gap is silent. A complete but inconsistent
+            // AI sentence cannot turn an exclamation mark into a sung word.
+            if (piece.reading.isNotEmpty() && soundedSource.isEmpty()) return null
+            // Literal kana has independently knowable sound, unlike Kanji.
+            // Do not label e.g. こ as 카 merely because one native clock is
+            // left between two verified anchors. Context-dependent particles
+            // and non-additive kana fail closed if the literal read disagrees.
+            val verifiedLiteralKana = !piece.independentlyVerified &&
+                piece.reading.isNotEmpty() &&
+                soundedSource.all { it in '\u3040'..'\u30ff' }
+            if (verifiedLiteralKana &&
+                JapaneseToHangul.fromKana(fragment)
+                    ?.filter { it in '가'..'힣' } != piece.reading
+            ) return null
             if (overlaps.isEmpty()) {
                 // Apple's word vector may omit punctuation/whitespace, never
                 // a source letter or a phonetic syllable.
@@ -201,7 +217,7 @@ internal object AppleNativeReadingProjection {
             }
             if (overlaps.size == 1) {
                 readings[overlaps.single().first].append(piece.reading)
-                if (!piece.independentlyVerified) inferredCell = true
+                if (!piece.independentlyVerified && !verifiedLiteralKana) inferredCell = true
                 continue
             }
             // Multiple native cells can share a token ONLY if each complete

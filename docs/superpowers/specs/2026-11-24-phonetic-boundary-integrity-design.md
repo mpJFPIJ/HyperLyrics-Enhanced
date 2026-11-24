@@ -19,15 +19,18 @@ a dictionary token crossing multiple native cells.
 2. A native Hangul word may own sound only when its source↔sound boundary is
    established by a complete verified span, an independently transcribed
    whole kana word matching the selected line, or a **single remaining native
-   cell** between sound anchors. A one-cell residual may contain unverified
-   sounds; mark the result approximate, but no sound is split among clocks.
+   cell** containing actual source letters between sound anchors. A one-cell
+   Kanji residual may contain unverified sounds; mark the result approximate,
+   but no sound is split among clocks. Punctuation-only cells are silent;
+   an independently readable literal-kana residual must match its own sound.
 3. A verified compound crossing multiple native cells remains intact. If each
    cell is independently verified to rejoin exactly the original sound, fine
    spans can be generated upstream; otherwise fall back to the measured
    line-wide/interleaved renderer, with no invented token split.
 4. An absent, contradictory, incomplete or stale source span must not be
-   promoted to timed native words. Do not silently discard a contradictory
-   span in favor of position-weighted reconstruction.
+   promoted to timed native words. A punctuation-only span may not carry
+   Hangul sounds. Do not silently discard a contradictory span in favor of
+   position-weighted reconstruction.
 5. Native all-kana cells can be used if their independently converted sounds
    concatenate **exactly** to the selected full reading; a genuinely silent
    punctuation or long-vowel cell gets an invisible placeholder only with

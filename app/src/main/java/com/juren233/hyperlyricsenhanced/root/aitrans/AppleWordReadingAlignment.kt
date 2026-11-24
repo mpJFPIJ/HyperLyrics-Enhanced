@@ -68,7 +68,10 @@ internal object AppleWordReadingAlignment {
             if (span.sourceStart < previousEnd || span.sourceEnd <= span.sourceStart ||
                 span.sourceEnd > original.length ||
                 original.substring(span.sourceStart, span.sourceEnd) != span.sourceText ||
-                span.hangul.isBlank()
+                span.hangul.isBlank() ||
+                // Punctuation may occupy a native lyric cell, but it cannot
+                // own phonetic syllables or inherit a sung-word clock.
+                span.sourceText.none(Char::isLetterOrDigit)
             ) return WordAlignmentResult.LineWide(AlignmentFailure.INVALID_SPANS)
             val wordIndex = ranges.indexOfFirst { span.sourceStart in it }
             val endWordIndex = ranges.indexOfFirst { span.sourceEnd - 1 in it }

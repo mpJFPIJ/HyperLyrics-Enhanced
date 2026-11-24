@@ -68,6 +68,23 @@ class AppleNativeReadingProjectionTest {
         ))
     }
 
+    @Test fun unspokenPunctuationCellCannotReceiveUnexplainedHangul() {
+        assertNull(AppleNativeReadingProjection.projectForNativeKaraoke(
+            "あ!い", listOf("あ", "!", "い"),
+            listOf(
+                SourceReadingSpan(0, 1, "あ", "ア", "아"),
+                SourceReadingSpan(2, 3, "い", "イ", "이"),
+            ), "아나이",
+        ))
+    }
+
+    @Test fun isolatedUnverifiedKanaCellCannotOverrideItsKnownLiteralSound() {
+        assertNull(AppleNativeReadingProjection.projectForNativeKaraoke(
+            "あこ", listOf("あ", "こ"),
+            listOf(SourceReadingSpan(0, 1, "あ", "ア", "아")), "아카",
+        ))
+    }
+
     @Test fun partialSudachiAnchorsKeepTheirEntireSoundOnTheCorrectAppleWord() {
         val original = "君の名は"
         val wordCells = listOf("君", "の", "名は")

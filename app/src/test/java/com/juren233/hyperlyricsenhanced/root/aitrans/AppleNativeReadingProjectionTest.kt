@@ -7,6 +7,41 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AppleNativeReadingProjectionTest {
+    @Test fun noPhoneticProofCannotShiftOboreSyllablesIntoTheNextNativeClock() {
+        // This is a real lyric shape from the reported wrapped karaoke line.
+        // The complete Korean text establishes its overall sound, not the
+        // Japanese-word boundary between 溺れ and 死にそう.
+        assertNull(AppleNativeReadingProjection.projectForNativeKaraoke(
+            "瞳孔バチ開いて溺れ死にそう",
+            listOf("瞳孔", "バチ", "開いて", "溺れ", "死にそう"),
+            emptyList(), "도코 바치 히라이테 오보레 시니소",
+        ))
+    }
+
+    @Test fun partialAnchorsCannotProportionallyCutTwoUnresolvedKanjiWords() {
+        assertNull(AppleNativeReadingProjection.projectForNativeKaraoke(
+            "瞳孔バチ開いて溺れ死にそう",
+            listOf("瞳孔", "バチ", "開いて", "溺れ", "死にそう"),
+            listOf(
+                SourceReadingSpan(0, 2, "瞳孔", "ドコ", "도코"),
+                SourceReadingSpan(2, 4, "バチ", "バチ", "바치"),
+                SourceReadingSpan(4, 7, "開いて", "ヒライテ", "히라이테"),
+            ),
+            "도코 바치 히라이테 오보레 시니소",
+        ))
+    }
+
+    @Test fun verifiedKanjiCompoundCannotBeSplitBySourceCharacterWeight() {
+        assertNull(AppleNativeReadingProjection.projectForNativeKaraoke(
+            "駄目脳みそ", listOf("駄", "目", "脳", "みそ"),
+            listOf(
+                SourceReadingSpan(0, 2, "駄目", "ダメ", "다메"),
+                SourceReadingSpan(2, 3, "脳", "ノ", "노"),
+                SourceReadingSpan(3, 5, "みそ", "ミソ", "미소"),
+            ), "다메노미소",
+        ))
+    }
+
     @Test fun partialSudachiAnchorsKeepTheirEntireSoundOnTheCorrectAppleWord() {
         val original = "君の名は"
         val wordCells = listOf("君", "の", "名は")

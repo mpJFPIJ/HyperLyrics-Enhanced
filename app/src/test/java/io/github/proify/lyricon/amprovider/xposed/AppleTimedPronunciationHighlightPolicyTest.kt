@@ -87,6 +87,38 @@ class AppleTimedPronunciationHighlightPolicyTest {
     }
 
     @Test
+    fun `current lyric keeps completed Hangul word bright through a native inter-word rest`() {
+        val chorus = listOf(
+            AppleTimedReadingUnit(0, 2, 1_000L, 1_200L),
+            AppleTimedReadingUnit(3, 5, 1_600L, 1_800L),
+        )
+        val nextChorus = listOf(
+            AppleTimedReadingUnit(0, 2, 9_000L, 9_200L),
+            AppleTimedReadingUnit(3, 5, 9_600L, 9_800L),
+        )
+        val variants = listOf(chorus, nextChorus)
+        // Apple keeps already sung words bright while waiting for the next
+        // word in the same lyric. The old implementation reset everything
+        // to grey as soon as no word was *currently* being sung.
+        assertEquals(0, AppleTimedPronunciationHighlightPolicy.activeVariant(
+            1_400L, variants,
+        ))
+        assertEquals(1f, AppleTimedPronunciationHighlightPolicy.progress(
+            1_400L, chorus[0],
+        ), 0f)
+        assertEquals(0f, AppleTimedPronunciationHighlightPolicy.progress(
+            1_400L, chorus[1],
+        ), 0f)
+        // This must not activate a prior chorus during the next verse.
+        assertEquals(null, AppleTimedPronunciationHighlightPolicy.activeVariant(
+            5_000L, variants,
+        ))
+        assertEquals(1, AppleTimedPronunciationHighlightPolicy.activeVariant(
+            9_400L, variants,
+        ))
+    }
+
+    @Test
     fun `verified phonetic morphemes keep their exact original Apple word windows`() {
         val segments = AppleTimedPronunciationHighlightPolicy.units(
             sourceText = "駄目脳",

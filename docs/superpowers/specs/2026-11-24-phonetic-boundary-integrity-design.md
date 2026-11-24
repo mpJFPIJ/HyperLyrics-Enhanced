@@ -34,8 +34,14 @@ a dictionary token crossing multiple native cells.
 5. Native all-kana cells can be used if their independently converted sounds
    concatenate **exactly** to the selected full reading; a genuinely silent
    punctuation or long-vowel cell gets an invisible placeholder only with
-   contextual whole-line evidence. Digraph boundaries that change sounds
-   must fail closed.
+    contextual whole-line evidence. Digraph boundaries that change sounds
+    must fail closed. In a mixed Japanese line, a uniquely occurring Hangul
+    substring is **not** itself an independent kana anchor: exclude unverified
+    hiragana words containing potentially grammatical `は` or `へ`, and
+    reject anchors whose sound changes when adjacent kana on either side
+    are transcribed as one contiguous run (including `こう`'s silent `う`,
+    small kana, sokuon and nasal coupling). Preserve fully verified source
+    spans for these cases.
 6. Keep the existing verified flexbox and native-TextView soft-wrap projection,
    exclusive paint owner, cached song/revision checks and seek/follow guards.
    The fallback must be observable in a bounded diagnostic, not hidden.
@@ -44,7 +50,9 @@ a dictionary token crossing multiple native cells.
 
 - **Selected — proof-carrying boundary projection:** retain the native word
   renderer for complete source spans, additive whole kana cells and uniquely
-  anchored one-cell gaps. Reject all other mappings to the existing fallback.
+  anchored one-cell gaps. Kana anchors must also pass contextual additivity;
+  exclude particles with alternate grammatical readings. Reject all other
+  mappings to the existing fallback.
   This removes the manufactured cross-cell pronunciation bug while keeping
   verified multi-row and word highlight behavior.
 - Whole-line proportional mapping: visually follows native flexbox but assigns

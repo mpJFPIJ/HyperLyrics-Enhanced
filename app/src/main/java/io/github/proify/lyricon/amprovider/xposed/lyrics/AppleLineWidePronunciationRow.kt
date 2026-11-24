@@ -261,7 +261,9 @@ internal object AppleReadingPulsePolicy {
     ): Long {
         if (!onScreen) return 400L
         val position = positionMs ?: return 400L
-        val active = AppleTimedPronunciationHighlightPolicy.activeVariant(
+        // A completed word remains painted through a rest, but no clock
+        // sampling is needed at animation speed until the next word begins.
+        val active = AppleTimedPronunciationHighlightPolicy.speakingVariant(
             position, variants,
         ) != null
         val upcoming = if (active) null else nextUpcomingBeginMs(position, variants)

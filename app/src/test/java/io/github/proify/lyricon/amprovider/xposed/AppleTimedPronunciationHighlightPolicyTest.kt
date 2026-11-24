@@ -75,14 +75,17 @@ class AppleTimedPronunciationHighlightPolicyTest {
             AppleTimedReadingUnit(0, 1, 1_000L, 1_200L),
             AppleTimedReadingUnit(2, 3, 1_600L, 1_800L),
         )
-        assertEquals(0, AppleTimedPronunciationHighlightPolicy.activeVariant(
+        assertEquals(0, AppleTimedPronunciationHighlightPolicy.speakingVariant(
             1_100L, listOf(units),
         ))
-        assertEquals(null, AppleTimedPronunciationHighlightPolicy.activeVariant(
+        assertEquals(null, AppleTimedPronunciationHighlightPolicy.speakingVariant(
             1_400L, listOf(units),
         ))
-        assertEquals(0, AppleTimedPronunciationHighlightPolicy.activeVariant(
+        assertEquals(0, AppleTimedPronunciationHighlightPolicy.speakingVariant(
             1_700L, listOf(units),
+        ))
+        assertEquals(0, AppleTimedPronunciationHighlightPolicy.activeVariant(
+            1_400L, listOf(units),
         ))
     }
 
@@ -410,7 +413,8 @@ class AppleTimedPronunciationHighlightPolicyTest {
         ), units)
         assertEquals(listOf(AppleTimedReadingUnit(0, 2, 400, 550, 1)),
             AppleInterleavedReadingTimingPolicy.project(listOf(units), reading, rows, rows[1]).single())
-        assertEquals(null, AppleTimedPronunciationHighlightPolicy.activeVariant(300, listOf(units)))
+        assertEquals(null, AppleTimedPronunciationHighlightPolicy.speakingVariant(300, listOf(units)))
+        assertEquals(0, AppleTimedPronunciationHighlightPolicy.activeVariant(300, listOf(units)))
     }
 
     @Test fun literalKanaNeverInventsClocksAcrossNonAdditiveSourceBoundaries() {
@@ -444,7 +448,8 @@ class AppleTimedPronunciationHighlightPolicyTest {
             AppleInterleavedReadingTimingPolicy.project(listOf(units), reading, rows, rows[0]).single())
         assertEquals(listOf(AppleTimedReadingUnit(0, 2, 300, 400, 1)),
             AppleInterleavedReadingTimingPolicy.project(listOf(units), reading, rows, rows[1]).single())
-        assertEquals(null, AppleTimedPronunciationHighlightPolicy.activeVariant(250, listOf(units)))
+        assertEquals(null, AppleTimedPronunciationHighlightPolicy.speakingVariant(250, listOf(units)))
+        assertEquals(0, AppleTimedPronunciationHighlightPolicy.activeVariant(250, listOf(units)))
     }
 
     @Test fun storedDigraphStillUsesOnlyItsIntactWindow() {

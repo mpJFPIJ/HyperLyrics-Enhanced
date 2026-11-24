@@ -256,12 +256,10 @@ internal object AppleTimedPronunciationHighlightPolicy {
             (unit.endMs - unit.beginMs).toFloat()
     }
 
-    /**
-     * A line must not be highlighted when no source lyric occurrence is
-     * currently playing. The old closestVariant() returned a previous or
-     * future chorus even HOURS outside its timestamps.
-     */
-    fun activeVariant(
+    /** The actual speaking intervals are intentionally sparse. The scheduler
+     * may slow down between native words, but the already sung reading glyphs
+     * must remain painted during that rest. */
+    fun speakingVariant(
         positionMs: Long,
         variants: List<List<AppleTimedReadingUnit>>,
     ): Int? = variants.indices.firstOrNull { index ->
@@ -269,6 +267,26 @@ internal object AppleTimedPronunciationHighlightPolicy {
         // A partial verified map can contain an unknown interval between two
         // real source words. It is not evidence of continuous singing.
         timed.any { positionMs >= it.beginMs && positionMs < it.endMs }
+    }
+
+    /**
+     * Keep completed words white until the last trusted native word of this
+     * lyric occurrence. Otherwise every short rest resets the entire Hangul
+     * row to grey, even while Apple keeps the completed Japanese words lit.
+     * Unlike closestVariant(), this never selects an unrelated past/future
+     * chorus: only the measured first-to-last word window can own the paint.
+     */
+    fun activeVariant(
+        positionMs: Long,
+        variants: List<List<AppleTimedReadingUnit>>,
+    ): Int? = variants.indices.firstOrNull { index ->
+        val timed = variants[index]
+        if (timed.isEmpty() || timed.any { it.beginMs < 0 || it.endMs <= it.beginMs } ||
+            timed.zipWithNext().any { (left, right) ->
+                left.beginMs > right.beginMs || left.endMs > right.endMs
+            }
+        ) return@firstOrNull false
+        positionMs >= timed.first().beginMs && positionMs < timed.last().endMs
     }
 
     /** Two identical choruses have the same text but different native timecodes. */

@@ -13,4 +13,13 @@ class AppleUiProbeSamplingPolicyTest {
         assertTrue(AppleUiProbeSamplingPolicy.shouldRecord(89))
         assertFalse(AppleUiProbeSamplingPolicy.shouldRecord(300))
     }
+
+    @Test fun laterSongsStillProduceBoundedGeometryCheckpoints() {
+        // This process can play many songs without ever restarting its hooks.
+        // The first 233 callbacks must not consume the entire diagnostic budget.
+        assertTrue(AppleUiProbeSamplingPolicy.shouldRecord(466))
+        assertTrue(AppleUiProbeSamplingPolicy.shouldRecord(699))
+        assertFalse(AppleUiProbeSamplingPolicy.shouldRecord(467))
+        assertFalse(AppleUiProbeSamplingPolicy.shouldRecord(0))
+    }
 }

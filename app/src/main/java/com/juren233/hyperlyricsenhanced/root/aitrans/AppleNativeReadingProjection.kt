@@ -53,6 +53,39 @@ internal object AppleNativeReadingProjection {
             projectAnchored(original, appleWords, anchors, pronunciation)
     }
 
+    /** A unique Hangul substring is not proof that its kana source owns it.
+     * Hiragana は/へ may be pronounced as particles (와/에), and a native cell
+     * boundary can bisect a digraph, sokuon, nasal or lengthened vowel.
+     * Without a verified source span, trust the cell only when the REAL
+     * kana converter gives the same sound with the adjacent kana attached. */
+    private fun hasContextIndependentKanaSound(
+        original: String,
+        start: Int,
+        end: Int,
+        reading: String,
+    ): Boolean {
+        if (start < 0 || end <= start || end > original.length) return false
+        val source = original.substring(start, end)
+        if (source.any { it !in '\u3040'..'\u30ff' || it == 'は' || it == 'へ' }) {
+            return false
+        }
+        fun sound(value: String): String = JapaneseToHangul.fromKana(value)
+            ?.filter { it in '가'..'힣' }.orEmpty()
+        val ownSound = sound(source)
+        if (ownSound.isEmpty() || ownSound != reading.filter { it in '가'..'힣' }) {
+            return false
+        }
+        var left = start
+        while (left > 0 && original[left - 1] in '\u3040'..'\u30ff') left--
+        var right = end
+        while (right < original.length && original[right] in '\u3040'..'\u30ff') right++
+        val contextual = JapaneseToHangul.fromKana(original.substring(left, right))
+            ?.filter { it in '가'..'힣' } ?: return false
+        val separate = sound(original.substring(left, start)) + ownSound +
+            sound(original.substring(end, right))
+        return contextual == separate
+    }
+
     private fun unambiguousKanaWordAnchors(
         original: String,
         appleWords: List<String>,
@@ -76,7 +109,10 @@ internal object AppleNativeReadingProjection {
             ) continue
             val kanaReading = JapaneseToHangul.fromKana(word) ?: continue
             val hangul = kanaReading.filter { it in '가'..'힣' }
-            if (hangul.isEmpty()) continue
+            if (hangul.isEmpty() || !hasContextIndependentKanaSound(
+                    original, sourceStart, sourceCursor, hangul,
+                )
+            ) continue
             val soundStart = sounded.indexOf(hangul, readingCursor)
             // A repeated same-sounding particle is not by itself evidence
             // of a unique phonetic offset in the full Korean line.
@@ -195,13 +231,14 @@ internal object AppleNativeReadingProjection {
             // Do not label e.g. こ as 카 merely because one native clock is
             // left between two verified anchors. Context-dependent particles
             // and non-additive kana fail closed if the literal read disagrees.
-            val verifiedLiteralKana = !piece.independentlyVerified &&
+            val literalKanaGap = !piece.independentlyVerified &&
                 piece.reading.isNotEmpty() &&
                 soundedSource.all { it in '\u3040'..'\u30ff' }
-            if (verifiedLiteralKana &&
-                JapaneseToHangul.fromKana(fragment)
-                    ?.filter { it in '가'..'힣' } != piece.reading
+            if (literalKanaGap && !hasContextIndependentKanaSound(
+                    original, piece.start, piece.end, piece.reading,
+                )
             ) return null
+            val verifiedLiteralKana = literalKanaGap
             if (overlaps.isEmpty()) {
                 // Apple's word vector may omit punctuation/whitespace, never
                 // a source letter or a phonetic syllable.

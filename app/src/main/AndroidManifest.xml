@@ -85,6 +85,16 @@
             android:permission="android.permission.BIND_JOB_SERVICE"
             android:exported="false" />
 
+        <!-- Rootless NPatch lyric geometry only: the receiver verifies Apple's
+             sender UID and accepts no lyric text, credentials or arbitrary logs. -->
+        <receiver
+            android:name=".utils.diagnostics.AppleUiTraceReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.juren233.hyperlyricsenhanced.applemusic.UI_TRACE" />
+            </intent-filter>
+        </receiver>
+
         <service
             android:name=".service.LiveLyricService"
             android:label="@string/label_lyric_listener_service"

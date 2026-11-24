@@ -22,6 +22,9 @@ internal object DiagnosticPrivacyPolicy {
         "sourceSpans", "sourcePhoneticSpans", "readingChars",
         "uiViews", "meaningCells", "readingCells", "gradientParents",
         "spannedTexts", "paintShaders",
+        "nativeInkOverTop", "nativeInkOverBottom", "nativeHolderOverTop",
+        "nativeHolderOverBottom", "nativeTopClippedCount",
+        "nativeBottomClippedCount", "nativeShaderCells", "nativeSourceWordCount",
     )
     private val signedGeometryFields = setOf(
         "flexW", "readingTop", "firstInkTop", "lastInkBottom", "sourceTopSpan",
@@ -52,6 +55,13 @@ internal object DiagnosticPrivacyPolicy {
 
     fun event(timestamp: String, source: String, message: String): String? {
         if (!timePattern.matches(timestamp) || source !in setOf("app", "xposed")) return null
+        val safe = safeEventBody(message) ?: return null
+        return "$timestamp $source $safe"
+    }
+
+    /** A timestamp-free form of the same allowlist for Apple Music's rootless
+     * IPC. Only canonical content-free fields cross the process boundary. */
+    fun safeEventBody(message: String): String? {
         val stage = stagePattern.find(message)?.groupValues?.get(1) ?: return null
         val safeFields = fieldPattern.findAll(message).mapNotNull { match ->
             val key = match.groupValues[1]
@@ -73,7 +83,7 @@ internal object DiagnosticPrivacyPolicy {
                 safeFields.filter { it.first !in layoutFieldPriority }
         } else safeFields
         val extras = prioritized.take(12).joinToString(" ") { it.second }
-        return "$timestamp $source stage=$stage" + if (extras.isEmpty()) "" else " $extras"
+        return "stage=$stage" + if (extras.isEmpty()) "" else " $extras"
     }
 
     fun snapshot(events: List<String>): String {

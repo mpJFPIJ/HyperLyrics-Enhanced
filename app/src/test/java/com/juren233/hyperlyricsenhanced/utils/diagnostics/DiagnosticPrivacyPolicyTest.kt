@@ -97,4 +97,47 @@ class DiagnosticPrivacyPolicyTest {
         )!!
         assertFalse(unexpected.contains("user_private_sentence"))
     }
+
+    @Test fun rootlessUiTraceTransportAcceptsOnlyItsOwnCanonicalSanitizedPayload() {
+        val payload = AppleUiTraceTransportPolicy.encode(
+            stage = "linewide_measured_geometry",
+            build = "45428435021",
+            details = "sample=2 hostH=156 readingTop=141 readingH=52 " +
+                "firstInkTop=-8 lastInkBottom=199 wrappedSourceViews=1 " +
+                "sourceWords=19 lyrics=SECRET_LYRICS token=ghp_SECRET",
+        )!!
+        assertTrue(payload.contains("build=45428435021"))
+        assertTrue(payload.contains("firstInkTop=-8"))
+        assertTrue(payload.contains("wrappedSourceViews=1"))
+        assertFalse(payload.contains("SECRET"))
+        assertEquals(payload, AppleUiTraceTransportPolicy.accept(payload))
+        assertNull(AppleUiTraceTransportPolicy.accept("$payload rawLyric=PRIVATE"))
+        assertNull(AppleUiTraceTransportPolicy.accept("$payload stage=other_stage"))
+        assertNull(AppleUiTraceTransportPolicy.accept("stage=secret lyrics=PRIVATE"))
+        assertNull(AppleUiTraceTransportPolicy.accept("stage=foo " + "x".repeat(2000)))
+    }
+
+    @Test fun rootlessUiTraceTransportRejectsOversizeInputsAndMalformedStages() {
+        assertNull(AppleUiTraceTransportPolicy.encode(
+            stage = "bad stage", build = "123", details = "hostH=200",
+        ))
+        assertNull(AppleUiTraceTransportPolicy.encode(
+            stage = "linewide_measured_geometry", build = "123",
+            details = "hostH=200 " + "z".repeat(5000),
+        ))
+    }
+
+    @Test fun sourceInkClippingMeasurementsSurviveSanitizationWithoutLyrics() {
+        val safe = DiagnosticPrivacyPolicy.event(
+            "11-25 10:20:30.123", "app",
+            "stage=linewide_source_ink_geometry hostH=460 nativeInkOverTop=9 " +
+                "nativeInkOverBottom=17 nativeHolderOverBottom=5 " +
+                "nativeTopClippedCount=2 nativeBottomClippedCount=1 " +
+                "nativeShaderCells=6 sourceText=PRIVATE",
+        )!!
+        assertTrue(safe.contains("nativeInkOverTop=9"))
+        assertTrue(safe.contains("nativeInkOverBottom=17"))
+        assertTrue(safe.contains("nativeTopClippedCount=2"))
+        assertFalse(safe.contains("PRIVATE"))
+    }
 }

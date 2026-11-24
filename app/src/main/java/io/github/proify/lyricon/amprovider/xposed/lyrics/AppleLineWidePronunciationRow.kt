@@ -591,6 +591,41 @@ internal class AppleLineWidePronunciationRow {
                         "sourceWords=${sourceWords.size} sourceTopSpan=$sourceTopSpan " +
                         "wrappedSourceViews=$wrappedSourceViews maxSourceLines=$maxSourceLineCount"
                 }
+                // The Japanese native glyphs can appear half-white/half-dim
+                // even when the Hangul foreground is fully visible. Capture
+                // their *own* measured ink extents, without any lyric text,
+                // to distinguish font overflow from Apple's gradient masking.
+                AppleLyricUiRuntimeProbe.recordLazy("linewide_source_ink_geometry", root) {
+                    val ink = sourceWords.mapNotNull { word ->
+                        val native = word.layout ?: return@mapNotNull null
+                        if (native.lineCount == 0 || word.width <= 0 || word.height <= 0)
+                            return@mapNotNull null
+                        val rect = Rect(0, 0, word.width, word.height)
+                        if (runCatching {
+                                root.offsetDescendantRectToMyCoords(word, rect)
+                            }.isFailure
+                        ) return@mapNotNull null
+                        val fm = word.paint.fontMetricsInt
+                        val top = rect.top + word.totalPaddingTop +
+                            native.getLineBaseline(0) + fm.top
+                        val bottom = rect.top + word.totalPaddingTop +
+                            native.getLineBaseline(native.lineCount - 1) + fm.bottom
+                        intArrayOf(
+                            (rect.top - top).coerceAtLeast(0),
+                            (bottom - rect.bottom).coerceAtLeast(0),
+                            (-top).coerceAtLeast(0),
+                            (bottom - root.height).coerceAtLeast(0),
+                        )
+                    }
+                    "hostH=${root.height} nativeSourceWordCount=${ink.size} " +
+                        "nativeInkOverTop=${ink.maxOfOrNull { it[0] } ?: -1} " +
+                        "nativeInkOverBottom=${ink.maxOfOrNull { it[1] } ?: -1} " +
+                        "nativeHolderOverTop=${ink.maxOfOrNull { it[2] } ?: -1} " +
+                        "nativeHolderOverBottom=${ink.maxOfOrNull { it[3] } ?: -1} " +
+                        "nativeTopClippedCount=${ink.count { it[0] > 0 }} " +
+                        "nativeBottomClippedCount=${ink.count { it[1] > 0 }} " +
+                        "nativeShaderCells=${sourceWords.count { it.paint.shader != null }}"
+                }
                 outerForeground?.invalidateSelf()
             }
         }

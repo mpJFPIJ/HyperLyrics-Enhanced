@@ -1,10 +1,13 @@
 package io.github.proify.lyricon.amprovider.xposed
 
 import android.text.Spanned
+import android.content.Intent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.TextView
 import com.juren233.hyperlyricsenhanced.BuildConfig
+import com.juren233.hyperlyricsenhanced.common.bridge.sendAppleDirectBroadcast
+import com.juren233.hyperlyricsenhanced.utils.diagnostics.AppleUiTraceTransportPolicy
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -15,7 +18,6 @@ import java.util.concurrent.atomic.AtomicInteger
  */
 internal object AppleLyricUiRuntimeProbe {
     private val samples = ConcurrentHashMap<String, AtomicInteger>()
-    private const val MAX_PER_STAGE = 6
 
     fun record(stage: String, details: String, root: View? = null) =
         recordLazy(stage, root) { details }
@@ -25,12 +27,30 @@ internal object AppleLyricUiRuntimeProbe {
     fun recordLazy(stage: String, root: View? = null, details: () -> String) {
         val number = samples.computeIfAbsent(stage) { AtomicInteger() }
             .incrementAndGet()
-        if (number > MAX_PER_STAGE) return
+        if (!AppleUiProbeSamplingPolicy.shouldRecord(number)) return
         val viewSummary = if (root == null) "" else viewShapeSummary(root)
+        val description = details()
         ProviderLogger.debug(
             "[HLE_UX_TRACE] build=${BuildConfig.HLE_BUILD_RUN} " +
-                "stage=$stage sample=$number ${details()} $viewSummary"
+                "stage=$stage sample=$number $description $viewSummary"
         )
+        // The patched Apple process is often rootless, so its LSPosed logs
+        // cannot be opened with `su` by the separately installed app. Route
+        // only allowlisted geometry through an authenticated broadcast; never
+        // include a lyric line, raw exception, song ID or API credential.
+        if (BuildConfig.DEBUG && root != null) {
+            val safe = AppleUiTraceTransportPolicy.encode(
+                stage = stage, build = BuildConfig.HLE_BUILD_RUN.toString(),
+                details = "sample=$number $description $viewSummary",
+            )
+            if (safe != null) runCatching {
+                root.context.sendAppleDirectBroadcast(
+                    Intent(AppleUiTraceTransportPolicy.ACTION)
+                        .setPackage(BuildConfig.APPLICATION_ID)
+                        .putExtra(AppleUiTraceTransportPolicy.EXTRA_SAFE_TRACE, safe),
+                )
+            }
+        }
     }
 
     private fun viewShapeSummary(root: View): String {

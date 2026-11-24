@@ -4,6 +4,34 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class AppleReadingSweepGeometryTest {
+    @Test fun `verified wrapped word keeps cumulative glyph width across visual rows`() {
+        val widths = listOf(21f, 28f, 23f)
+        assertEquals(AppleVerifiedReadingSweepPolicy.Bounds(0f, 72f),
+            AppleVerifiedReadingSweepPolicy.bounds("노미소", 0) { widths[it] })
+        assertEquals(AppleVerifiedReadingSweepPolicy.Bounds(21f, 72f),
+            AppleVerifiedReadingSweepPolicy.bounds("노미소", 1) { widths[it] })
+        assertEquals(AppleVerifiedReadingSweepPolicy.Bounds(49f, 72f),
+            AppleVerifiedReadingSweepPolicy.bounds("노미소", 2) { widths[it] })
+        var measuredGlyphs = 0
+        val cachedWord = AppleVerifiedReadingSweepPolicy.measure("노미소") {
+            measuredGlyphs++
+            widths[it]
+        }!!
+        assertEquals(AppleVerifiedReadingSweepPolicy.Bounds(21f, 72f), cachedWord.bounds(1))
+        assertEquals(AppleVerifiedReadingSweepPolicy.Bounds(49f, 72f), cachedWord.bounds(2))
+        assertEquals(3, measuredGlyphs)
+        // The second row only starts lighting once the first row has swept.
+        assertEquals(0f, AppleReadingSweepGeometry.glyphCoverage(0.2f, 21f, 28f, 72f), 0f)
+        assertEquals(1f, AppleReadingSweepGeometry.glyphCoverage(0.9f, 21f, 28f, 72f), 0f)
+    }
+
+    @Test fun `cross row width refuses an invalid glyph`() {
+        assertEquals(null, AppleVerifiedReadingSweepPolicy.bounds("노미소", 3) { 20f })
+        assertEquals(null, AppleVerifiedReadingSweepPolicy.bounds("노미소", 1) { index ->
+            if (index == 1) Float.NaN else 20f
+        })
+    }
+
     @Test
     fun `halfway through a word fills half its measured pixel width not half its glyphs`() {
         // Three Korean glyphs have visibly different rendered widths:

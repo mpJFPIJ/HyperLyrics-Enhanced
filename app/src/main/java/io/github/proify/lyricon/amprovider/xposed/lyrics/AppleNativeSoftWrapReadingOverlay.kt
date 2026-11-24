@@ -147,7 +147,7 @@ internal class AppleNativeSoftWrapReadingOverlay(
         require(measuredWidth > 0 && readingTextPx > 0f)
         paintedRows = rows.dropLast(1).map { row ->
             val variants = AppleInterleavedReadingTimingPolicy.project(
-                timedVariants, pronunciation, rows, row,
+                timedVariants, pronunciation, rows, row, verifiedCrossRow = true,
             )
             val text = SpannableString(row.text)
             val styles = AppleReadingGlyphCoveragePolicy.offsets(row.text, variants).map { offset ->

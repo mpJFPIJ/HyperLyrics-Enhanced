@@ -288,18 +288,36 @@ internal object AppleInterleavedReadingTimingPolicy {
         fullPronunciation: String,
         rows: List<AppleInterleavedReadingRow>,
         row: AppleInterleavedReadingRow,
+        verifiedCrossRow: Boolean = false,
     ): List<List<AppleTimedReadingUnit>> {
         return variants.map { units ->
             units.mapNotNull { unit ->
                 // A sentence-level clock cannot identify which visual row is
-                // sung. Leave the split rows readable without simultaneous sweeps.
+                // sung. Leave the split rows readable without fabricated clocks.
                 if ((rows.size > 1 && unit.isWholeLine) ||
-                    unit.start < row.readingStart || unit.end > row.readingEnd ||
                     unit.start < 0 || unit.end > fullPronunciation.length || unit.start >= unit.end
                 ) null else unit.copy(
                     start = unit.start - row.readingStart,
                     end = unit.end - row.readingStart,
-                )
+                ).let { local ->
+                    val crosses = unit.start < row.readingStart ||
+                        unit.end > row.readingEnd
+                    if (!crosses) local else {
+                        // The original native word window is one indivisible
+                        // clock. Only fully verified source↔reading visual rows
+                        // can share its *same* interval: each row's TextPaint
+                        // measures cumulative Hangul advances for that word.
+                        val start = maxOf(unit.start, row.readingStart)
+                        val end = minOf(unit.end, row.readingEnd)
+                        if (!verifiedCrossRow || unit.isWholeLine || end <= start) null
+                        else local.copy(
+                            start = start - row.readingStart,
+                            end = end - row.readingStart,
+                            sweepFullReading = fullPronunciation.substring(unit.start, unit.end),
+                            sweepStartOffset = start - unit.start,
+                        )
+                    }
+                }
             }
         }
     }

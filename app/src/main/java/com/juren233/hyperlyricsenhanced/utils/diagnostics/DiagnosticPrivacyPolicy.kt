@@ -25,6 +25,7 @@ internal object DiagnosticPrivacyPolicy {
         "fullSourceSpanLines", "partialSourceSpanLines", "missingSourceSpanLines",
         "alignedWordRows",
         "nativeWrappedCells", "verifiedProjection", "rawCellValid", "geometryPending",
+        "crossRowSweepFragments",
         "nativeInkOverTop", "nativeInkOverBottom", "nativeHolderOverTop",
         "nativeHolderOverBottom", "nativeTopClippedCount",
         "nativeBottomClippedCount", "nativeShaderCells", "nativeSourceWordCount",

@@ -1200,6 +1200,7 @@ internal class AppleLineWidePronunciationRow {
                     fullPronunciation = text,
                     rows = visibleSoftRows ?: committedRows,
                     row = row,
+                    verifiedCrossRow = visibleSoftRows != null || rows != null,
                 ))
             }
             // Source rows remain unmodified and in their original order.
@@ -1253,12 +1254,24 @@ internal class AppleLineWidePronunciationRow {
             "maxSourceLines=$maxSourceLines sourceCells=${sourceChildren.size} customPaint=true",
             root,
         )
-        if (rows != null) AppleLyricUiRuntimeProbe.record(
-            "linewide_visual_rows_interleaved",
-            "sourceCells=${sourceChildren.size} visualRows=${rows.size} " +
-                "readingChars=${text.length} nativeTimedWords=${payload.timedWords.size}",
-            root,
-        )
+        if (rows != null) {
+            val sweptFragments = rows.sumOf { row ->
+                timedVariants.sumOf { units ->
+                    units.count { unit ->
+                        !unit.isWholeLine && unit.start < row.readingEnd &&
+                            unit.end > row.readingStart &&
+                            (unit.start < row.readingStart || unit.end > row.readingEnd)
+                    }
+                }
+            }
+            AppleLyricUiRuntimeProbe.record(
+                "linewide_visual_rows_interleaved",
+                "sourceCells=${sourceChildren.size} visualRows=${rows.size} " +
+                    "readingChars=${text.length} nativeTimedWords=${payload.timedWords.size} " +
+                    "crossRowSweepFragments=$sweptFragments",
+                root,
+            )
+        }
         return true
     }
 

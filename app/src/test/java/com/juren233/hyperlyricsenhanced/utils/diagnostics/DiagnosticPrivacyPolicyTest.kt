@@ -153,4 +153,15 @@ class DiagnosticPrivacyPolicyTest {
         assertTrue(event.contains("verifiedProjection=1"))
         assertFalse(event.contains("sourceLyrics="))
     }
+
+    @Test fun verifiedCrossRowSweepsAreCountedWithoutTransmittingLyrics() {
+        val event = AppleUiTraceTransportPolicy.encode(
+            stage = "linewide_visual_rows_interleaved", build = "12345",
+            details = "sourceCells=5 visualRows=2 crossRowSweepFragments=2 " +
+                "original=脳みそ reading=노미소",
+        )!!
+        assertTrue(event.contains("crossRowSweepFragments=2"))
+        assertFalse(event.contains("脳"))
+        assertFalse(event.contains("노"))
+    }
 }

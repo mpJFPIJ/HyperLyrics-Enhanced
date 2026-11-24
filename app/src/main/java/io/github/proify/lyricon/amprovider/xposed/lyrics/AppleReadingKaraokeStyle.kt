@@ -18,6 +18,37 @@ internal data class AppleMeasuredReadingGlyph(
     val unitWidthPx: Float,
 )
 
+/** A single native timed word continues across verified Japanese wrap rows.
+ * Calculate cumulative Hangul advance using the actual TextPaint rather than
+ * splitting its clock according to Japanese characters or syllable counts. */
+internal object AppleVerifiedReadingSweepPolicy {
+    data class Bounds(val glyphStartPx: Float, val wordWidthPx: Float)
+    class MeasuredWord internal constructor(
+        private val starts: Map<Int, Float>,
+        private val total: Float,
+    ) {
+        fun bounds(glyphOffset: Int): Bounds? = starts[glyphOffset]?.let {
+            Bounds(it, total)
+        }
+    }
+
+    fun measure(word: String, glyphAdvance: (Int) -> Float): MeasuredWord? {
+        val starts = mutableMapOf<Int, Float>()
+        var total = 0f
+        for (index in word.indices) {
+            if (!word[index].isLetterOrDigit()) continue
+            val width = glyphAdvance(index)
+            if (!width.isFinite() || width <= 0f) return null
+            starts[index] = total
+            total += width
+        }
+        return if (total.isFinite() && total > 0f) MeasuredWord(starts, total) else null
+    }
+
+    fun bounds(word: String, glyphOffset: Int, glyphAdvance: (Int) -> Float): Bounds? =
+        measure(word, glyphAdvance)?.bounds(glyphOffset)
+}
+
 /** Measure after TextView/StaticLayout chose the actual font, kerning and wraps. */
 internal object AppleReadingSweepLayout {
     fun measure(
@@ -50,15 +81,29 @@ internal object AppleReadingSweepLayout {
             }
             val total = widths.sumOf { it.second.toDouble() }.toFloat()
             if (!total.isFinite() || total <= 0f) continue
+            // Measure each verified word once, not again for every glyph.
+            // Each visual row has its own real TextPaint; no Japanese-source
+            // character ratio or artificial per-row timestamp is introduced.
+            val crossRowWord = unit.sweepFullReading?.let { word ->
+                AppleVerifiedReadingSweepPolicy.measure(word) { glyph ->
+                    layout.paint.measureText(word, glyph, glyph + 1)
+                }
+            }
             var wordOffset = 0f
             offsets.forEachIndexed { index, offset ->
                 val (left, width) = widths[index]
                 if (left.isFinite() && width > 0f) {
+                    val originalOffset = unit.sweepStartOffset + offset - unit.start
+                    val crossRow = crossRowWord?.bounds(originalOffset)
+                    // A missing/invalid full-word measurement must not make
+                    // two wrapped row fragments light simultaneously.
+                    if (unit.sweepFullReading != null && crossRow == null)
+                        return@forEachIndexed
                     result[offset] = AppleMeasuredReadingGlyph(
                         glyphX = left,
                         glyphWidthPx = width,
-                        unitStartPx = wordOffset,
-                        unitWidthPx = total,
+                        unitStartPx = crossRow?.glyphStartPx ?: wordOffset,
+                        unitWidthPx = crossRow?.wordWidthPx ?: total,
                     )
                 }
                 wordOffset += width

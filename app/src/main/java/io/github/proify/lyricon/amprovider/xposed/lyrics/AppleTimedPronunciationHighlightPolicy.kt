@@ -26,6 +26,11 @@ internal data class AppleTimedReadingUnit(
     // Original visible native word index; -1 if several words or a line share this window.
     val sourceWordIndex: Int = -1,
     val isWholeLine: Boolean = false,
+    // A word with one native clock may occupy two *verified* visual rows.
+    // Retain its entire Hangul reading for a continuous pixel-width sweep;
+    // sweepStartOffset locates this row's first character within that word.
+    val sweepFullReading: String? = null,
+    val sweepStartOffset: Int = 0,
 )
 
 /** Never fabricate Korean syllable boundaries from Japanese character lengths. */

@@ -400,4 +400,39 @@ class AppleInterleavedReadingPolicyTest {
                 timing, "도코 바치", listOf(first, second), second,
             ).single())
     }
+
+    @Test fun `verified kanji wrap carries one original word sweep across reading rows`() {
+        // Both fragments derive from the same fully verified 脳みそ pronunciation.
+        // They share the unmodified native word window; only the measured
+        // glyph geometry decides which portion of its sweep each row paints.
+        val first = AppleInterleavedReadingRow(0, "노", 0, 1)
+        val second = AppleInterleavedReadingRow(1, "미소", 1, 3)
+        val original = AppleTimedReadingUnit(0, 3, 1000L, 2000L, sourceWordIndex = 0)
+        val rows = listOf(first, second)
+        assertEquals(listOf(original.copy(
+            end = 1, sweepFullReading = "노미소", sweepStartOffset = 0,
+        )), AppleInterleavedReadingTimingPolicy.project(
+            listOf(listOf(original)), "노미소", rows, first, verifiedCrossRow = true,
+        ).single())
+        assertEquals(listOf(original.copy(
+            start = 0, end = 2, sweepFullReading = "노미소", sweepStartOffset = 1,
+        )), AppleInterleavedReadingTimingPolicy.project(
+            listOf(listOf(original)), "노미소", rows, second, verifiedCrossRow = true,
+        ).single())
+    }
+
+    @Test fun `verified row split never fabricates a fine clock from a whole line interval`() {
+        val rows = listOf(
+            AppleInterleavedReadingRow(0, "노", 0, 1),
+            AppleInterleavedReadingRow(1, "미소", 1, 3),
+        )
+        val coarse = AppleTimedReadingUnit(0, 3, 1000L, 2000L, isWholeLine = true)
+        rows.forEach { row ->
+            assertEquals(listOf(emptyList<AppleTimedReadingUnit>()),
+                AppleInterleavedReadingTimingPolicy.project(
+                    listOf(listOf(coarse)), "노미소", rows, row,
+                    verifiedCrossRow = true,
+                ))
+        }
+    }
 }

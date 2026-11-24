@@ -150,6 +150,68 @@ class AppleInterleavedReadingPolicyTest {
         ))
     }
 
+    @Test fun `verified kana suffix can locate the remaining sound of one Kanji fragment`() {
+        val rows = requireNotNull(AppleInterleavedReadingPolicy.plan(
+            "脳みそ", "노미소",
+            listOf(
+                AppleVisualSourceCell("脳", 0, 42),
+                AppleVisualSourceCell("みそ", 55, 97),
+            ),
+            listOf(ApplePronunciationSourceToken(0, 3, "노미소", "脳みそ")),
+        ))
+        assertEquals(listOf("노", "미소"), rows.map { it.text })
+        assertEquals(listOf(0, 1), rows.map { it.insertAfterSourceCell })
+        assertEquals("노미소", rows.joinToString("") { it.text })
+    }
+
+    @Test fun `known kana prefix may identify one Kanji suffix without estimating character lengths`() {
+        val rows = requireNotNull(AppleInterleavedReadingPolicy.plan(
+            "みそ脳", "미소노",
+            listOf(
+                AppleVisualSourceCell("みそ", 0, 42),
+                AppleVisualSourceCell("脳", 55, 97),
+            ),
+            listOf(ApplePronunciationSourceToken(0, 3, "미소노", "みそ脳")),
+        ))
+        assertEquals(listOf("미소", "노"), rows.map { it.text })
+    }
+
+    @Test fun `two unknown Kanji row sounds cannot borrow one another's syllables`() {
+        assertNull(AppleInterleavedReadingPolicy.plan(
+            "歌の声", "우타노코에",
+            listOf(
+                AppleVisualSourceCell("歌", 0, 40),
+                AppleVisualSourceCell("の", 55, 95),
+                AppleVisualSourceCell("声", 110, 150),
+            ),
+            listOf(ApplePronunciationSourceToken(0, 3, "우타노코에", "歌の声")),
+        ))
+        assertNull(AppleInterleavedReadingPolicy.plan(
+            "脳みそ", "노미소",
+            listOf(
+                AppleVisualSourceCell("脳", 0, 40),
+                AppleVisualSourceCell("みそ", 55, 95),
+            ),
+            listOf(ApplePronunciationSourceToken(0, 3, "노미사", "脳みそ")),
+        ))
+        assertNull(AppleInterleavedReadingPolicy.plan(
+            "脳みそ", "노마소",
+            listOf(
+                AppleVisualSourceCell("脳", 0, 40),
+                AppleVisualSourceCell("みそ", 55, 95),
+            ),
+            listOf(ApplePronunciationSourceToken(0, 3, "노마소", "脳みそ")),
+        ))
+        assertNull(AppleInterleavedReadingPolicy.plan(
+            "脳みそ", "ㄴ미소",
+            listOf(
+                AppleVisualSourceCell("脳", 0, 40),
+                AppleVisualSourceCell("みそ", 55, 95),
+            ),
+            listOf(ApplePronunciationSourceToken(0, 3, "ㄴ미소", "脳みそ")),
+        ))
+    }
+
     @Test fun `independently verified fine kanji tokens permit exact immediate visual row readings`() {
         val rows = requireNotNull(AppleInterleavedReadingPolicy.plan(
             sourceText = "世界", pronunciation = "세카이",

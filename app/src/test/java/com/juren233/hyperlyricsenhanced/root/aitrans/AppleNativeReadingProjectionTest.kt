@@ -78,6 +78,17 @@ class AppleNativeReadingProjectionTest {
         ))
     }
 
+    @Test fun fabricatedPunctuationPhoneticSpanCannotBypassTheBoundaryGuard() {
+        assertNull(AppleNativeReadingProjection.projectForNativeKaraoke(
+            "あ!い", listOf("あ", "!", "い"),
+            listOf(
+                SourceReadingSpan(0, 1, "あ", "ア", "아"),
+                SourceReadingSpan(1, 2, "!", "", "나"),
+                SourceReadingSpan(2, 3, "い", "イ", "이"),
+            ), "아나이",
+        ))
+    }
+
     @Test fun isolatedUnverifiedKanaCellCannotOverrideItsKnownLiteralSound() {
         assertNull(AppleNativeReadingProjection.projectForNativeKaraoke(
             "あこ", listOf("あ", "こ"),

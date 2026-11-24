@@ -103,6 +103,18 @@ class AppleWordReadingAlignmentTest {
             (result as WordAlignmentResult.Verified).words.map { it.hangul })
     }
 
+    @Test fun punctuationOnlyPhoneticSpanCannotMasqueradeAsASungNativeWord() {
+        assertEquals(WordAlignmentResult.LineWide(AlignmentFailure.INVALID_SPANS),
+            AppleWordReadingAlignment.align(
+                "あ!い", listOf("あ", "!", "い"),
+                listOf(
+                    span(0, 1, "あ", "아"),
+                    span(1, 2, "!", "나"),
+                    span(2, 3, "い", "이"),
+                ), expectedHangul = "아나이",
+            ))
+    }
+
     @Test fun rejectingIncorrectSoundEvenWhenSourceGroupingMatches() {
         assertEquals(WordAlignmentResult.LineWide(AlignmentFailure.SOUND_MISMATCH),
             AppleWordReadingAlignment.align(

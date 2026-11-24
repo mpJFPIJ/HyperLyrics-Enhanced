@@ -202,6 +202,31 @@ jobs:
           archive: false
           if-no-files-found: error
 
+      # GitHub's artifact index is eventually consistent: an upload can finish
+      # before download-artifact can resolve the new name in the same job.
+      - name: Wait for hosted direct APK indexing
+        if: github.event_name == 'pull_request' && steps.gate.outputs.skip == 'false' && steps.personal_signing.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APK_NAME: ${{ steps.personal_apk.outputs.name }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 12); do
+            if gh api --silent "repos/$REPOSITORY/actions/runs/$RUN_ID/artifacts" \
+                | jq -e --arg name "$APK_NAME" \
+                    'any(.artifacts[]?; .name == $name and .expired == false)' >/dev/null; then
+              echo "Hosted direct APK indexed (attempt $attempt)."
+              sleep 5
+              exit 0
+            fi
+            echo "Waiting for direct APK indexing (attempt $attempt/12)..."
+            sleep 5
+          done
+          echo "::error::Uploaded APK not indexed after retry window: $APK_NAME"
+          exit 1
+
       # Re-fetch the actual hosted artifact, rather than assuming successful
       # upload means an Android user can retrieve the same APK bytes.
       - name: Download hosted direct APK for byte-for-byte verification

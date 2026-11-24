@@ -7,6 +7,35 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DiagnosticPrivacyPolicyTest {
+    @Test fun nativeLyricGeometrySurvivesPrivateUploadWithoutTextOrCredentials() {
+        val sanitized = DiagnosticPrivacyPolicy.event(
+            "11-24 23:05:13.143", "xposed",
+            "[HLE_UX_TRACE] build=45422227602 stage=linewide_measured_geometry sample=2 " +
+                "hostW=720 hostH=156 readingTop=141 readingH=52 readingLines=2 " +
+                "firstInkTop=145 lastInkBottom=199 wrappedSourceViews=1 maxSourceLines=2 " +
+                "lyrics=SECRET_JAPANESE token=github_pat_SECRET",
+        )!!
+        assertTrue(sanitized.contains("build=45422227602"))
+        assertTrue(sanitized.contains("hostH=156"))
+        assertTrue(sanitized.contains("readingTop=141"))
+        assertTrue(sanitized.contains("lastInkBottom=199"))
+        assertTrue(sanitized.contains("wrappedSourceViews=1"))
+        assertFalse(sanitized.contains("SECRET"))
+        assertFalse(sanitized.contains("lyrics="))
+    }
+
+    @Test fun negativeMeasuredInkOverflowIsSafeToPreserveButArbitrarySignedSecretsAreNot() {
+        val sanitized = DiagnosticPrivacyPolicy.event(
+            "11-24 23:06:00.001", "xposed",
+            "stage=linewide_measured_geometry firstInkTop=-8 lastInkBottom=186 " +
+                "hostH=156 token=-99999 unknown=-141",
+        )!!
+        assertTrue(sanitized.contains("firstInkTop=-8"))
+        assertTrue(sanitized.contains("lastInkBottom=186"))
+        assertFalse(sanitized.contains("token="))
+        assertFalse(sanitized.contains("unknown="))
+    }
+
     @Test fun preservesValidatedBuildIdentityWithoutLeakingEmbeddedSecrets() {
         val safe = DiagnosticPrivacyPolicy.event(
             "11-05 19:30:00.123", "xposed",

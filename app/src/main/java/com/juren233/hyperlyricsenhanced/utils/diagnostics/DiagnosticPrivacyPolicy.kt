@@ -13,6 +13,26 @@ internal object DiagnosticPrivacyPolicy {
         "originalLines", "translationLines", "readingLines", "alignedLines", "lineWideLines",
         "missingLines", "rowBound", "rowOverflow", "holderWidth", "holderHeight",
         "holderChildren", "holderGroup", "position",
+        // Bounded, content-free layout measurements for visual bugs.
+        "sample", "hostW", "hostH", "flexW", "readingW", "readingH",
+        "readingTop", "readingLines", "firstInkTop", "lastInkBottom",
+        "sourceWords", "sourceTopSpan", "wrappedSourceViews", "maxSourceLines",
+        "nativeCells", "fontPaddingAdded", "shaders", "unmeasuredCells",
+        "sourceCells", "visualRows", "nativeTimedWords", "timedWords",
+        "sourceSpans", "sourcePhoneticSpans", "readingChars",
+        "uiViews", "meaningCells", "readingCells", "gradientParents",
+        "spannedTexts", "paintShaders",
+    )
+    private val signedGeometryFields = setOf(
+        "flexW", "readingTop", "firstInkTop", "lastInkBottom", "sourceTopSpan",
+    )
+    private val signedNumberPattern = Regex("-?[0-9]{1,6}")
+    // The first twelve safe fields survive the bounded diagnostic snapshot.
+    // Prioritize the measurements that reveal a clipped or internally wrapped row.
+    private val layoutFieldPriority = listOf(
+        "build", "sample", "hostH", "readingTop", "readingH", "firstInkTop",
+        "lastInkBottom", "readingLines", "wrappedSourceViews", "maxSourceLines",
+        "sourceWords", "sourceTopSpan",
     )
     private val safeType = Regex("[A-Za-z][A-Za-z0-9]{0,45}(?:Exception|Error)")
     private val safeReasons = setOf(
@@ -33,18 +53,26 @@ internal object DiagnosticPrivacyPolicy {
     fun event(timestamp: String, source: String, message: String): String? {
         if (!timePattern.matches(timestamp) || source !in setOf("app", "xposed")) return null
         val stage = stagePattern.find(message)?.groupValues?.get(1) ?: return null
-        val extras = fieldPattern.findAll(message).mapNotNull { match ->
+        val safeFields = fieldPattern.findAll(message).mapNotNull { match ->
             val key = match.groupValues[1]
             val value = match.groupValues[2]
-            when {
+            val sanitized = when {
                 key in numericFields && value.all(Char::isDigit) -> "$key=$value"
+                key in signedGeometryFields && signedNumberPattern.matches(value) -> "$key=$value"
                 key == "buildCommit" && (value == "local" || value.matches(Regex("[0-9a-f]{12,40}"))) -> "$key=$value"
-                key == "buildRun" && (value == "local" || value.matches(Regex("[0-9]{1,20}"))) -> "$key=$value"
+                key in setOf("build", "buildRun") &&
+                    (value == "local" || value.matches(Regex("[0-9]{1,20}"))) -> "$key=$value"
                 key == "type" && safeType.matches(value) -> "$key=$value"
                 key == "reason" && (value in safeReasons || Regex("http_[1-5][0-9]{2}").matches(value)) -> "$key=$value"
                 else -> null
             }
-        }.take(12).joinToString(" ")
+            sanitized?.let { key to it }
+        }.toList()
+        val prioritized = if (stage == "linewide_measured_geometry") {
+            layoutFieldPriority.mapNotNull { key -> safeFields.firstOrNull { it.first == key } } +
+                safeFields.filter { it.first !in layoutFieldPriority }
+        } else safeFields
+        val extras = prioritized.take(12).joinToString(" ") { it.second }
         return "$timestamp $source stage=$stage" + if (extras.isEmpty()) "" else " $extras"
     }
 

@@ -7,6 +7,29 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AppleNativeReadingProjectionTest {
+    @Test fun unverifiedTopicParticleCannotStealTheFollowingKanjiReading() {
+        // 鳥は羽 is read トリワハネ. A context-free は→하 guess must not
+        // steal 羽's unique 하 and shift the Apple clocks to 토리와 / 하 / 네.
+        assertNull(AppleNativeReadingProjection.projectForNativeKaraoke(
+            "鳥は羽", listOf("鳥", "は", "羽"), emptyList(), "토리와하네",
+        ))
+    }
+
+    @Test fun unverifiedDirectionParticleCannotStealTheFollowingKanjiReading() {
+        // へ as a directional particle reads 에, not its isolated 헤.
+        assertNull(AppleNativeReadingProjection.projectForNativeKaraoke(
+            "鳥へ蛇", listOf("鳥", "へ", "蛇"), emptyList(), "토리에헤비",
+        ))
+    }
+
+    @Test fun nativeCellSplitInsideLongKanaVowelCannotBorrowTheNextWordSound() {
+        // The う in 行こう is silent after こ, whereas 海 starts with 우.
+        // Unique substring matching alone can place 海's 우 on う's clock.
+        assertNull(AppleNativeReadingProjection.projectForNativeKaraoke(
+            "行こう海", listOf("行こ", "う", "海"), emptyList(), "이코우미",
+        ))
+    }
+
     @Test fun noPhoneticProofCannotShiftOboreSyllablesIntoTheNextNativeClock() {
         // This is a real lyric shape from the reported wrapped karaoke line.
         // The complete Korean text establishes its overall sound, not the

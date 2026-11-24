@@ -277,7 +277,7 @@ class AppleLineWidePronunciationRowPolicyTest {
             onScreen = true, positionMs = 11_700, nextBeginMs = 12_000,
             active = false,
         ))
-        assertEquals(60L, AppleReadingPulsePolicy.nextDelayMs(
+        assertEquals(16L, AppleReadingPulsePolicy.nextDelayMs(
             onScreen = true, positionMs = 12_020, nextBeginMs = 12_000,
             active = true,
         ))
@@ -331,7 +331,7 @@ class AppleLineWidePronunciationRowPolicyTest {
         ))
         assertEquals(0, playbackPolls)
         val onscreen = AppleReadingPulsePolicy.playbackSample(true, playbackClock)
-        assertEquals(60L, AppleReadingPulsePolicy.nextDelayForReading(
+        assertEquals(16L, AppleReadingPulsePolicy.nextDelayForReading(
             onScreen = true,
             positionMs = onscreen,
             variants = variants,

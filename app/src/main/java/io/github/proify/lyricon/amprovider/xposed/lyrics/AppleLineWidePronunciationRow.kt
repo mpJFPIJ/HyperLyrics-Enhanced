@@ -7,9 +7,6 @@ import android.graphics.Rect
 import android.text.Layout
 import android.text.SpannableString
 import android.text.Spanned
-import android.text.TextPaint
-import android.text.style.CharacterStyle
-import android.text.style.UpdateAppearance
 import android.graphics.text.LineBreaker
 import android.view.Gravity
 import android.view.View
@@ -244,9 +241,15 @@ internal object AppleReadingPulsePolicy {
         positionMs: Long?,
         nextBeginMs: Long?,
         active: Boolean,
-    ): Long = if (onScreen && (active ||
-            (positionMs != null && nextBeginMs != null &&
-                nextBeginMs - positionMs in 0L..450L))) 60L else 400L
+    ): Long = when {
+        !onScreen -> 400L
+        // Native word clocks and the bright-left/dim-right mask must advance
+        // at roughly one display frame, not one 60-ms jump per whole glyph.
+        active -> 16L
+        positionMs != null && nextBeginMs != null &&
+            nextBeginMs - positionMs in 0L..450L -> 60L
+        else -> 400L
+    }
 
     /** Off-screen holders must not query Exo's playback clock. The caller
      * reuses this one sample for its paint and next scheduler wake. */
@@ -364,22 +367,6 @@ internal class AppleLineWidePronunciationRow {
         java.util.WeakHashMap<ReadingView, Boolean>(),
     )
 
-    /** A single styled Hangul syllable, dim until its own Apple-timed interval. */
-    private class KaraokeSyllableStyle : CharacterStyle(), UpdateAppearance {
-        var progress = 0f
-        var nativeBrightness = 1f
-
-        override fun updateDrawState(paint: TextPaint) {
-            val dim = 0.56f
-            val blend = (nativeBrightness * (dim + (1f - dim) * progress)).coerceIn(0f, 1f)
-            paint.color = Color.rgb(
-                (Color.red(Color.WHITE) * blend).toInt(),
-                (Color.green(Color.WHITE) * blend).toInt(),
-                (Color.blue(Color.WHITE) * blend).toInt(),
-            )
-        }
-    }
-
     // This view is injected into Apple Music's classloader and must depend only
     // on platform Android widgets; requiring AppCompat could break NPatch Local.
     @SuppressLint("AppCompatCustomView")
@@ -402,11 +389,12 @@ internal class AppleLineWidePronunciationRow {
         private var paintRoot: ViewGroup? = null
         private var outerForeground: AppleHangulReadingForeground? = null
         private val updatePaintLayer = Runnable { syncPaintLayer() }
-        private var timedStyles: List<Pair<Int, KaraokeSyllableStyle>> = emptyList()
+        private var timedStyles: List<Pair<Int, AppleReadingKaraokeStyle>> = emptyList()
         private var plainReading = ""
         private var timedVariants: List<List<AppleTimedReadingUnit>> = emptyList()
         private var timedVariantLookups: List<Map<Int, AppleReadingGlyphCoveragePolicy.GlyphOwner>> =
             emptyList()
+        private var timedVariantGeometry: List<Map<Int, AppleMeasuredReadingGlyph>> = emptyList()
         private val visibleBounds = Rect()
         private val highlightPulse = object : Runnable {
             override fun run() {
@@ -464,9 +452,10 @@ internal class AppleLineWidePronunciationRow {
             timedVariantLookups = timedVariants.map { units ->
                 AppleReadingGlyphCoveragePolicy.glyphOwners(value, units)
             }
+            timedVariantGeometry = emptyList()
             timedStyles = AppleReadingGlyphCoveragePolicy.offsets(value, timedVariants)
                 .map { offset ->
-                    val style = KaraokeSyllableStyle()
+                    val style = AppleReadingKaraokeStyle()
                     styled.setSpan(style, offset, offset + 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
                     offset to style
                 }
@@ -631,6 +620,12 @@ internal class AppleLineWidePronunciationRow {
                 )
                 if (fitted != null) setTextSize(TypedValue.COMPLEX_UNIT_PX, fitted)
             }
+            // Never measure against a stale Layout during setText(); the host
+            // has now chosen the actual font size, line breaks and advances.
+            timedVariantGeometry = timedVariants.map { units ->
+                AppleReadingSweepLayout.measure(plainReading, layout, units)
+            }
+            syncTimedHighlight()
         }
 
         override fun onDetachedFromWindow() {
@@ -676,15 +671,32 @@ internal class AppleLineWidePronunciationRow {
                 AppleTimedPronunciationHighlightPolicy.activeVariant(it, timedVariants)
             }
             val activeVariant = activeVariantIndex?.let(timedVariantLookups::get)
+            val activeGeometry = activeVariantIndex?.let(timedVariantGeometry::getOrNull)
             var changed = false
             timedStyles.forEach { (offset, style) ->
                 val glyphOwner = activeVariant?.get(offset)
                 val nativeWord = glyphOwner?.unit
+                val geometry = activeGeometry?.get(offset)
                 val next = positionMs?.let { now ->
                     glyphOwner?.let { owner ->
-                        AppleReadingGlyphCoveragePolicy.glyphProgress(owner, now)
+                        val nativeProgress = AppleTimedPronunciationHighlightPolicy.progress(
+                            now, owner.unit,
+                        )
+                        if (owner.unit.isWholeLine) nativeProgress else geometry?.let { glyph ->
+                            AppleReadingSweepGeometry.glyphCoverage(
+                                nativeProgress, glyph.unitStartPx, glyph.glyphWidthPx,
+                                glyph.unitWidthPx,
+                            )
+                        } ?: 0f
                     }
                 } ?: 0f
+                if (style.measured != geometry ||
+                    style.coarseLineClock != (nativeWord?.isWholeLine == true)
+                ) {
+                    style.measured = geometry
+                    style.coarseLineClock = nativeWord?.isWholeLine == true
+                    changed = true
+                }
                 if (kotlin.math.abs(style.progress - next) > 0.01f) {
                     style.progress = next
                     changed = true
@@ -695,8 +707,8 @@ internal class AppleLineWidePronunciationRow {
                     nativeWord?.sourceWordIndex
                         ?.takeIf { it in nativeOpacities.indices }
                         ?.let(nativeOpacities::get) ?: defaultNativeOpacity
-                if (kotlin.math.abs(style.nativeBrightness - nativeBrightness) > 0.01f) {
-                    style.nativeBrightness = nativeBrightness
+                if (kotlin.math.abs(style.brightness - nativeBrightness) > 0.01f) {
+                    style.brightness = nativeBrightness
                     changed = true
                 }
             }

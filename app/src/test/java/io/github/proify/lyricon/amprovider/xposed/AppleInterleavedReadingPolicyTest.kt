@@ -164,6 +164,18 @@ class AppleInterleavedReadingPolicyTest {
         assertEquals("노미소", rows.joinToString("") { it.text })
     }
 
+    @Test fun `IRIS OUT Kanji verb split before its final kana remains source anchored`() {
+        val rows = requireNotNull(AppleInterleavedReadingPolicy.plan(
+            "喚く", "와메쿠",
+            listOf(
+                AppleVisualSourceCell("喚", 0, 42),
+                AppleVisualSourceCell("く", 55, 97),
+            ),
+            listOf(ApplePronunciationSourceToken(0, 2, "와메쿠", "喚く")),
+        ))
+        assertEquals(listOf("와메", "쿠"), rows.map { it.text })
+    }
+
     @Test fun `known kana prefix may identify one Kanji suffix without estimating character lengths`() {
         val rows = requireNotNull(AppleInterleavedReadingPolicy.plan(
             "みそ脳", "미소노",

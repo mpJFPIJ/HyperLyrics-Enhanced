@@ -42,6 +42,32 @@ class AppleNativeReadingProjectionTest {
         ))
     }
 
+    @Test fun completeFinePhoneticProofPreservesEveryOriginalNativeWordClock() {
+        val native = AppleNativeReadingProjection.projectForNativeKaraoke(
+            "瞳孔バチ開いて溺れ死にそう",
+            listOf("瞳孔", "バチ", "開いて", "溺れ", "死にそう"),
+            listOf(
+                SourceReadingSpan(0, 2, "瞳孔", "ドコ", "도코"),
+                SourceReadingSpan(2, 4, "バチ", "バチ", "바치"),
+                SourceReadingSpan(4, 7, "開いて", "ヒライテ", "히라이테"),
+                SourceReadingSpan(7, 9, "溺れ", "オボレ", "오보레"),
+                SourceReadingSpan(9, 13, "死にそう", "シニソウ", "시니소"),
+            ), "도코 바치 히라이테 오보레 시니소",
+        )
+        assertEquals(listOf("도코", "바치", "히라이테", "오보레", "시니소"),
+            native?.words?.map { it.hangul })
+        assertFalse(native?.approximate ?: true)
+    }
+
+    @Test fun indivisibleKanaDigraphAndUnanchoredKanjiCannotClaimSplitClocks() {
+        assertNull(AppleNativeReadingProjection.projectForNativeKaraoke(
+            "きゃ", listOf("き", "ゃ"), emptyList(), "캬",
+        ))
+        assertNull(AppleNativeReadingProjection.projectForNativeKaraoke(
+            "世界", listOf("世", "界"), emptyList(), "세카이",
+        ))
+    }
+
     @Test fun partialSudachiAnchorsKeepTheirEntireSoundOnTheCorrectAppleWord() {
         val original = "君の名は"
         val wordCells = listOf("君", "の", "名は")
@@ -49,10 +75,10 @@ class AppleNativeReadingProjectionTest {
         val blind = AppleNativeReadingProjection.projectApproximate(
             original, wordCells, sound,
         )
-        // Blind length-proportional splitting is wrong for the kanji 君:
-        // two Hangul syllables belong to its single Japanese glyph.
-        assertEquals("키", blind?.words?.first()?.hangul)
-        val anchored = AppleNativeReadingProjection.projectAnchored(
+        // Even without the dictionary proof, an independently read kana
+        // anchor isolates 君 as ONE whole native word: never cut its syllables.
+        assertEquals("키미", blind?.words?.first()?.hangul)
+        val anchored = AppleNativeReadingProjection.projectForNativeKaraoke(
             original, wordCells,
             listOf(SourceReadingSpan(0, 1, "君", "キミ", "키미")),
             sound,
@@ -80,21 +106,18 @@ class AppleNativeReadingProjectionTest {
         assertEquals("키미노나와", result?.words?.joinToString("") { it.hangul }
             ?.replace(AppleNativeReadingProjection.EMPTY_PRONUNCIATION_CELL, ""))
     }
-    @Test fun mixedKanjiCompoundThatCrossesNativeCellsStillUsesNativeKaraoke() {
+    @Test fun mixedKanjiCompoundThatCrossesNativeCellsUsesIntactLineReading() {
         val spans = listOf(
             SourceReadingSpan(0, 2, "駄目", "ダメ", "다메"),
             SourceReadingSpan(2, 3, "脳", "ノウ", "노"),
             SourceReadingSpan(3, 5, "みそ", "ミソ", "미소"),
         )
-        // A compound is not independently proved at Apple's boundary. Keep
-        // the source-anchored reading on Apple's *actual* word clocks, rather
-        // than painting all Hangul after the last Japanese visual row.
+        // A dictionary-proven compound sound is NOT a proven split at Apple's
+        // native cells. The measured fallback must keep the sound intact.
         val native = AppleNativeReadingProjection.projectForNativeKaraoke(
             "駄目脳みそ", listOf("駄", "目", "脳", "みそ"), spans, "다메노미소",
         )
-        assertEquals(listOf("다", "메", "노", "미소"),
-            native?.words?.map { it.hangul })
-        assertTrue(native?.approximate == true)
+        assertNull(native)
     }
 
     @Test fun partialSourceAnchorsKeepKanjiPronunciationOnTheCorrectNativeWord() {
@@ -105,15 +128,14 @@ class AppleNativeReadingProjectionTest {
         assertEquals(listOf("키미", "노", "나와"), native?.words?.map { it.hangul })
     }
 
-    @Test fun aContradictoryPartialDictionarySpanCannotForceTheWholeReadingToTheBottom() {
+    @Test fun aContradictoryPartialDictionarySpanCannotClaimNativeWordClocks() {
         val native = AppleNativeReadingProjection.projectForNativeKaraoke(
             "君の名は", listOf("君", "の", "名は"),
             listOf(SourceReadingSpan(0, 1, "君", "キミ", "미소")), "키미노나와",
         )
-        // Wrong spans must not be trusted as verified, but the complete
-        // source-matching Korean reading can still use native word clocks.
-        assertEquals(listOf("키미", "노", "나와"), native?.words?.map { it.hangul })
-        assertTrue(native?.approximate == true)
+        // A wrong dictionary anchor must not be silently discarded in favor
+        // of a guessed proportional split; use the intact fallback instead.
+        assertNull(native)
     }
 
     @Test fun withoutDictionarySpansNativeWordsStillAvoidAWholeLineHangulBlock() {

@@ -4,8 +4,8 @@ import com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation
 
 /**
  * Position-preserving Hangul projection onto Apple's existing main lyric words.
- * Exact whole-token matches are copied. A token split by Apple's cells is
- * divided only at Hangul syllable boundaries, and marked approximate.
+ * An Apple word receives Hangul only when the SOUND BOUNDARY belongs to that
+ * word. A complete Hangul sentence does not establish any word boundary.
  *
  * This maps text to a host word cell, NOT a verified per-phoneme timestamp.
  * Apple retains full ownership of word start/end and its highlight animation.
@@ -19,14 +19,12 @@ internal object AppleNativeReadingProjection {
      * Prefer the native lyric word renderer so a wrapped line never becomes
      * several Japanese rows followed by one unrelated block of Hangul.
      *
-     * An independently verified source boundary always wins. When Sudachi
-     * groups several native words, anchor the group's entire verified sound
-     * before distributing its still-ambiguous internal boundary. With no
-     * spans, the original word clocks are safer visually than a single
-     * sentence-wide highlight, but the resulting segmentation is explicitly
-     * approximate. Never borrow a reading from another source line, or guess
-     * inside a single internally wrapped native cell: that case still needs
-     * its separate measured-line treatment.
+     * A grouped Kanji token has no provable internal syllable boundary even
+     * when Apple supplies several genuine native word clocks. Only complete
+     * verified source spans, independently additive kana words, or one
+     * isolated native cell between sound anchors may use those clocks.
+     * Otherwise let the measured line-wide/interleaved presentation own the
+     * intact sound; never borrow a neighboring cell's syllables.
      */
     fun projectForNativeKaraoke(
         original: String,
@@ -35,23 +33,24 @@ internal object AppleNativeReadingProjection {
         pronunciation: String,
     ): Result? {
         if (appleWords.count { word -> word.any(Char::isLetterOrDigit) } < 2) return null
+        if (com.juren233.hyperlyricsenhanced.common.lyric.RomanizationPolicy
+                .sanitizeHangulSupplement(original, pronunciation) == null
+        ) return null
         if (spans.isNotEmpty()) {
-            val anchored = project(original, appleWords, spans, pronunciation)
-                ?: projectAnchored(original, appleWords, spans, pronunciation)
-            if (anchored != null) return anchored
-            // Incomplete provider spans can disagree with a separately
-            // supplied *complete* line pronunciation. Never call those spans
-            // verified, but don't make one bad token strand every Korean row
-            // below the Japanese paragraph. Rebuild from source-matched cells.
+            project(original, appleWords, spans, pronunciation)?.let { return it }
         }
-        // Without a dictionary map, entire native KANA words still have a
-        // deterministic phonetic reading. Pin only uniquely occurring sounds
-        // in the supplied Korean line; leave kanji and ambiguous repetitions
-        // for the last-resort positional projection.
+        // An entire native kana cell can be transcribed independently.
+        // Use only uniquely located sounds that do not conflict with the
+        // caller's independently supplied dictionary spans.
         val kanaAnchors = unambiguousKanaWordAnchors(original, appleWords, pronunciation)
-        return kanaAnchors.takeIf { it.isNotEmpty() }?.let { anchors ->
+        val additions = kanaAnchors.filter { kana ->
+            spans.none { span ->
+                kana.sourceStart < span.sourceEnd && kana.sourceEnd > span.sourceStart
+            }
+        }
+        val anchors = (spans + additions).sortedBy { it.sourceStart }
+        return if (anchors.isEmpty()) null else
             projectAnchored(original, appleWords, anchors, pronunciation)
-        } ?: projectApproximate(original, appleWords, pronunciation)
     }
 
     private fun unambiguousKanaWordAnchors(
@@ -90,63 +89,22 @@ internal object AppleNativeReadingProjection {
         return spans
     }
 
-    /**
-     * Last-resort karaoke-cell mapping when the song has a complete Hangul
-     * line but Sudachi/Apple source spans are unavailable. This is an
-     * explicit approximation: original native word timestamps remain intact.
-     * Reject unmatched source lines to prevent recycled-holder leakage.
-     */
+    /** Compatibility entry point for unspanned lines. The previous
+     * implementation proportionally divided Hangul by Japanese glyph counts,
+     * assigning e.g. part of 溺れ to the following native word. Unverified
+     * splits are no longer accepted, even through this legacy entry point. */
     fun projectApproximate(
         original: String,
         appleWords: List<String>,
         pronunciation: String,
-    ): Result? {
-        if (appleWords.isEmpty() ||
-            com.juren233.hyperlyricsenhanced.common.lyric.RomanizationPolicy
-                .sanitizeHangulSupplement(original, pronunciation) == null
-        ) return null
-        fun compact(text: String): String = text.filter(Char::isLetterOrDigit)
-        if (compact(original).isEmpty() ||
-            compact(original) != compact(appleWords.joinToString(""))
-        ) return null
-        val syllables = pronunciation.filter { it in '가'..'힣' }
-        if (syllables.isEmpty() || pronunciation.any {
-                it.isLetter() && it !in '가'..'힣'
-            }) return null
-        val weights = appleWords.map { word -> word.count(Char::isLetterOrDigit) }
-        val total = weights.sum()
-        if (total == 0) return null
-        var accumulatedWeight = 0
-        var consumed = 0
-        val words = appleWords.mapIndexed { index, source ->
-            val start = accumulatedWeight * syllables.length / total
-            accumulatedWeight += weights[index]
-            val end = accumulatedWeight * syllables.length / total
-            // Source punctuation and long-vowel marks may have no separate
-            // spoken syllable. Use a non-rendering placeholder instead of
-            // exposing the original Japanese glyph or duplicating a sound.
-            val reading = syllables.substring(start, end)
-                .ifEmpty { EMPTY_PRONUNCIATION_CELL }
-            consumed += end - start
-            LyricWordPronunciation(source, reading)
-        }
-        if (consumed != syllables.length ||
-            words.joinToString("") { it.hangul }.filter { it in '가'..'힣' } != syllables
-        ) return null
-        return Result(words, approximate = true)
-    }
+    ): Result? = projectForNativeKaraoke(original, appleWords, emptyList(), pronunciation)
 
     /**
-     * Use verified Sudachi fragments as anchors inside a complete AI phonetic
-     * line. The old incomplete-analyzer path discarded those anchors, then
-     * divided every Hangul syllable by Japanese character counts. That can
-     * delay a complete word until the following Apple karaoke cell.
-     *
-     * Source anchors are never guessed: an anchor's actual source substring
-     * and Hangul reading must both match in order. Only the unresolved gaps
-     * are proportional, and every original native cell keeps its own timing.
-     * An unavailable or inconsistent anchor fails closed to the existing
-     * approximate fallback.
+     * Project verified phonetic spans and uniquely attributed residual gaps.
+     * An unresolved SOUND GAP may be assigned only if it intersects exactly
+     * ONE native source word: the sounds remain uncertain, but their word
+     * boundary is not divided. An unverified gap over two words, or any
+     * unsplittable verified Kanji compound, must use line-wide rendering.
      */
     fun projectAnchored(
         original: String,
@@ -154,10 +112,14 @@ internal object AppleNativeReadingProjection {
         spans: List<SourceReadingSpan>,
         pronunciation: String,
     ): Result? {
-        if (spans.isEmpty() || appleWords.isEmpty()) return null
-        val baseline = projectApproximate(original, appleWords, pronunciation)
-            ?: return null
+        if (spans.isEmpty() || appleWords.isEmpty() ||
+            com.juren233.hyperlyricsenhanced.common.lyric.RomanizationPolicy
+                .sanitizeHangulSupplement(original, pronunciation) == null
+        ) return null
         val full = pronunciation.filter { it in '가'..'힣' }
+        if (full.isEmpty() || pronunciation.any {
+                it.isLetter() && it !in '가'..'힣'
+            }) return null
         val ranges = mutableListOf<IntRange>()
         var sourceCursor = 0
         for (word in appleWords) {
@@ -170,11 +132,13 @@ internal object AppleNativeReadingProjection {
             ranges += start until start + token.length
             sourceCursor = start + token.length
         }
-        data class Piece(val start: Int, val end: Int, val reading: String)
+        if (original.substring(sourceCursor).any(Char::isLetterOrDigit)) return null
+        data class Piece(val start: Int, val end: Int, val reading: String,
+            val independentlyVerified: Boolean)
         val pieces = mutableListOf<Piece>()
         var sourceOffset = 0
         var soundOffset = 0
-        for (span in spans.sortedBy { it.sourceStart }) {
+        for (span in spans) {
             if (span.sourceStart < sourceOffset || span.sourceEnd > original.length ||
                 span.sourceEnd <= span.sourceStart ||
                 original.substring(span.sourceStart, span.sourceEnd) != span.sourceText
@@ -183,43 +147,79 @@ internal object AppleNativeReadingProjection {
             if (anchor.isEmpty()) return null
             val soundStart = full.indexOf(anchor, soundOffset)
             if (soundStart < 0) return null
-            if (soundStart > soundOffset) {
-                if (span.sourceStart <= sourceOffset) return null
+            // A repeated anchor appearing after an untranscribed gap cannot
+            // prove which occurrence corresponds to its source substring.
+            if (soundStart > soundOffset &&
+                full.indexOf(anchor, soundStart + 1) >= 0
+            ) return null
+            if (span.sourceStart == sourceOffset && soundStart != soundOffset) return null
+            if (span.sourceStart > sourceOffset) {
                 pieces += Piece(
                     sourceOffset, span.sourceStart,
                     full.substring(soundOffset, soundStart),
+                    independentlyVerified = false,
                 )
             }
-            pieces += Piece(span.sourceStart, span.sourceEnd, anchor)
+            pieces += Piece(span.sourceStart, span.sourceEnd, anchor,
+                independentlyVerified = true)
             sourceOffset = span.sourceEnd
             soundOffset = soundStart + anchor.length
         }
-        if (soundOffset < full.length) {
-            if (sourceOffset >= original.length) return null
-            pieces += Piece(sourceOffset, original.length, full.substring(soundOffset))
-        }
+        if (sourceOffset < original.length) {
+            pieces += Piece(sourceOffset, original.length, full.substring(soundOffset),
+                independentlyVerified = false)
+        } else if (soundOffset != full.length) return null
 
+        // A standalone length mark may be genuinely silent, but only when
+        // independently converting the WHOLE kana line confirms its sound.
+        val kanaSound = if (original.all { it in '\u3040'..'\u30ff' ||
+                    it.isWhitespace()
+            }) JapaneseToHangul.fromKana(original)?.filter { it in '가'..'힣' }
+            else null
+        val verifiedSilentKana = kanaSound == full
         val readings = List(appleWords.size) { StringBuilder() }
+        var inferredCell = false
         for (piece in pieces) {
             val overlaps = ranges.mapIndexedNotNull { index, range ->
-                val width = (minOf(range.last + 1, piece.end) -
-                    maxOf(range.first, piece.start)).coerceAtLeast(0)
-                if (width > 0) index to width else null
+                val left = maxOf(range.first, piece.start)
+                val right = minOf(range.last + 1, piece.end)
+                if (right > left) index to (left until right) else null
             }
-            if (overlaps.isEmpty()) return null
-            val units = piece.reading.length
-            val weight = overlaps.sumOf { it.second }
-            var consumed = 0
-            var weighted = 0
-            overlaps.forEachIndexed { order, (index, width) ->
-                weighted += width
-                val next = if (order == overlaps.lastIndex) units
-                    else weighted * units / weight
-                if (next < consumed) return null
-                readings[index].append(piece.reading.substring(consumed, next))
-                consumed = next
+            val fragment = original.substring(piece.start, piece.end)
+            if (overlaps.isEmpty()) {
+                // Apple's word vector may omit punctuation/whitespace, never
+                // a source letter or a phonetic syllable.
+                if (piece.reading.isNotEmpty() || fragment.any(Char::isLetterOrDigit))
+                    return null
+                continue
             }
-            if (consumed != units) return null
+            if (piece.reading.isEmpty()) {
+                if (fragment.any(Char::isLetterOrDigit) &&
+                    !(verifiedSilentKana && fragment.all { it == 'ー' })
+                ) return null
+                continue
+            }
+            if (overlaps.size == 1) {
+                readings[overlaps.single().first].append(piece.reading)
+                if (!piece.independentlyVerified) inferredCell = true
+                continue
+            }
+            // Multiple native cells can share a token ONLY if each complete
+            // literal-kana fragment independently reconstructs its sound.
+            // Kanji, digraph halves, a separated nasal or a length mark
+            // cannot be split by character weight or native text width.
+            if (!piece.independentlyVerified) return null
+            val sounds = overlaps.map { (_, range) ->
+                val sourceFragment = original.substring(range.first, range.last + 1)
+                if (sourceFragment.any { it !in '\u3040'..'\u30ff' }) return null
+                JapaneseToHangul.fromKana(sourceFragment)
+                    ?.filter { it in '가'..'힣' }?.takeIf(String::isNotEmpty)
+                    ?: return null
+            }
+            if (sounds.joinToString("") != piece.reading) return null
+            overlaps.forEachIndexed { index, (wordIndex, _) ->
+                readings[wordIndex].append(sounds[index])
+            }
         }
         val aligned = appleWords.mapIndexed { index, word ->
             LyricWordPronunciation(
@@ -229,9 +229,9 @@ internal object AppleNativeReadingProjection {
         if (aligned.joinToString("") { it.hangul }.filter { it in '가'..'힣' } != full) {
             return null
         }
-        // A partial dictionary analysis cannot prove the gap's phonetic
-        // boundaries. Be explicit; source words still have authentic clocks.
-        return Result(aligned, approximate = baseline.approximate)
+        // The isolated gap's sound may be unverified, but no syllable has
+        // been divided between two distinct native word clocks.
+        return Result(aligned, approximate = inferredCell)
     }
 
     fun project(

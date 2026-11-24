@@ -41,3 +41,18 @@ RED evidence: #279 three failures, #281 two more, #282 four failures
       verify artifact hash. Report an unavailable local Gradle honestly.
 - [ ] Record remaining host/device-only cases and supply a reviewable branch
       and test artifact without merging an unverified Android runtime change.
+
+## Task 4 — review-discovered context-dependent kana clock theft
+
+- [x] Obtain an independent read-only review of the projected native word
+      anchors; identify particle `は`/`へ` and cross-cell `こう` false positives.
+- [x] Add literal behavioral regressions for `鳥は羽`/`토리와하네`,
+      `鳥へ蛇`/`토리에헤비` and `行こう海`/`이코우미` in
+      `AppleNativeReadingProjectionTest.kt`.
+- [x] Observe all new assertions failing for the expected wrong native-cell
+      assignment before writing the implementation: CI #286 (3/3 RED) and
+      #287 (5/5 RED, with the verified-span positive still passing).
+- [ ] Make automatic kana anchors contingent on independently valid contextual
+      pronunciation; preserve complete verified spans and additive kana rows.
+- [ ] Verify RED→GREEN and the full Android unit/lint/APK/signature/checksum
+      workflow, then restore PR #19's stacked base and document the limits.

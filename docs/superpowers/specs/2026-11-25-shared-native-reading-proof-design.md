@@ -34,6 +34,10 @@ host supplied corresponding timed word cells.
 - Preserve original text as the source of native word timing and attribution.
 - Treat uncomposed Hangul jamo as invalid phonetic output at the shared
   transport validation boundary, not only during native word projection.
+- A single orphan `ㄴ` may be composed as the preceding syllable's coda
+  only when the Japanese source explicitly contains a nasal `ん`/`ン` and
+  that Hangul syllable has no coda; this presentation repair is not a
+  word-timing proof. All other orphan jamo remain invalid.
 - Test the Japanese fragments observed in the video and negative examples.
 - Do not assert UI clipping is fixed solely on the strength of JVM tests.
 

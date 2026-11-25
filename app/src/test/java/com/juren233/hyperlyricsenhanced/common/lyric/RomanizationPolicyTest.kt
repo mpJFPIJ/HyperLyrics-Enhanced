@@ -113,4 +113,22 @@ class RomanizationPolicyTest {
         }
         assertEquals("노미소", RomanizationPolicy.sanitizeHangulSupplement("脳みそ", "노미소"))
     }
+
+    @Test
+    fun `Japanese nasal can compose orphan consonant into preceding Korean syllable`() {
+        // Visible in the supplied IRIS OUT video: バラバラんなる rendered a
+        // separate ㄴ at the edge of a wrapped Korean fallback row.
+        assertEquals("바라바란 나루", RomanizationPolicy.sanitizeHangulSupplement(
+            "バラバラんなる", "바라바라 ㄴ나루",
+        ))
+        assertEquals("바라바란 나루", RomanizationPolicy.sanitizeSupplement(
+            "バラバラんなる", "바라바라 ㄴ나루",
+        ))
+        // No Japanese ん, no uniquely attachable Korean syllable, and no
+        // known coda slot: reject instead of inventing a phonetic sound.
+        assertNull(RomanizationPolicy.sanitizeHangulSupplement("バラバラなる", "바라바라 ㄴ나루"))
+        assertNull(RomanizationPolicy.sanitizeHangulSupplement("んなる", "ㄴ나루"))
+        assertNull(RomanizationPolicy.sanitizeHangulSupplement("こんなる", "콘ㄴ나루"))
+        assertNull(RomanizationPolicy.sanitizeHangulSupplement("こんなる", "코ㄴㄴ나루"))
+    }
 }

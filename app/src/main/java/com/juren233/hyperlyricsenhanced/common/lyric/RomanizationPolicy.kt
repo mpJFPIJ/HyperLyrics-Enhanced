@@ -30,7 +30,8 @@ object RomanizationPolicy {
 
     /** Validate a Korean-script phonetic rendering without changing legacy Latin tracks. */
     fun sanitizeHangulSupplement(originalText: String?, pronunciation: String?): String? {
-        val candidate = pronunciation?.trim()?.takeIf(String::isNotEmpty) ?: return null
+        val raw = pronunciation?.trim()?.takeIf(String::isNotEmpty) ?: return null
+        val candidate = repairJapaneseNasalCoda(originalText.orEmpty(), raw) ?: raw
         val shown = visibleText(candidate)
         if (!isHangulPronunciation(shown)) return null
 
@@ -58,6 +59,31 @@ object RomanizationPolicy {
             index += Character.charCount(code)
         }
         return candidate.takeIf { hasForeignLetter }
+    }
+
+    /**
+     * Some AI transcriptions write a standalone Korean ㄴ for the Japanese
+     * moraic nasal ん. The preceding syllable's empty final-consonant slot is
+     * its only safe Korean attachment. Compose it before a TextView may wrap
+     * the orphan into a separate visual row. This is a *display* repair, not
+     * evidence for an Apple native word-clock boundary.
+     */
+    private fun repairJapaneseNasalCoda(original: String, reading: String): String? {
+        if (original.none { it == 'ん' || it == 'ン' } || reading.count { it == 'ㄴ' } != 1) {
+            return null
+        }
+        val nasal = reading.indexOf('ㄴ')
+        var before = nasal - 1
+        while (before >= 0 && reading[before].isWhitespace()) before--
+        if (before < 0 || reading[before] !in '가'..'힣') return null
+        val syllable = reading[before]
+        if ((syllable.code - 0xAC00) % 28 != 0) return null
+        val next = reading.getOrNull(nasal + 1)
+        if (next != null && !next.isWhitespace() && next !in '가'..'힣') return null
+        return StringBuilder(reading).apply {
+            setCharAt(before, (syllable.code + 4).toChar())
+            deleteCharAt(nasal)
+        }.toString().trim()
     }
 
     /** A readable Korean phonetic line contains complete precomposed syllables,

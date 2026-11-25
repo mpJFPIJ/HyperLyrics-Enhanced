@@ -32,6 +32,8 @@ host supplied corresponding timed word cells.
 - No unverified syllable assignment across two native source cells.
 - Keep `Grouped` / line-wide behavior for genuinely unsplittable Kanji words.
 - Preserve original text as the source of native word timing and attribution.
+- Treat uncomposed Hangul jamo as invalid phonetic output at the shared
+  transport validation boundary, not only during native word projection.
 - Test the Japanese fragments observed in the video and negative examples.
 - Do not assert UI clipping is fixed solely on the strength of JVM tests.
 

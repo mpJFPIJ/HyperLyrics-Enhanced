@@ -60,6 +60,10 @@ object RomanizationPolicy {
         return candidate.takeIf { hasForeignLetter }
     }
 
+    /** A readable Korean phonetic line contains complete precomposed syllables,
+     * not standalone compatibility/leading/medial/final jamo (e.g. ㄴ). A
+     * partially composed Hangul string rendered as an extra karaoke row can
+     * leave a lone consonant below unrelated Japanese text. */
     fun isHangulPronunciation(pronunciation: String?): Boolean {
         val shown = visibleText(pronunciation.orEmpty())
         var hasHangul = false
@@ -67,7 +71,7 @@ object RomanizationPolicy {
         while (index < shown.length) {
             val code = shown.codePointAt(index)
             if (Character.isLetter(code)) {
-                if (Character.UnicodeScript.of(code) != Character.UnicodeScript.HANGUL) {
+                if (code !in 0xAC00..0xD7A3) {
                     return false
                 }
                 hasHangul = true

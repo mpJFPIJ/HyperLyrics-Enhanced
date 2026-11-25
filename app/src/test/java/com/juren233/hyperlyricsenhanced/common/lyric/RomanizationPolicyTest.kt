@@ -101,4 +101,16 @@ class RomanizationPolicyTest {
         )
         assertNull(RomanizationPolicy.sanitizeHangulSupplement("한국어ー", "한국어"))
     }
+
+    @Test
+    fun `isolated Hangul jamo never reaches a visible Japanese pronunciation row`() {
+        val broken = listOf("ㄴ", "노ㄴ미소", "노미소", "노ㅏ미소")
+        broken.forEach { candidate ->
+            assertFalse("compatibility or combining jamo: $candidate",
+                RomanizationPolicy.isHangulPronunciation(candidate))
+            assertNull(RomanizationPolicy.sanitizeHangulSupplement("脳みそ", candidate))
+            assertFalse(RomanizationPolicy.sameHangulSounds(candidate, "노미소"))
+        }
+        assertEquals("노미소", RomanizationPolicy.sanitizeHangulSupplement("脳みそ", "노미소"))
+    }
 }

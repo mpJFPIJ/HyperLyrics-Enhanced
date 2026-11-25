@@ -371,7 +371,7 @@ class AppleNativeReadingProjectionTest {
         assertEquals(listOf("라부", AppleNativeReadingProjection.EMPTY_PRONUNCIATION_CELL, "토"),
             result?.words?.map { it.hangul })
     }
-    @Test fun oboreCannotLeaveItsFinalSyllableInTheNextNativeCell() {
+    @Test fun oboreAndShinisouUseVerifiedKanaSuffixWithoutStealingNativeClocks() {
         val result = AppleNativeReadingProjection.project(
             original = "溺れ死にそう",
             appleWords = listOf("溺", "れ", "死に", "そう"),
@@ -381,9 +381,12 @@ class AppleNativeReadingProjectionTest {
             ),
             expectedHangul = "오보레시니소",
         )
-        // The whole line can be rendered, but the separate word cells have
-        // no trustworthy place to divide 오보레 or 시니소.
-        assertNull(result)
+        // れ and そう have independently reproducible complete sounds.
+        // Only one Kanji-bearing cell remains in each verified whole token,
+        // so no Hangul sound is borrowed from a neighboring native clock.
+        assertEquals(listOf("오보", "레", "시니", "소"),
+            result?.words?.map { it.hangul })
+        assertFalse(result?.approximate ?: true)
     }
     @Test fun repeatedVerifiedMorphemesRetainEverySoundAndCellIdentity() {
         val result = AppleNativeReadingProjection.project(

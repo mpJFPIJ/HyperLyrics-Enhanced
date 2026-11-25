@@ -37,6 +37,8 @@ internal object PrimaryPronunciationClient {
 가수: ${song.artist.orEmpty().take(90)}
 한자 독음은 단어와 문맥으로 결정하라. 중국어 한자 독음이나 한국어 뜻으로 읽지 말라.
 일본어 조사 は/へ/を, 연탁, 촉음, 장음을 정확히 처리하라.
+일본어 ん을 독립 자모 'ㄴ'으로 쓰지 말고 문맥에 맞게 완성된 한글 음절로 적어라.
+예: バラバラんなる → 바라바란나루. 'ㄴ', 'ㅁ', 'ㅇ' 단독 자모는 절대 출력하지 마라.
 영어가 섞이면 영어의 실제 발음을 한글로 적고 원문 단어를 빠뜨리지 말라.
 이미 한국어인 가사는 절대 재표기하지 말고, 원문 음절을 만들어내지 말라.
 trans는 항상 빈 문자열이며 roma에는 발음만 한글로 적는다.
@@ -50,11 +52,16 @@ trans는 항상 빈 문자열이며 roma에는 발음만 한글로 적는다.
         response: List<TranslationItem>,
     ): List<TranslationItem> {
         val originals = payload.lyrics.associate { it.index to it.text }
-        return response.filter { item ->
-            val source = originals[item.index] ?: return@filter false
-            AIPronunciationPolicy.eligibleForeignLine(source) &&
-                RomanizationPolicy.sanitizeHangulSupplement(source, item.roma) != null
-        }.map { it.copy(trans = "") }
+        return response.mapNotNull { item ->
+            val source = originals[item.index] ?: return@mapNotNull null
+            if (!AIPronunciationPolicy.eligibleForeignLine(source)) return@mapNotNull null
+            val acceptedReading = RomanizationPolicy.sanitizeHangulSupplement(source, item.roma)
+                ?: return@mapNotNull null
+            // Preserve the validated (possibly composed) output, never the
+            // original malformed model string. The recovery missing-line
+            // policy inspects these exact saved TranslationItems.
+            item.copy(trans = "", roma = acceptedReading)
+        }
     }
 
     suspend fun recover(

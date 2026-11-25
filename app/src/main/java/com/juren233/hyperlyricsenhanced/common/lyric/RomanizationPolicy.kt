@@ -1,5 +1,6 @@
 package com.juren233.hyperlyricsenhanced.common.lyric
 
+import com.juren233.hyperlyricsenhanced.root.aitrans.JapaneseToHangul
 import java.util.Locale
 
 object RomanizationPolicy {
@@ -63,15 +64,24 @@ object RomanizationPolicy {
 
     /**
      * Some AI transcriptions write a standalone Korean ㄴ for the Japanese
-     * moraic nasal ん. The preceding syllable's empty final-consonant slot is
-     * its only safe Korean attachment. Compose it before a TextView may wrap
-     * the orphan into a separate visual row. This is a *display* repair, not
-     * evidence for an Apple native word-clock boundary.
+     * moraic nasal ん. For a completely kana-only source line, a full-line
+     * independent Japanese reading can verify the resulting Hangul exactly.
+     * A matching kana fragment INSIDE a mixed Kanji line cannot prove its
+     * source position; the malformed line must instead be re-requested from
+     * the pronunciation model, not "repaired" by moving its consonant.
      */
     private fun repairJapaneseNasalCoda(original: String, reading: String): String? {
-        if (original.none { it == 'ん' || it == 'ン' } || reading.count { it == 'ㄴ' } != 1) {
+        if (original.length > 4_096 || reading.length > 4_096 ||
+            original.none { it == 'ん' || it == 'ン' } || reading.count { it == 'ㄴ' } != 1
+        ) {
             return null
         }
+        // Dropping numbers while comparing sounds can silently approve an
+        // invented phonetic digit; は/へ require particle context the literal
+        // kana converter cannot independently establish.
+        if (reading.codePoints().anyMatch { Character.isDigit(it) } ||
+            original.any { it == 'は' || it == 'へ' }
+        ) return null
         val nasal = reading.indexOf('ㄴ')
         var before = nasal - 1
         while (before >= 0 && reading[before].isWhitespace()) before--
@@ -80,10 +90,18 @@ object RomanizationPolicy {
         if ((syllable.code - 0xAC00) % 28 != 0) return null
         val next = reading.getOrNull(nasal + 1)
         if (next != null && !next.isWhitespace() && next !in '가'..'힣') return null
-        return StringBuilder(reading).apply {
+        val repaired = StringBuilder(reading).apply {
             setCharAt(before, (syllable.code + 4).toChar())
             deleteCharAt(nasal)
         }.toString().trim()
+        val allKana = original.codePoints().allMatch { codePoint ->
+            codePoint in 0x3040..0x30FF || !Character.isLetterOrDigit(codePoint)
+        }
+        if (!allKana) return null
+        val whole = JapaneseToHangul.fromKana(original)?.filter { it in '가'..'힣' }
+        return repaired.takeIf {
+            whole != null && whole == repaired.filter { char -> char in '가'..'힣' }
+        }
     }
 
     /** A readable Korean phonetic line contains complete precomposed syllables,

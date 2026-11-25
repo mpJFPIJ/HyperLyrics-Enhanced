@@ -130,5 +130,19 @@ class RomanizationPolicyTest {
         assertNull(RomanizationPolicy.sanitizeHangulSupplement("んなる", "ㄴ나루"))
         assertNull(RomanizationPolicy.sanitizeHangulSupplement("こんなる", "콘ㄴ나루"))
         assertNull(RomanizationPolicy.sanitizeHangulSupplement("こんなる", "코ㄴㄴ나루"))
+        assertNull(RomanizationPolicy.sanitizeHangulSupplement("こんにちは", "콘니치와 ㄴ"))
+        assertNull(RomanizationPolicy.sanitizeHangulSupplement("こんにちは", "코ㄴ니치하"))
+        assertNull(RomanizationPolicy.sanitizeHangulSupplement("かん", "카ㄴ 2"))
+        // A nasal sound that appears somewhere in the sentence cannot be
+        // reassigned to a later Kanji word just because its syllables match.
+        assertNull(RomanizationPolicy.sanitizeHangulSupplement("かん、蚊", "카 카ㄴ"))
+        assertNull(RomanizationPolicy.sanitizeHangulSupplement(
+            "かん".repeat(250), "카 ㄴ",
+        ))
+        assertNull(RomanizationPolicy.sanitizeHangulSupplement(
+                "やたらとしんどい恋煩いバラバラんなる頭とこの身体",
+                "야타라토신도이 코이와즈라이 바라바라 ㄴ나루 아타마토코노카라다",
+            ))
+        assertNull(RomanizationPolicy.sanitizeHangulSupplement("あ、かん、蚊、い", "아 카 카ㄴ 이"))
     }
 }

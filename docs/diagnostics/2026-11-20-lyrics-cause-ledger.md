@@ -249,3 +249,88 @@ to this exact Exo method likewise needs NPatch same-event traces.
 - Code evidence alone confirms an architectural failure mode, not necessarily attribution of every video frame.
 - "Fixed in source" requires a regression test that failed pre-fix and passed post-fix. "Fixed and verified" also requires an app/device replay for visible rendering or performance problems.
 - The old build log is not evidence of new build playback state. Preserve the logs, video and build hashes in the final report.
+
+## 2026-11-25 continuation: source + supplied evidence audit
+
+This section extends the earlier #234 ledger. It is **not** a new APK or a
+claim that PR #20 is device-verified. The integration baseline is Draft PR #20
+at `cfb5577c3e89f0313025010e8ab743059ed9908b` (previous CI #306 green).
+
+### Evidence provenance
+
+| Input | Verified | Cannot infer |
+|---|---|---|
+| `1000034205.mp4` | 173.48 s, 720x1568; at ~60 s four Japanese source rows are followed by four separate Hangul rows; at ~82 s a stand-alone `ㄴ` appears after the Hangul line. | The recording predates PR #20/#306. Neither symptom establishes a post-#306 regression. Individual native cell bounds, word IDs and font clipping are not in the video. |
+| `npatch-diagnostics-com.apple.android.music-20261125-082446.zip` | Apple Music `6.5.3 (1599)`, signature bypass 2; module log advertises commit `a84acd95c30ae52dd05229a8d8c4eb753d3ba192`, run `45400701927` (#289). One November 25 song snapshot explicitly has `languages=[ja-Hang]`, `nativeTextLines=0`, `nativeWordLines=0`, `onlineTextLines=0` and `mainWordLines=30`; all five snapshots have zero native pronunciation text and word lines. | `ja-Hang` availability is **advertised** for at least that song, but the actual track content and successful native selection are not proven. These are **not** run #306 logs. |
+| November 24 process log | Twelve `linewide_holder_bound` records all say `shown=0,candidate=0,sourceCells=0`. | Not a visible failing fallback row; cannot assign these entries to the four-plus-four video moment. |
+
+### Additional code-confirmed divergence
+
+1. `lyrics/AppleLineWidePronunciationRow.kt` inserts a `ReadingView` into
+   Apple's `karaoke_line_flexbox` while its outer `AppleHangulReadingForeground`
+   paints the same measured layout at the holder level. The host's
+   `FullWidthAlphaGradientFlexboxLayout` therefore measures an extra child but
+   uses a different parent for visible Hangul paint. The source of a specific
+   split-white pixel is still **unattributed** without native geometry/mask
+   telemetry.
+2. `lyrics/AppleInterleavedReadingPolicy.kt` rejects native cells whose nested
+   TextView has `nativeLineCount != 1`. The alternative in
+   `AppleLineWidePronunciationRow.bind` only handles internal soft-wrap when
+   `sourceChildren.size == 1 && sourceWords.size == 1`. Otherwise a complete
+   line-wide Hangul row is placed after the final native source child. This
+   **code-proven coverage gap** can cause a four-source-then-four-reading
+   presentation even when the phonetic text is complete. A pure policy proof
+   alone cannot solve the physical multi-child TextView layout constraint.
+3. `expandAppleLyricsPronunciationLanguages` adds `ja-Latn` but no `ja-Hang`
+   or `ja-Kore`, and `ApplePronunciationPolicy.selectLanguage` accepts only
+   Latin tags. `AppleNativePronunciationLanguagePolicy.select` *does* recognize
+   Japanese Hangul tracks. These competing request/match/apply rules make
+   official Hangul availability and selection inconsistent; they are a
+   confirmed **code-path omission**. The latest ZIP's `languages=[ja-Hang]`
+   means the track was advertised, but with both native content counts zero
+   we still cannot attribute that observation to request, selection, server
+   content materialization, or native parsing without a same-build probe.
+4. `ReadingView.highlightPulse` samples and invalidates its own fallback
+   painting periodically. Apple's original word shader, this paint owner,
+   `AppleNativeSoftWrapReadingOverlay`, translation foreground, and native
+   scroll have separate lifecycle/refresh boundaries. A single atomically
+   synchronized source↔reading highlight is not established by those paths.
+5. The native soft-wrap overlay changes `TextView.lineSpacingExtra` to reserve
+   space, while its `draw()` bounds are clipped to the outer holder. Prior
+   detach/rebind protections exist but do not support multiple internally
+   wrapped native children. Recheck actual host geometry and clip behavior
+   before attempting a new paint hierarchy.
+
+### Changed verification requirements
+
+- Add separate tests for track request candidates, official match priority,
+  explicit language application and absence of server-provided Hangul.
+- Add mixed multi-child/soft-wrap source geometry tests; reject guessed
+  reading positions and partial UTF-16 fragments.
+- Before calling a clipping bug fixed, compare same-build UI screenshots and
+  native paint/clip metrics. Before claiming full highlight parity, compare
+  matched source and reading native-word ownership after seek and pause.
+- The user explicitly requested the **final** Gradle/CI/APK gate after source
+  correction and regression review; do not run a new CI build for each finding.
+
+### Explicit source-to-screen boundaries (2026-11-25 static trace)
+
+| Boundary | Actual producer → consumer | Ownership and required proof |
+|---|---|---|
+| Apple lyrics fetch | `hookAppleLyricsPreferredLanguages` rewrites the **second** `String[]` argument to the lyric request constructor; the song's native `pronunciationLanguages` vector is read later by `ensureAppleLyricTextHooks` | Requested tags, advertised tags, successful `setPronunciation` and materialized native text/words are **four distinct states**. A request tag does not prove content exists. |
+| Native track choice | `hookAppleOfficialPronunciationLanguageMatching` overrides `matchToSystemLyricsScript`; `applyAppleNativePronunciationSelection` separately chooses a tag and calls `LYRICS_NATIVE_SET_PRONUNCIATION_METHOD` | Both paths must honor Hangul-first and the native-enabled switch. The explicit selection reports the selected language and Boolean result, while the separate `song_snapshot` reports materialized line/word counts. No same-build post-selection materialization evidence exists yet. |
+| AI phonetics transport | `AppleMusicSourcePhonetics.attach` derives source-anchored phonetic spans and optional projected native words; `AppleSupplementDataReceive` merges the async result into `nativeOnlineTranslationStore` | `sourceText`, song/revision and begin/end must still agree when the native getter consumes the result. `WordAlignmentResult.Grouped` is not proof of a per-native-word syllable boundary. |
+| Native words/holder | `hookApplePronunciationWordsGetter` selects official/user/online text; exact compatible native word beginnings preserve Apple's official renderer; safe projected Hangul uses main-word objects; all other accepted Hangul is stored as a line-wide payload | `AppleLineWidePronunciationRow.bind` requires matching song, revision, source priority and source-child fingerprint. The source renderer stays Apple's. Missing timing must stay visibly unsupported, not acquire a fabricated syllable clock. |
+| Geometry/foreground | Flexbox-native source children are inspected before insertion; one additional full-width `ReadingView` may be inserted after each **proved** visual row, and a holder-level drawable can repaint it outside the native gradient | `nativeLineCount == 1` per source cell is mandatory for flex-row interleaving. The existing internal soft-wrap painter only supports **one source child containing one source TextView**. Without a measured individual `TextView.Layout` range, a native child spanning multiple visual rows has no safe mid-child insertion point. Host/holder clip, nested alpha gradient, exact font ink bounds, offset-to-holder and detach/rebind state still require same-build device telemetry. |
+| Time and repaint | `ApplePlaybackHooks.currentPositionMs` supplies the Exo sample; native Japanese word shaders retain native ownership; `ReadingView.highlightPulse` separately samples at 16/60/400 ms; translation uses its `AppleTranslationFocusPolicy` timed group and one foreground painter | The seek hook wakes only visible, current-song/revision fallback rows. Native source, reading pulse, meaning pulse and scroll follow are not atomically updated by one transaction. An accepted nonzero seek target is not necessarily the measured/clamped position. |
+| User scroll | `AppleLyricsScrollPresentationState` stores weak host+adapter+song visits; `AppleSupplementScrollRestore` captures/restores the viewport and cancels its pending restore on drag | Restore intent must not own a recycled adapter or override a user drag. A screenshot cannot distinguish a native auto-follow issue from a pending restoration. |
+
+**Classification:** The Latin-only request/matcher omission and the strict multi-child internal-wrap fallback are *code-confirmed*. Four-Japanese-then-four-Hangul and orphan-jamo pixels are *observed only in a pre-#306 device recording*. A specific original-source clipping operation, dropped official track contents, frame-time slowdown and post-#306 visual status remain *unproven*. Focused regression targets: request/match/selection priority tests; multi-cell UTF-16 span and wrap-policy tests; seek/holder-generation tests; masked native versus holder overlay owner tests; final same-build NPatch geometry and frame-time replay.
+
+**Native selection Boolean caveat:** `hookAppleLyricTextGetter`'s adjacent pronunciation-availability hook also intercepts `setPronunciation(String)`. It returns a user-visible effective availability (`online exists || native result and content`) rather than Apple's unmodified setter Boolean. Therefore `pronunciation_selection_applied`'s former `selected=true` did **not** independently prove a successful official selection. The diagnostic now labels the observed values `nativeResult` (inside the hook) and `effectiveReturn` (after the hook), retaining the requested language. Their relation to materialized native text still needs a same-song snapshot after selection.
+
+**Additional code-confirmed Unicode boundary defect:** The interleaving policy previously counted Java/Kotlin `Char.isLetterOrDigit` instead of Unicode code points. A supplementary Han glyph such as `𠮟` is two UTF-16 code units that each fail the Char letter test. Consequently `canDeriveKanaRows("𠮟かな", "카나")` could misclassify a mixed Han/kana source as all-kana, and the holder source-prefix matcher could accept `"あ"` when the true source was `"𠮟あ"`. The integration candidate now preserves full code points when constructing source keys and visual rows, checks phonetic/soft-line UTF-16 boundaries, and recognizes supplementary Han as one unknown fragment anchored by verified kana. This is a *code-level* repair with test source authored; Gradle tests and host/device output remain pending the requested final gate.
+
+**Seek-to-reading scheduling improvement:** An accepted current-song/current-revision Exo seek already posts one immediate visible fallback pulse. If Apple's getter briefly reports a *nonzero* position from before the seek, that pulse can otherwise return to a 400-ms idle interval. The candidate maintains a **600-ms bounded seek-recovery window**, sampling an on-screen fallback every at most 60 ms (or the existing faster 16-ms active interval). It never substitutes the requested seek target for the raw Exo clock and never polls off-screen fallback rows faster. A pure policy regression verifies the 60/16/400-ms cases. This reduces worst-case presentation recovery for a getter that settles within the window; it does not prove the real Android getter is stale or that the native Apple shader and translation repaint atomically.
+
+**Final independent-review corrections (source only):** Two important edge cases were identified before the final build gate. (1) `matchToSystemLyricsScript` previously ranked advertised `ja-Latn` ahead of `ja-Hang` under Latin-first, while explicit `setPronunciation` could switch to `ja-Hang` solely because Latin text was not materialized yet. Both now share one advertised-track ranking; the native text getter still decides whether an actual track contains usable text or requires supplement fallback. (2) A 600-ms seek-recovery deadline previously lived only in the current `ReadingView`; RecyclerView replacement during a seek discarded it. A manager-level event now carries song ID, revision and monotonic deadline, inherited only by matching current or newly rebound views. The exact matched-song and expiry rules have pure policy tests. None of these changes asserts that native server text or on-device geometry is already correct.

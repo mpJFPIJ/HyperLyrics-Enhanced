@@ -188,10 +188,14 @@ internal object ApplePronunciationPolicy {
         systemMatch: String?,
         appleLanguages: List<String>,
         onlineFallbackLanguage: String?,
-    ): String? =
-        systemMatch.normalizedLatinLanguage()
-            ?: appleLanguages.firstNotNullOfOrNull { it.normalizedLatinLanguage() }
-            ?: onlineFallbackLanguage.normalizedLatinLanguage()
+        hangulFirst: Boolean = false,
+    ): String? {
+        val official = AppleNativePronunciationLanguagePolicy.preferredOfficial(
+            listOfNotNull(systemMatch) + appleLanguages, hangulFirst,
+        )
+        val fallback = onlineFallbackLanguage.normalizedLatinLanguage()
+        return official ?: fallback
+    }
 
     private fun String?.normalizedLatinLanguage(): String? =
         this?.trim()?.takeIf {

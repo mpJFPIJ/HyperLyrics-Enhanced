@@ -45,6 +45,71 @@ class AppleInterleavedReadingPolicyTest {
         ))
     }
 
+    @Test fun `supplementary Han source cannot masquerade as an all kana lyric`() {
+        val source = "𠮟かな"
+        assertEquals(false, AppleInterleavedReadingPolicy.canDeriveKanaRows(source, "카나"))
+        assertNull(AppleInterleavedReadingPolicy.verifiedKanaWords(
+            source, listOf("𠮟", "かな"), "카나",
+        ))
+    }
+
+    @Test fun `verified supplementary Han keeps its whole UTF16 code point and reading row`() {
+        val result = requireNotNull(AppleInterleavedReadingPolicy.plan(
+            sourceText = "𠮟あ",
+            pronunciation = "시츠 아",
+            cells = listOf(
+                AppleVisualSourceCell("𠮟", 0, 40),
+                AppleVisualSourceCell("あ", 51, 91),
+            ),
+            spans = listOf(
+                ApplePronunciationSourceToken(0, 2, "시츠", "𠮟"),
+                ApplePronunciationSourceToken(2, 3, "아", "あ"),
+            ),
+        ))
+        assertEquals(listOf(0, 1), result.map { it.insertAfterSourceCell })
+        assertEquals(listOf("시츠", "아"), result.map { it.text })
+    }
+
+    @Test fun `one supplementary Han with a verified kana suffix can own the residual sound`() {
+        assertEquals(listOf("시츠", "아"),
+            AppleInterleavedReadingPolicy.verifiedFragmentSounds(
+                listOf("𠮟", "あ"), "시츠아",
+            ))
+    }
+
+    @Test fun `UTF16 surrogate halves are never independent visual or phonetic rows`() {
+        assertNull(AppleNativeSoftWrapReadingPolicy.plan(
+            sourceText = "𠮟あ", displayedText = "𠮟あ", pronunciation = "시츠아",
+            visualLineRanges = listOf(0 until 1, 1 until 3),
+            spans = listOf(
+                ApplePronunciationSourceToken(0, 2, "시츠", "𠮟"),
+                ApplePronunciationSourceToken(2, 3, "아", "あ"),
+            ),
+        ))
+        assertNull(AppleInterleavedReadingPolicy.plan(
+            sourceText = "𠮟あ", pronunciation = "시츠아",
+            cells = listOf(AppleVisualSourceCell("𠮟", 0, 40),
+                AppleVisualSourceCell("あ", 51, 91)),
+            spans = listOf(
+                ApplePronunciationSourceToken(0, 1, "시", "\uD842"),
+                ApplePronunciationSourceToken(1, 2, "츠", "\uDF9F"),
+                ApplePronunciationSourceToken(2, 3, "아", "あ"),
+            ),
+        ))
+    }
+
+    @Test fun `orphan Hangul jamo cannot be assigned to a measured Japanese row`() {
+        assertNull(AppleInterleavedReadingPolicy.plan(
+            sourceText = "あい", pronunciation = "아ㄴ",
+            cells = listOf(AppleVisualSourceCell("あ", 0, 40),
+                AppleVisualSourceCell("い", 51, 91)),
+            spans = listOf(
+                ApplePronunciationSourceToken(0, 1, "아", "あ"),
+                ApplePronunciationSourceToken(1, 2, "ㄴ", "い"),
+            ),
+        ))
+    }
+
     @Test fun internallyWrappedSingleNativeTextViewUsesItsRealLineOffsetsNotOneLogicalCell() {
         val rows = requireNotNull(AppleNativeSoftWrapReadingPolicy.plan(
             sourceText = "駄目は",

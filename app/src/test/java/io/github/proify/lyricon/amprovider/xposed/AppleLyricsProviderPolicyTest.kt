@@ -349,7 +349,7 @@ class AppleLyricsProviderPolicyTest {
     }
 
     @Test
-    fun `preserves Apple pronunciation candidates and appends CJK Latin candidates`() {
+    fun `preserves Apple pronunciation candidates and requests Japanese Hangul tracks`() {
         assertEquals(
             listOf(
                 "zh-Hani",
@@ -357,9 +357,29 @@ class AppleLyricsProviderPolicyTest {
                 "ko-Latn",
                 "ja-Latn",
                 "zh-Latn",
+                "ja-Hang",
+                "ja-Kore",
             ),
             expandAppleLyricsPronunciationLanguages(
                 listOf("zh-Hani", "ja-Hrkt", "ko-Latn"),
+            ),
+        )
+    }
+
+    @Test
+    fun `Hangul first mode requests official Japanese Hangul before Latin without losing Apple candidates`() {
+        assertEquals(
+            listOf("ja-Hang", "ja-Kore", "ja-Latn", "zh-Hani", "ko-Latn", "zh-Latn"),
+            expandAppleLyricsPronunciationLanguages(
+                original = listOf("ja-Latn", "zh-Hani", "ko-Latn"),
+                hangulFirst = true,
+            ),
+        )
+        assertEquals(
+            listOf("ja-Hang", "ja-Kore", "ko-Latn", "ja-Latn", "zh-Latn"),
+            expandAppleLyricsPronunciationLanguages(
+                original = listOf("ja-Hang", "ko-Latn"),
+                hangulFirst = true,
             ),
         )
     }

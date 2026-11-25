@@ -717,13 +717,20 @@ internal fun isAppleLyricsRequestPath(pathSegments: List<String>): Boolean =
     pathSegments.getOrNull(3) == "songs" &&
         pathSegments.lastOrNull()?.contains("lyrics") == true
 
-internal fun expandAppleLyricsPronunciationLanguages(original: List<String>): List<String> =
+internal fun expandAppleLyricsPronunciationLanguages(
+    original: List<String>,
+    hangulFirst: Boolean = false,
+): List<String> =
     (
+        // Apple's request uses an ordered language array. When the user asks
+        // for Hangul-first, advertise the official Japanese Hangul scripts
+        // before the host's original Latin candidates, without dropping them.
+        (if (hangulFirst) listOf("ja-Hang", "ja-Kore") else emptyList()) +
         original + listOf(
             "ja-Latn",
             "ko-Latn",
             "zh-Latn",
-        )
+        ) + (if (hangulFirst) emptyList() else listOf("ja-Hang", "ja-Kore"))
     )
         .map(String::trim)
         .filter(String::isNotEmpty)

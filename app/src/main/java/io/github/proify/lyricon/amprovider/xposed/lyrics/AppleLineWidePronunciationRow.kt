@@ -1,6 +1,7 @@
 package io.github.proify.lyricon.amprovider.xposed
 
 import android.os.Build
+import android.os.SystemClock
 import android.annotation.SuppressLint
 import android.graphics.Color
 import android.graphics.Rect
@@ -113,7 +114,7 @@ internal object AppleLineWidePronunciationRowPolicy {
         oldWords.indices.all { oldWords[it] === newWords[it] }
 
     /** Native karaoke words sometimes include a line break between source characters. */
-    fun sourceKey(text: String): String = text.filter(Char::isLetterOrDigit)
+    fun sourceKey(text: String): String = appleLyricSourceKey(text)
 
     fun readableText(value: String?): String? = value?.trim()
         ?.replace(Regex("\\s+"), " ")?.takeIf(String::isNotEmpty)
@@ -148,14 +149,23 @@ internal object AppleLineWidePronunciationRowPolicy {
         // continuation makes the candidate ambiguous, so never attach a short
         // cached reading inside another line. Fail closed for Japanese-language
         // translations rather than displaying a mismatched pronunciation.
-        if (directChildSourceTexts.drop(index).any { text ->
-                text.any { char ->
-                    char.code in 0x3040..0x30FF || char.code in 0x3400..0x9FFF ||
-                        char.code in 0xF900..0xFAFF || char.code in 0xFF66..0xFF9F
-                }
-            }
+        if (directChildSourceTexts.drop(index).any(::containsJapaneseSourceLetters)
         ) return null
         return index
+    }
+
+    private fun containsJapaneseSourceLetters(text: String): Boolean {
+        var offset = 0
+        while (offset < text.length) {
+            val point = Character.codePointAt(text, offset)
+            val script = Character.UnicodeScript.of(point)
+            if (script == Character.UnicodeScript.HAN ||
+                script == Character.UnicodeScript.HIRAGANA ||
+                script == Character.UnicodeScript.KATAKANA || point in 0xFF66..0xFF9F
+            ) return true
+            offset += Character.charCount(point)
+        }
+        return false
     }
 
     fun shouldDisplay(
@@ -272,6 +282,17 @@ internal object AppleReadingPulsePolicy {
         val upcoming = if (active) null else nextUpcomingBeginMs(position, variants)
         return nextDelayMs(onScreen, position, upcoming, active)
     }
+
+    /** A successful seek can precede the Exo getter's updated raw sample.
+     * Re-sample briefly without substituting the requested seek target for
+     * Apple's actual (possibly clamped) playback clock. */
+    fun seekRecoveryDelayMs(
+        ordinaryDelayMs: Long,
+        onScreen: Boolean,
+        nowElapsedMs: Long,
+        recoveryUntilElapsedMs: Long,
+    ): Long = if (onScreen && nowElapsedMs < recoveryUntilElapsedMs)
+        minOf(ordinaryDelayMs, 60L) else ordinaryDelayMs
 }
 
 /** An accepted native Exo seek may jump past the slow off-interval poll.
@@ -283,6 +304,23 @@ internal object AppleReadingSeekWakePolicy {
         attached: Boolean, onScreen: Boolean,
     ): Boolean = !seekSongId.isNullOrBlank() && boundSongId == seekSongId &&
         boundRevision == currentRevision && attached && onScreen
+}
+
+internal data class AppleScopedReadingSeekRecovery(
+    val songId: String,
+    val revision: Long,
+    val untilElapsedMs: Long,
+)
+
+internal object AppleReadingSeekRecoveryPolicy {
+    fun deadlineFor(
+        event: AppleScopedReadingSeekRecovery?,
+        songId: String,
+        revision: Long,
+        nowElapsedMs: Long,
+    ): Long = event?.untilElapsedMs?.takeIf { until ->
+        event.songId == songId && event.revision == revision && until > nowElapsedMs
+    } ?: 0L
 }
 
 /** Different chorus variants can associate a timing with different-sized
@@ -366,6 +404,14 @@ internal class AppleLineWidePronunciationRow {
     private val readingViews = java.util.Collections.newSetFromMap(
         java.util.WeakHashMap<ReadingView, Boolean>(),
     )
+    /** A seek can cause a holder to be replaced before the next clock read.
+     * Keep only the recent song/revision event, never a recycled View owner. */
+    private var acceptedSeekRecovery: AppleScopedReadingSeekRecovery? = null
+
+    private fun seekRecoveryDeadline(songId: String, revision: Long): Long =
+        AppleReadingSeekRecoveryPolicy.deadlineFor(
+            acceptedSeekRecovery, songId, revision, SystemClock.elapsedRealtime(),
+        )
 
     // This view is injected into Apple Music's classloader and must depend only
     // on platform Android widgets; requiring AppCompat could break NPatch Local.
@@ -384,6 +430,7 @@ internal class AppleLineWidePronunciationRow {
         var inlineVisualRows: List<AppleInterleavedReadingRow>? = null
         var staleWrapSnapshot = false
         var isCurrentBinding: () -> Boolean = { true }
+        var seekRecoveryProvider: () -> Long = { 0L }
         var onNeedsRebind: (() -> Unit)? = null
         private var rebindScheduled = false
         private var paintRoot: ViewGroup? = null
@@ -396,6 +443,7 @@ internal class AppleLineWidePronunciationRow {
             emptyList()
         private var timedVariantGeometry: List<Map<Int, AppleMeasuredReadingGlyph>> = emptyList()
         private val visibleBounds = Rect()
+        private var seekRecoveryUntilElapsedMs = 0L
         private val highlightPulse = object : Runnable {
             override fun run() {
                 if (!isAttachedToWindow) return
@@ -415,15 +463,23 @@ internal class AppleLineWidePronunciationRow {
                 // Never poll unrelated/off-screen lines at animation rate.
                 // Native word cells own fast karaoke animation; this fallback
                 // is only a last-resort line-wide display.
-                postDelayed(this, AppleReadingPulsePolicy.nextDelayForReading(
+                val ordinaryDelay = AppleReadingPulsePolicy.nextDelayForReading(
                     onScreen = onScreen,
                     positionMs = position,
                     variants = timedVariants,
+                )
+                postDelayed(this, AppleReadingPulsePolicy.seekRecoveryDelayMs(
+                    ordinaryDelayMs = ordinaryDelay,
+                    onScreen = onScreen,
+                    nowElapsedMs = SystemClock.elapsedRealtime(),
+                    recoveryUntilElapsedMs = seekRecoveryUntilElapsedMs,
                 ))
             }
         }
 
-        fun refreshForAcceptedSeek(songId: String?, currentRevision: Long): Boolean {
+        fun refreshForAcceptedSeek(
+            songId: String?, currentRevision: Long, recoveryUntilElapsedMs: Long,
+        ): Boolean {
             val onScreen = (isAttachedToWindow && isShown &&
                 getGlobalVisibleRect(visibleBounds)) ||
                 inlineWrapOverlay?.isSourceVisibleOnScreen() == true
@@ -438,12 +494,18 @@ internal class AppleLineWidePronunciationRow {
             // Coalesce consecutive seeks and cancel a stale idle pulse. The
             // pulse samples the accepted player clock rather than inventing
             // a position from the clicked row's timestamps.
+            inheritSeekRecovery(recoveryUntilElapsedMs)
             removeCallbacks(highlightPulse)
             post(highlightPulse)
             return true
         }
 
+        fun inheritSeekRecovery(untilElapsedMs: Long) {
+            seekRecoveryUntilElapsedMs = maxOf(seekRecoveryUntilElapsedMs, untilElapsedMs)
+        }
+
         fun setTimedText(value: String, variants: List<List<AppleTimedReadingUnit>>) {
+            seekRecoveryUntilElapsedMs = 0L
             plainReading = value
             val styled = SpannableString(value)
             timedVariants = variants.map { units ->
@@ -632,6 +694,7 @@ internal class AppleLineWidePronunciationRow {
 
         override fun onAttachedToWindow() {
             super.onAttachedToWindow()
+            inheritSeekRecovery(seekRecoveryProvider())
             removeCallbacks(highlightPulse)
             post(highlightPulse)
             removeCallbacks(updatePaintLayer)
@@ -664,6 +727,7 @@ internal class AppleLineWidePronunciationRow {
         }
 
         override fun onDetachedFromWindow() {
+            seekRecoveryUntilElapsedMs = 0L
             removeCallbacks(highlightPulse)
             removeCallbacks(updatePaintLayer)
             detachOuterForeground()
@@ -852,8 +916,14 @@ internal class AppleLineWidePronunciationRow {
     /** Called on the UI thread after Exo accepts a song-scoped seek. */
     fun refreshVisibleForAcceptedSeek(songId: String?, currentRevision: Long): Int {
         if (songId.isNullOrBlank()) return 0
+        val deadline = SystemClock.elapsedRealtime() + 600L
+        acceptedSeekRecovery = AppleScopedReadingSeekRecovery(
+            songId, currentRevision, deadline,
+        )
         val count = readingViews.size
-        val woken = readingViews.count { it.refreshForAcceptedSeek(songId, currentRevision) }
+        val woken = readingViews.count {
+            it.refreshForAcceptedSeek(songId, currentRevision, deadline)
+        }
         AppleLyricUiRuntimeProbe.record(
             "linewide_seek_wake", "tracked=$count woken=$woken",
         )
@@ -962,6 +1032,11 @@ internal class AppleLineWidePronunciationRow {
                 clear(root)
                 return false
             }
+        val bound = requireNotNull(payload)
+        val seekProvider: () -> Long = {
+            seekRecoveryDeadline(bound.songId, bound.revision)
+        }
+        val seekDeadline = seekProvider()
         val hasVerifiedProjection = payload!!.phoneticSpans.isNotEmpty() ||
             AppleInterleavedReadingPolicy.canDeriveKanaRows(payload.sourceText, text)
         val nativeMeasureKey = AppleNativeSourceMeasureKey(
@@ -1013,6 +1088,8 @@ internal class AppleLineWidePronunciationRow {
                 reading.playbackPositionMs = playbackPositionMs
                 reading.isCurrentBinding = isCurrentBinding
                 reading.onNeedsRebind = onNeedsRebind
+                reading.seekRecoveryProvider = seekProvider
+                reading.inheritSeekRecovery(seekDeadline)
                 reading.bindPaintRoot(root)
                 readingViews.add(reading)
             }
@@ -1124,6 +1201,8 @@ internal class AppleLineWidePronunciationRow {
                 reading.playbackPositionMs = playbackPositionMs
                 reading.isCurrentBinding = isCurrentBinding
                 reading.onNeedsRebind = onNeedsRebind
+                reading.seekRecoveryProvider = seekProvider
+                reading.inheritSeekRecovery(seekDeadline)
                 reading.bindPaintRoot(root)
                 readingViews.add(reading)
             }
@@ -1165,6 +1244,7 @@ internal class AppleLineWidePronunciationRow {
                 this.playbackPositionMs = playbackPositionMs
                 this.isCurrentBinding = isCurrentBinding
                 this.onNeedsRebind = onNeedsRebind
+                this.seekRecoveryProvider = seekProvider
                 this.sourceWords = sourceWords
                 this.boundPayload = payload
                 this.sourceCellAbove = precedingNativeCell
@@ -1202,6 +1282,7 @@ internal class AppleLineWidePronunciationRow {
                     row = row,
                     verifiedCrossRow = visibleSoftRows != null || rows != null,
                 ))
+                inheritSeekRecovery(seekDeadline)
             }
             // Source rows remain unmodified and in their original order.
             // Inserting after each native row means the next native row now

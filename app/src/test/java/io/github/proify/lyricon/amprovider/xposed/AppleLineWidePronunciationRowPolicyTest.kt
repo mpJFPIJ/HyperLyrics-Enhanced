@@ -7,6 +7,19 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AppleLineWidePronunciationRowPolicyTest {
+    @Test fun `supplementary Han cannot disappear from the native source prefix contract`() {
+        assertEquals("𠮟あ", AppleLineWidePronunciationRowPolicy.sourceKey("𠮟 あ!"))
+        assertNull(AppleLineWidePronunciationRowPolicy.verifiedInsertionIndex(
+            "𠮟あ", listOf("あ", "Korean meaning"),
+        ))
+        assertEquals(2, AppleLineWidePronunciationRowPolicy.verifiedInsertionIndex(
+            "𠮟あ", listOf("𠮟", "あ", "Korean meaning"),
+        ))
+        assertNull(AppleLineWidePronunciationRowPolicy.verifiedInsertionIndex(
+            "あ", listOf("あ", "𠮟"),
+        ))
+    }
+
     @Test fun transformedNativeWordsVerifyDisplayCellsAndPreserveRawWrapOffsets() {
         val display = requireNotNull(AppleNativeReadingSourceDisplay.fromWords(
             "反覆の夢", listOf("反", "覆", "の", "夢"),
@@ -284,6 +297,51 @@ class AppleLineWidePronunciationRowPolicyTest {
         assertEquals(400L, AppleReadingPulsePolicy.nextDelayMs(
             onScreen = false, positionMs = 11_950, nextBeginMs = 12_000,
             active = false,
+        ))
+    }
+
+    @Test fun `accepted seek briefly rechecks actual Exo clock even if its first read is stale`() {
+        assertEquals(60L, AppleReadingPulsePolicy.seekRecoveryDelayMs(
+            ordinaryDelayMs = 400L, onScreen = true,
+            nowElapsedMs = 1_100L, recoveryUntilElapsedMs = 1_650L,
+        ))
+        assertEquals(16L, AppleReadingPulsePolicy.seekRecoveryDelayMs(
+            ordinaryDelayMs = 16L, onScreen = true,
+            nowElapsedMs = 1_100L, recoveryUntilElapsedMs = 1_650L,
+        ))
+        // The extra clock polls are bounded and never run offscreen.
+        assertEquals(400L, AppleReadingPulsePolicy.seekRecoveryDelayMs(
+            ordinaryDelayMs = 400L, onScreen = false,
+            nowElapsedMs = 1_100L, recoveryUntilElapsedMs = 1_650L,
+        ))
+        assertEquals(400L, AppleReadingPulsePolicy.seekRecoveryDelayMs(
+            ordinaryDelayMs = 400L, onScreen = true,
+            nowElapsedMs = 1_650L, recoveryUntilElapsedMs = 1_650L,
+        ))
+        assertEquals(60L, AppleReadingPulsePolicy.seekRecoveryDelayMs(
+            ordinaryDelayMs = 400L, onScreen = true,
+            nowElapsedMs = 1_650L, recoveryUntilElapsedMs = 2_200L,
+        ))
+    }
+
+    @Test fun `accepted seek recovery transfers only to matching song revision before expiration`() {
+        val accepted = AppleScopedReadingSeekRecovery(
+            songId = "song-A", revision = 3L, untilElapsedMs = 1_600L,
+        )
+        assertEquals(1_600L, AppleReadingSeekRecoveryPolicy.deadlineFor(
+            accepted, songId = "song-A", revision = 3L, nowElapsedMs = 1_100L,
+        ))
+        assertEquals(0L, AppleReadingSeekRecoveryPolicy.deadlineFor(
+            accepted, songId = "song-B", revision = 3L, nowElapsedMs = 1_100L,
+        ))
+        assertEquals(0L, AppleReadingSeekRecoveryPolicy.deadlineFor(
+            accepted, songId = "song-A", revision = 4L, nowElapsedMs = 1_100L,
+        ))
+        assertEquals(0L, AppleReadingSeekRecoveryPolicy.deadlineFor(
+            accepted, songId = "song-A", revision = 3L, nowElapsedMs = 1_600L,
+        ))
+        assertEquals(0L, AppleReadingSeekRecoveryPolicy.deadlineFor(
+            null, songId = "song-A", revision = 3L, nowElapsedMs = 1_100L,
         ))
     }
 

@@ -470,6 +470,57 @@ class ApplePronunciationPolicyTest {
     }
 
     @Test
+    fun `uses official Japanese Hangul when Latin matching has no official candidate`() {
+        assertEquals(
+            "ja-Hang",
+            ApplePronunciationPolicy.selectLanguage(
+                systemMatch = null,
+                appleLanguages = listOf("ja-Hang"),
+                onlineFallbackLanguage = "und-Latn",
+            ),
+        )
+        assertEquals(
+            "ja-Kore",
+            ApplePronunciationPolicy.selectLanguage(
+                systemMatch = null,
+                appleLanguages = listOf("ja-Kore"),
+                onlineFallbackLanguage = "und-Latn",
+            ),
+        )
+        assertEquals(
+            "ja-Hang",
+            ApplePronunciationPolicy.selectLanguage(
+                systemMatch = "ja-Hang",
+                appleLanguages = emptyList(),
+                onlineFallbackLanguage = "und-Latn",
+            ),
+        )
+    }
+
+    @Test
+    fun `prefers official Japanese Hangul over Latin only for Hangul first mode`() {
+        val languages = listOf("ja-Latn", "ja-Hang")
+        assertEquals(
+            "ja-Hang",
+            ApplePronunciationPolicy.selectLanguage(
+                systemMatch = "ja-Latn",
+                appleLanguages = languages,
+                onlineFallbackLanguage = "und-Latn",
+                hangulFirst = true,
+            ),
+        )
+        assertEquals(
+            "ja-Latn",
+            ApplePronunciationPolicy.selectLanguage(
+                systemMatch = "ja-Latn",
+                appleLanguages = languages,
+                onlineFallbackLanguage = "und-Latn",
+                hangulFirst = false,
+            ),
+        )
+    }
+
+    @Test
     fun `rejects non Latin Apple and fallback languages`() {
         assertNull(
             ApplePronunciationPolicy.selectLanguage(

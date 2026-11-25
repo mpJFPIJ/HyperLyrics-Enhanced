@@ -303,8 +303,12 @@ internal fun AppleLyricsSupplementHooks.ensureAppleNativeOnlineTranslationHooks(
             reportApplePronunciationRuntimeDiagnostic(
                 stage = "availability_$name",
                 songId = songId,
-                details = "requested=$requestedLanguage, original=$original, " +
-                    "online=$hasOnlineRomanization, resolved=$resolved, " +
+                // This hook also wraps setPronunciation(Boolean). Its returned
+                // value is EFFECTIVE UI availability, not necessarily proof
+                // that Apple's native selection succeeded. Retain both values.
+                details = "methodRole=${if (name == lyricsRuntimeMember(AppleMusicRuntimeMember.LYRICS_NATIVE_SET_PRONUNCIATION_METHOD)) "setter" else "availability"}, " +
+                    "requested=$requestedLanguage, nativeResult=$original, " +
+                    "online=$hasOnlineRomanization, effectiveResult=$resolved, " +
                     "selected=${PreferencesMonitor.isPronunciationSelected()}",
                 dedupeKey = "availability_$name:$requestedLanguage:$original:$resolved",
             )
@@ -358,6 +362,8 @@ internal fun AppleLyricsSupplementHooks.hookAppleOfficialPronunciationLanguageMa
             appleLanguages = appleLanguages.takeIf { showNativeApplePronunciation() }
                 .orEmpty(),
             onlineFallbackLanguage = thirdPartyPronunciationFallbackLanguage(),
+            hangulFirst = pronunciationSourcePriority() ==
+                RootConstants.APPLE_MUSIC_PRONUNCIATION_HANGUL_FIRST,
         )
     }
     ProviderLogger.debug(
@@ -391,7 +397,9 @@ internal fun AppleLyricsSupplementHooks.hookAppleLyricsPreferredLanguages() {
             val originalPronunciationLanguages =
                 chain.args.getOrNull(pronunciationIndex) as? Array<*>
             val expandedPronunciationLanguages = expandAppleLyricsPronunciationLanguages(
-                originalPronunciationLanguages?.filterIsInstance<String>().orEmpty()
+                original = originalPronunciationLanguages?.filterIsInstance<String>().orEmpty(),
+                hangulFirst = pronunciationSourcePriority() ==
+                    RootConstants.APPLE_MUSIC_PRONUNCIATION_HANGUL_FIRST,
             ).toTypedArray()
             ProviderLogger.debug(
                 "Apple Music 官方歌词翻译候选请求: " +
@@ -499,12 +507,17 @@ internal fun AppleLyricsSupplementHooks.applyAppleNativePronunciationSelection(s
     }
     // A disabled Apple romanization is not a content source. When Hangul
     // arrives later, the existing supplement refresh can select its carrier.
+    // The setter ranks the languages Apple advertises; actual line content
+    // remains a separate getter-level decision. Avoid scanning the native
+    // lyric tree solely to influence that ranking on release builds.
+    val materializedBefore = if (BuildConfig.DEBUG) hasValidOfficialRomanization(songNative)
+        else false
     val language = AppleNativePronunciationLanguagePolicy.select(
         languages = officialLanguages,
         hangulFirst = pronunciationSourcePriority() ==
             RootConstants.APPLE_MUSIC_PRONUNCIATION_HANGUL_FIRST,
         allowNative = showNativeApplePronunciation(),
-        hasLatinText = hasValidOfficialRomanization(songNative),
+        hasLatinText = materializedBefore,
         supplementLanguage = thirdPartyPronunciationFallbackLanguage(),
     ) ?: return
     val selected = runCatching {
@@ -520,7 +533,9 @@ internal fun AppleLyricsSupplementHooks.applyAppleNativePronunciationSelection(s
         stage = "pronunciation_selection_applied",
         songId = songId,
         details = "language=$language, officialLanguages=$officialLanguages, " +
-            "selected=$selected, preference=${PreferencesMonitor.isPronunciationSelected()}",
+            "effectiveReturn=$selected, nativeSetterMayBeOverridden=1, " +
+            "materializedBefore=$materializedBefore, " +
+            "preference=${PreferencesMonitor.isPronunciationSelected()}",
     )
     ProviderLogger.debug(
         "Apple 歌词发音轨道选择：language=$language, " +

@@ -25,9 +25,7 @@ internal object VerifiedJapaneseFragmentReading {
         }
 
         val unknown = literal.indices.filter { literal[it] == null }
-        if (unknown.size != 1 || fragments[unknown.single()].none {
-                it in '\u3400'..'\u9fff' || it == '々'
-            }
+        if (unknown.size != 1 || !hasJapaneseHan(fragments[unknown.single()])
         ) return null
 
         val index = unknown.single()
@@ -41,5 +39,17 @@ internal object VerifiedJapaneseFragmentReading {
         return literal.mapIndexed { cell, sound ->
             if (cell == index) residual else sound ?: return null
         }.takeIf { it.joinToString("") == fullSound }
+    }
+
+    private fun hasJapaneseHan(text: String): Boolean {
+        var offset = 0
+        while (offset < text.length) {
+            val point = Character.codePointAt(text, offset)
+            if (Character.UnicodeScript.of(point) == Character.UnicodeScript.HAN ||
+                point == '々'.code
+            ) return true
+            offset += Character.charCount(point)
+        }
+        return false
     }
 }

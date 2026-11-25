@@ -171,4 +171,15 @@ class ApplePausedPlaybackClockPolicyTest {
             lastValidAgeMs = 9_000L,
         ))
     }
+
+    @Test fun `nonzero native getter remains authoritative even if accepted seek target differs`() {
+        // Apple's seek target can be clamped; a different nonzero getter is
+        // not proof of a stale value. The fallback reading polls briefly
+        // after seek, but the policy must never fabricate the target clock.
+        assertEquals(21_370L, ApplePausedPlaybackClockPolicy.select(
+            currentMs = 21_370L, lastValidMs = 77_000L,
+            timelineAdvancing = false, explicitSeekToZero = false,
+            lastValidAgeMs = 100L,
+        ))
+    }
 }

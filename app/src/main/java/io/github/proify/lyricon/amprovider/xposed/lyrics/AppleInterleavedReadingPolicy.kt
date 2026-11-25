@@ -1,8 +1,35 @@
 package io.github.proify.lyricon.amprovider.xposed
 
 import com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation
+import com.juren233.hyperlyricsenhanced.common.lyric.RomanizationPolicy
 import com.juren233.hyperlyricsenhanced.root.aitrans.JapaneseToHangul
 import com.juren233.hyperlyricsenhanced.root.aitrans.VerifiedJapaneseFragmentReading
+
+/** Measured Android Layout offsets are UTF-16; letter identity is Unicode
+ * code points. Never discard supplementary Han or bisect a surrogate pair. */
+private fun isSourceCodePointBoundary(text: String, offset: Int): Boolean =
+    offset in 0..text.length && !(offset > 0 && offset < text.length &&
+        Character.isHighSurrogate(text[offset - 1]) &&
+        Character.isLowSurrogate(text[offset]))
+
+private fun sourceLetterOffsets(text: String): List<Int> = buildList {
+    var offset = 0
+    while (offset < text.length) {
+        val codePoint = Character.codePointAt(text, offset)
+        if (Character.isLetterOrDigit(codePoint)) add(offset)
+        offset += Character.charCount(codePoint)
+    }
+}
+
+internal fun appleLyricSourceKey(text: String): String = buildString {
+    for (offset in sourceLetterOffsets(text)) {
+        val codePoint = Character.codePointAt(text, offset)
+        appendCodePoint(codePoint)
+    }
+}
+
+private fun sourceCodePointEnd(text: String, offset: Int): Int =
+    offset + Character.charCount(Character.codePointAt(text, offset))
 
 /** The actual laid-out native cell bounds, before inserting any Hangul child. */
 internal data class AppleVisualSourceCell(
@@ -33,9 +60,9 @@ internal object AppleInterleavedReadingPolicy {
      * only when the *entire* reading is reproduced by the trusted converter.
      * Mixed Kanji/English and altered particle readings require real spans. */
     fun canDeriveKanaRows(sourceText: String, pronunciation: String): Boolean {
-        val sourceLetters = sourceText.filter(Char::isLetterOrDigit)
-        if (sourceLetters.isEmpty() || sourceLetters.any {
-                it !in '\u3040'..'\u30ff'
+        val sourceLetters = sourceLetterOffsets(sourceText)
+        if (sourceLetters.isEmpty() || sourceLetters.any { offset ->
+                Character.codePointAt(sourceText, offset) !in 0x3040..0x30ff
             }
         ) return false
         val expected = JapaneseToHangul.fromKana(sourceText)
@@ -70,16 +97,15 @@ internal object AppleInterleavedReadingPolicy {
         spans: List<ApplePronunciationSourceToken>,
     ): List<AppleInterleavedReadingRow>? {
         if (sourceText.isBlank() || pronunciation.isBlank() || cells.isEmpty() ||
-            cells.any { it.bottom <= it.top || it.nativeLineCount != 1 }
+            cells.any { it.bottom <= it.top || it.nativeLineCount != 1 } ||
+            !RomanizationPolicy.isHangulPronunciation(pronunciation)
         ) return null
 
-        val sourceLetters = sourceText.indices.filter { sourceText[it].isLetterOrDigit() }
-        val readingLetters = pronunciation.indices.filter {
-            pronunciation[it].isLetterOrDigit()
-        }
+        val sourceLetters = sourceLetterOffsets(sourceText)
+        val readingLetters = sourceLetterOffsets(pronunciation)
         if (sourceLetters.isEmpty() || readingLetters.isEmpty()) return null
-        if (cells.joinToString("") { it.text.filter(Char::isLetterOrDigit) } !=
-            sourceLetters.joinToString("") { sourceText[it].toString() }
+        if (cells.joinToString("") { appleLyricSourceKey(it.text) } !=
+            appleLyricSourceKey(sourceText)
         ) return null
 
         // A new row starts only when the next measured native cell lies below
@@ -105,7 +131,7 @@ internal object AppleInterleavedReadingPolicy {
         val sourceRow = IntArray(sourceText.length) { -1 }
         var consumed = 0
         for (index in cells.indices) {
-            val letterCount = cells[index].text.count(Char::isLetterOrDigit)
+            val letterCount = sourceLetterOffsets(cells[index].text).size
             if (consumed + letterCount > sourceLetters.size) return null
             for (offset in consumed until consumed + letterCount) {
                 sourceRow[sourceLetters[offset]] = visualRows[index]
@@ -123,7 +149,7 @@ internal object AppleInterleavedReadingPolicy {
                 val offsets = sourceLetters.filter { sourceRow[it] == row }
                 if (offsets.isEmpty()) return@mapNotNull null
                 val start = offsets.first()
-                val end = offsets.last() + 1
+                val end = sourceCodePointEnd(sourceText, offsets.last())
                 val fragment = sourceText.substring(start, end)
                 val sound = JapaneseToHangul.fromKana(fragment) ?: return null
                 ApplePronunciationSourceToken(start, end, sound, fragment)
@@ -142,6 +168,9 @@ internal object AppleInterleavedReadingPolicy {
         for (span in sourceSpans) {
             if (span.sourceStart < previousSourceEnd || span.sourceStart < 0 ||
                 span.sourceEnd <= span.sourceStart || span.sourceEnd > sourceText.length ||
+                !isSourceCodePointBoundary(sourceText, span.sourceStart) ||
+                !isSourceCodePointBoundary(sourceText, span.sourceEnd) ||
+                span.hangul.any { it.isLetterOrDigit() && it !in '가'..'힣' } ||
                 (span.sourceText != null && sourceText.substring(
                     span.sourceStart, span.sourceEnd,
                 ) != span.sourceText)
@@ -153,7 +182,9 @@ internal object AppleInterleavedReadingPolicy {
             val sound = span.hangul.filter(Char::isLetterOrDigit)
             if (sound.isEmpty() || readingCursor + sound.length > readingLetters.size ||
                 readingLetters.subList(readingCursor, readingCursor + sound.length)
-                    .joinToString("") { pronunciation[it].toString() } != sound
+                    .joinToString("") { index ->
+                        pronunciation.substring(index, sourceCodePointEnd(pronunciation, index))
+                    } != sound
             ) return null
             val observedRows = segmentSourceLetters.map { sourceRow[it] }
             if (observedRows.zipWithNext().any { (left, right) -> left > right }) return null
@@ -170,7 +201,9 @@ internal object AppleInterleavedReadingPolicy {
                 if (row < previousRow || localReading + fragmentSound.length > readingLetters.size)
                     return null
                 assigned[row] += readingLetters[localReading] to
-                    (readingLetters[localReading + fragmentSound.length - 1] + 1)
+                    sourceCodePointEnd(
+                        pronunciation, readingLetters[localReading + fragmentSound.length - 1],
+                    )
                 localReading += fragmentSound.length
                 previousRow = row
             }
@@ -212,7 +245,7 @@ internal object AppleInterleavedReadingPolicy {
         fragments: List<List<Int>>,
         fullSound: String,
     ): List<String>? = verifiedFragmentSounds(fragments.map { offsets ->
-        source.substring(offsets.first(), offsets.last() + 1)
+        source.substring(offsets.first(), sourceCodePointEnd(source, offsets.last()))
     }, fullSound)
 
     /** Exact text fragments may come from measured visual rows *or* Apple's
@@ -241,7 +274,9 @@ internal object AppleNativeSoftWrapReadingPolicy {
         var nextStart = 0
         val lines = visualLineRanges.mapIndexed { index, range ->
             if (range.first != nextStart || range.isEmpty() ||
-                range.last >= displayedText.length
+                range.last >= displayedText.length ||
+                !isSourceCodePointBoundary(displayedText, range.first) ||
+                !isSourceCodePointBoundary(displayedText, range.last + 1)
             ) return null
             nextStart = range.last + 1
             AppleVisualSourceCell(

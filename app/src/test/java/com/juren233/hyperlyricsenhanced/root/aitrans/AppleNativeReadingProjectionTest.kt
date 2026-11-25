@@ -7,6 +7,43 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AppleNativeReadingProjectionTest {
+    @Test fun verifiedKanjiResidualNowUsesOriginalWordHighlightAndClock() {
+        val cases = listOf(
+            Triple("脳みそ", listOf("脳", "みそ"), listOf("노", "미소")),
+            Triple("喚く", listOf("喚", "く"), listOf("와메", "쿠")),
+            Triple("溺れ", listOf("溺", "れ"), listOf("오보", "레")),
+        )
+        cases.forEach { (source, words, sounds) ->
+            val full = sounds.joinToString("")
+            val projected = AppleNativeReadingProjection.projectForNativeKaraoke(
+                source, words,
+                listOf(SourceReadingSpan(0, source.length, source, source, full)), full,
+            )
+            assertEquals("native cells for $source", sounds, projected?.words?.map { it.hangul })
+            assertFalse(projected?.approximate ?: true)
+        }
+    }
+
+    @Test fun aVerifiedSingleNativeCellNoLongerNeedsTheSecondWordGuard() {
+        val result = AppleNativeReadingProjection.projectForNativeKaraoke(
+            "溺れ", listOf("溺れ"),
+            listOf(SourceReadingSpan(0, 2, "溺れ", "オボレ", "오보레")), "오보레",
+        )
+        assertEquals(listOf("오보레"), result?.words?.map { it.hangul })
+        assertFalse(result?.approximate ?: true)
+    }
+
+    @Test fun verifiedDigraphAndTwoKanjiUnknownsStillCannotAcquireNativeClocks() {
+        assertNull(AppleNativeReadingProjection.projectForNativeKaraoke(
+            "きゃ", listOf("き", "ゃ"),
+            listOf(SourceReadingSpan(0, 2, "きゃ", "キャ", "캬")), "캬",
+        ))
+        assertNull(AppleNativeReadingProjection.projectForNativeKaraoke(
+            "世界", listOf("世", "界"),
+            listOf(SourceReadingSpan(0, 2, "世界", "セカイ", "세카이")), "세카이",
+        ))
+    }
+
     @Test fun unverifiedTopicParticleCannotStealTheFollowingKanjiReading() {
         // 鳥は羽 is read トリワハネ. A context-free は→하 guess must not
         // steal 羽's unique 하 and shift the Apple clocks to 토리와 / 하 / 네.

@@ -36,6 +36,38 @@ class AppleWordReadingAlignmentTest {
         assertEquals("다메", result.words.joinToString("") { it.hangul })
     }
 
+    @Test fun singleKanjiResidualWithIndependentlyReadableKanaUsesNativeWordClocks() {
+        val examples = listOf(
+            Triple("脳みそ", listOf("脳", "みそ"), listOf("노", "미소")),
+            Triple("喚く", listOf("喚", "く"), listOf("와메", "쿠")),
+            Triple("溺れ", listOf("溺", "れ"), listOf("오보", "레")),
+        )
+        examples.forEach { (source, words, expected) ->
+            val whole = expected.joinToString("")
+            val result = AppleWordReadingAlignment.align(
+                source, words, listOf(span(0, source.length, source, whole)), whole,
+            )
+            assertTrue("$source must have a verified boundary: $result",
+                result is WordAlignmentResult.Verified)
+            assertEquals(expected, (result as WordAlignmentResult.Verified).words.map { it.hangul })
+        }
+    }
+
+    @Test fun residualKanjiCannotAllocateNonSyllabicHangulToNativeCells() {
+        val result = AppleWordReadingAlignment.align(
+            "脳みそ", listOf("脳", "みそ"),
+            listOf(span(0, 3, "脳みそ", "ㄴ미소")), expectedHangul = "ㄴ미소",
+        )
+        assertTrue(result !is WordAlignmentResult.Verified)
+    }
+
+    @Test fun twoUnknownKanjiPiecesDoNotBecomeArtificialNativeWordBoundaries() {
+        val result = AppleWordReadingAlignment.align(
+            "世界", listOf("世", "界"), listOf(span(0, 2, "世界", "세카이")),
+        )
+        assertTrue(result is WordAlignmentResult.Grouped)
+    }
+
     @Test fun mixedJapaneseLineCanSplitLiteralKanaOnlyWhenIndependentReadingsRejoinExactly() {
         val result = AppleWordReadingAlignment.align(
             "駄目あい", listOf("駄目", "あ", "い"),

@@ -19,10 +19,10 @@ internal object AppleNativeReadingProjection {
      * Prefer the native lyric word renderer so a wrapped line never becomes
      * several Japanese rows followed by one unrelated block of Hangul.
      *
-     * A grouped Kanji token has no provable internal syllable boundary even
-     * when Apple supplies several genuine native word clocks. Only complete
-     * verified source spans, independently additive kana words, or one
-     * isolated native cell between sound anchors may use those clocks.
+     * A grouped Kanji token has no provable internal syllable boundary unless
+     * all its other fragments are independently pronounceable kana, so the
+     * single Kanji fragment owns the verified residual syllables. Complete
+     * source spans or one isolated cell between anchors also use those clocks.
      * Otherwise let the measured line-wide/interleaved presentation own the
      * intact sound; never borrow a neighboring cell's syllables.
      */
@@ -32,7 +32,7 @@ internal object AppleNativeReadingProjection {
         spans: List<SourceReadingSpan>,
         pronunciation: String,
     ): Result? {
-        if (appleWords.count { word -> word.any(Char::isLetterOrDigit) } < 2) return null
+        if (appleWords.none { word -> word.any(Char::isLetterOrDigit) }) return null
         if (com.juren233.hyperlyricsenhanced.common.lyric.RomanizationPolicy
                 .sanitizeHangulSupplement(original, pronunciation) == null
         ) return null
@@ -257,19 +257,15 @@ internal object AppleNativeReadingProjection {
                 if (!piece.independentlyVerified && !verifiedLiteralKana) inferredCell = true
                 continue
             }
-            // Multiple native cells can share a token ONLY if each complete
-            // literal-kana fragment independently reconstructs its sound.
-            // Kanji, digraph halves, a separated nasal or a length mark
-            // cannot be split by character weight or native text width.
+            // Multiple native clocks share a verified token only when exact
+            // independently converted kana fragments prove the boundaries,
+            // optionally isolating one Kanji-containing residual fragment.
+            // Two Kanji unknowns, digraph halves, and incompatible kana fail.
             if (!piece.independentlyVerified) return null
-            val sounds = overlaps.map { (_, range) ->
-                val sourceFragment = original.substring(range.first, range.last + 1)
-                if (sourceFragment.any { it !in '\u3040'..'\u30ff' }) return null
-                JapaneseToHangul.fromKana(sourceFragment)
-                    ?.filter { it in '가'..'힣' }?.takeIf(String::isNotEmpty)
-                    ?: return null
-            }
-            if (sounds.joinToString("") != piece.reading) return null
+            val sounds = VerifiedJapaneseFragmentReading.split(
+                overlaps.map { (_, range) -> original.substring(range.first, range.last + 1) },
+                piece.reading,
+            ) ?: return null
             overlaps.forEachIndexed { index, (wordIndex, _) ->
                 readings[wordIndex].append(sounds[index])
             }

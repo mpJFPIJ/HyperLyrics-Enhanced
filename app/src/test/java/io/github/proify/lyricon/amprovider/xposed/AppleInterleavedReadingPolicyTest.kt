@@ -1,5 +1,7 @@
 package io.github.proify.lyricon.amprovider.xposed
 
+import com.juren233.hyperlyricsenhanced.root.aitrans.AppleNativeReadingProjection
+import com.juren233.hyperlyricsenhanced.root.aitrans.SourceReadingSpan
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -162,6 +164,29 @@ class AppleInterleavedReadingPolicyTest {
         assertEquals(listOf("노", "미소"), rows.map { it.text })
         assertEquals(listOf(0, 1), rows.map { it.insertAfterSourceCell })
         assertEquals("노미소", rows.joinToString("") { it.text })
+    }
+
+    @Test fun `native timed cells and measured wrapped rows use identical phonetic proof`() {
+        val cases = listOf(
+            Triple("脳みそ", listOf("脳", "みそ"), "노미소"),
+            Triple("喚く", listOf("喚", "く"), "와메쿠"),
+            Triple("溺れ", listOf("溺", "れ"), "오보레"),
+        )
+        cases.forEach { (source, fragments, full) ->
+            val native = AppleNativeReadingProjection.project(
+                source, fragments,
+                listOf(SourceReadingSpan(0, source.length, source, source, full)), full,
+            )
+            val cells = fragments.mapIndexed { index, surface ->
+                AppleVisualSourceCell(surface, index * 50, index * 50 + 40)
+            }
+            val rows = AppleInterleavedReadingPolicy.plan(
+                source, full, cells,
+                listOf(ApplePronunciationSourceToken(0, source.length, full, source)),
+            )
+            assertEquals("$source source-to-sound boundaries diverged",
+                rows?.map { it.text }, native?.words?.map { it.hangul })
+        }
     }
 
     @Test fun `IRIS OUT Kanji verb split before its final kana remains source anchored`() {

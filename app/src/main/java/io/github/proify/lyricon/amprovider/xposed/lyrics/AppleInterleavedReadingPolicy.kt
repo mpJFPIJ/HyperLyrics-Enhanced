@@ -2,6 +2,7 @@ package io.github.proify.lyricon.amprovider.xposed
 
 import com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation
 import com.juren233.hyperlyricsenhanced.root.aitrans.JapaneseToHangul
+import com.juren233.hyperlyricsenhanced.root.aitrans.VerifiedJapaneseFragmentReading
 
 /** The actual laid-out native cell bounds, before inserting any Hangul child. */
 internal data class AppleVisualSourceCell(
@@ -220,36 +221,7 @@ internal object AppleInterleavedReadingPolicy {
     internal fun verifiedFragmentSounds(
         surfaces: List<String>,
         fullSound: String,
-    ): List<String>? {
-        val literalSounds = surfaces.map { fragment ->
-            if (fragment.any { it !in '\u3040'..'\u30ff' && it != 'ー' }) null
-            else JapaneseToHangul.fromKana(fragment)?.filter(Char::isLetterOrDigit)
-        }
-        if (literalSounds.all { !it.isNullOrEmpty() }) {
-            return literalSounds.filterNotNull().takeIf { it.joinToString("") == fullSound }
-        }
-        val unknown = literalSounds.indices.filter { literalSounds[it].isNullOrEmpty() }
-        if (unknown.size != 1 || surfaces[unknown.single()].none {
-                it in '\u3400'..'\u9fff' || it == '々'
-            }
-        ) return null
-        val index = unknown.single()
-        val knownPrefix = literalSounds.take(index).joinToString("") { it.orEmpty() }
-        val knownSuffix = literalSounds.drop(index + 1).joinToString("") { it.orEmpty() }
-        if (!fullSound.startsWith(knownPrefix) || !fullSound.endsWith(knownSuffix) ||
-            fullSound.length <= knownPrefix.length + knownSuffix.length
-        ) return null
-        val residual = fullSound.substring(
-            knownPrefix.length, fullSound.length - knownSuffix.length,
-        )
-        // A dangling compatibility jamo (e.g. ㄴ) must never become an
-        // independently painted visual row; only complete Hangul syllables
-        // are safe residual sounds for a Japanese Kanji fragment.
-        if (residual.any { it !in '가'..'힣' }) return null
-        return literalSounds.mapIndexed { fragment, sound ->
-            if (fragment == index) residual else sound ?: return null
-        }.takeIf { it.joinToString("") == fullSound }
-    }
+    ): List<String>? = VerifiedJapaneseFragmentReading.split(surfaces, fullSound)
 }
 
 /** Project a single native TextView's *measured* internal soft lines into the

@@ -7,9 +7,6 @@ import android.graphics.Rect
 import android.text.Layout
 import android.text.SpannableString
 import android.text.Spanned
-import android.text.TextPaint
-import android.text.style.CharacterStyle
-import android.text.style.UpdateAppearance
 import android.graphics.text.LineBreaker
 import android.view.Gravity
 import android.view.View
@@ -244,9 +241,15 @@ internal object AppleReadingPulsePolicy {
         positionMs: Long?,
         nextBeginMs: Long?,
         active: Boolean,
-    ): Long = if (onScreen && (active ||
-            (positionMs != null && nextBeginMs != null &&
-                nextBeginMs - positionMs in 0L..450L))) 60L else 400L
+    ): Long = when {
+        !onScreen -> 400L
+        // Native word clocks and the bright-left/dim-right mask must advance
+        // at roughly one display frame, not one 60-ms jump per whole glyph.
+        active -> 16L
+        positionMs != null && nextBeginMs != null &&
+            nextBeginMs - positionMs in 0L..450L -> 60L
+        else -> 400L
+    }
 
     /** Off-screen holders must not query Exo's playback clock. The caller
      * reuses this one sample for its paint and next scheduler wake. */
@@ -261,7 +264,9 @@ internal object AppleReadingPulsePolicy {
     ): Long {
         if (!onScreen) return 400L
         val position = positionMs ?: return 400L
-        val active = AppleTimedPronunciationHighlightPolicy.activeVariant(
+        // A completed word remains painted through a rest, but no clock
+        // sampling is needed at animation speed until the next word begins.
+        val active = AppleTimedPronunciationHighlightPolicy.speakingVariant(
             position, variants,
         ) != null
         val upcoming = if (active) null else nextUpcomingBeginMs(position, variants)
@@ -362,22 +367,6 @@ internal class AppleLineWidePronunciationRow {
         java.util.WeakHashMap<ReadingView, Boolean>(),
     )
 
-    /** A single styled Hangul syllable, dim until its own Apple-timed interval. */
-    private class KaraokeSyllableStyle : CharacterStyle(), UpdateAppearance {
-        var progress = 0f
-        var nativeBrightness = 1f
-
-        override fun updateDrawState(paint: TextPaint) {
-            val dim = 0.56f
-            val blend = (nativeBrightness * (dim + (1f - dim) * progress)).coerceIn(0f, 1f)
-            paint.color = Color.rgb(
-                (Color.red(Color.WHITE) * blend).toInt(),
-                (Color.green(Color.WHITE) * blend).toInt(),
-                (Color.blue(Color.WHITE) * blend).toInt(),
-            )
-        }
-    }
-
     // This view is injected into Apple Music's classloader and must depend only
     // on platform Android widgets; requiring AppCompat could break NPatch Local.
     @SuppressLint("AppCompatCustomView")
@@ -400,11 +389,12 @@ internal class AppleLineWidePronunciationRow {
         private var paintRoot: ViewGroup? = null
         private var outerForeground: AppleHangulReadingForeground? = null
         private val updatePaintLayer = Runnable { syncPaintLayer() }
-        private var timedStyles: List<Pair<Int, KaraokeSyllableStyle>> = emptyList()
+        private var timedStyles: List<Pair<Int, AppleReadingKaraokeStyle>> = emptyList()
         private var plainReading = ""
         private var timedVariants: List<List<AppleTimedReadingUnit>> = emptyList()
         private var timedVariantLookups: List<Map<Int, AppleReadingGlyphCoveragePolicy.GlyphOwner>> =
             emptyList()
+        private var timedVariantGeometry: List<Map<Int, AppleMeasuredReadingGlyph>> = emptyList()
         private val visibleBounds = Rect()
         private val highlightPulse = object : Runnable {
             override fun run() {
@@ -462,9 +452,10 @@ internal class AppleLineWidePronunciationRow {
             timedVariantLookups = timedVariants.map { units ->
                 AppleReadingGlyphCoveragePolicy.glyphOwners(value, units)
             }
+            timedVariantGeometry = emptyList()
             timedStyles = AppleReadingGlyphCoveragePolicy.offsets(value, timedVariants)
                 .map { offset ->
-                    val style = KaraokeSyllableStyle()
+                    val style = AppleReadingKaraokeStyle()
                     styled.setSpan(style, offset, offset + 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
                     offset to style
                 }
@@ -600,6 +591,41 @@ internal class AppleLineWidePronunciationRow {
                         "sourceWords=${sourceWords.size} sourceTopSpan=$sourceTopSpan " +
                         "wrappedSourceViews=$wrappedSourceViews maxSourceLines=$maxSourceLineCount"
                 }
+                // The Japanese native glyphs can appear half-white/half-dim
+                // even when the Hangul foreground is fully visible. Capture
+                // their *own* measured ink extents, without any lyric text,
+                // to distinguish font overflow from Apple's gradient masking.
+                AppleLyricUiRuntimeProbe.recordLazy("linewide_source_ink_geometry", root) {
+                    val ink = sourceWords.mapNotNull { word ->
+                        val native = word.layout ?: return@mapNotNull null
+                        if (native.lineCount == 0 || word.width <= 0 || word.height <= 0)
+                            return@mapNotNull null
+                        val rect = Rect(0, 0, word.width, word.height)
+                        if (runCatching {
+                                root.offsetDescendantRectToMyCoords(word, rect)
+                            }.isFailure
+                        ) return@mapNotNull null
+                        val fm = word.paint.fontMetricsInt
+                        val top = rect.top + word.totalPaddingTop +
+                            native.getLineBaseline(0) + fm.top
+                        val bottom = rect.top + word.totalPaddingTop +
+                            native.getLineBaseline(native.lineCount - 1) + fm.bottom
+                        intArrayOf(
+                            (rect.top - top).coerceAtLeast(0),
+                            (bottom - rect.bottom).coerceAtLeast(0),
+                            (-top).coerceAtLeast(0),
+                            (bottom - root.height).coerceAtLeast(0),
+                        )
+                    }
+                    "hostH=${root.height} nativeSourceWordCount=${ink.size} " +
+                        "nativeInkOverTop=${ink.maxOfOrNull { it[0] } ?: -1} " +
+                        "nativeInkOverBottom=${ink.maxOfOrNull { it[1] } ?: -1} " +
+                        "nativeHolderOverTop=${ink.maxOfOrNull { it[2] } ?: -1} " +
+                        "nativeHolderOverBottom=${ink.maxOfOrNull { it[3] } ?: -1} " +
+                        "nativeTopClippedCount=${ink.count { it[0] > 0 }} " +
+                        "nativeBottomClippedCount=${ink.count { it[1] > 0 }} " +
+                        "nativeShaderCells=${sourceWords.count { it.paint.shader != null }}"
+                }
                 outerForeground?.invalidateSelf()
             }
         }
@@ -629,6 +655,12 @@ internal class AppleLineWidePronunciationRow {
                 )
                 if (fitted != null) setTextSize(TypedValue.COMPLEX_UNIT_PX, fitted)
             }
+            // Never measure against a stale Layout during setText(); the host
+            // has now chosen the actual font size, line breaks and advances.
+            timedVariantGeometry = timedVariants.map { units ->
+                AppleReadingSweepLayout.measure(plainReading, layout, units)
+            }
+            syncTimedHighlight()
         }
 
         override fun onDetachedFromWindow() {
@@ -674,15 +706,32 @@ internal class AppleLineWidePronunciationRow {
                 AppleTimedPronunciationHighlightPolicy.activeVariant(it, timedVariants)
             }
             val activeVariant = activeVariantIndex?.let(timedVariantLookups::get)
+            val activeGeometry = activeVariantIndex?.let(timedVariantGeometry::getOrNull)
             var changed = false
             timedStyles.forEach { (offset, style) ->
                 val glyphOwner = activeVariant?.get(offset)
                 val nativeWord = glyphOwner?.unit
+                val geometry = activeGeometry?.get(offset)
                 val next = positionMs?.let { now ->
                     glyphOwner?.let { owner ->
-                        AppleReadingGlyphCoveragePolicy.glyphProgress(owner, now)
+                        val nativeProgress = AppleTimedPronunciationHighlightPolicy.progress(
+                            now, owner.unit,
+                        )
+                        if (owner.unit.isWholeLine) nativeProgress else geometry?.let { glyph ->
+                            AppleReadingSweepGeometry.glyphCoverage(
+                                nativeProgress, glyph.unitStartPx, glyph.glyphWidthPx,
+                                glyph.unitWidthPx,
+                            )
+                        } ?: 0f
                     }
                 } ?: 0f
+                if (style.measured != geometry ||
+                    style.coarseLineClock != (nativeWord?.isWholeLine == true)
+                ) {
+                    style.measured = geometry
+                    style.coarseLineClock = nativeWord?.isWholeLine == true
+                    changed = true
+                }
                 if (kotlin.math.abs(style.progress - next) > 0.01f) {
                     style.progress = next
                     changed = true
@@ -693,8 +742,8 @@ internal class AppleLineWidePronunciationRow {
                     nativeWord?.sourceWordIndex
                         ?.takeIf { it in nativeOpacities.indices }
                         ?.let(nativeOpacities::get) ?: defaultNativeOpacity
-                if (kotlin.math.abs(style.nativeBrightness - nativeBrightness) > 0.01f) {
-                    style.nativeBrightness = nativeBrightness
+                if (kotlin.math.abs(style.brightness - nativeBrightness) > 0.01f) {
+                    style.brightness = nativeBrightness
                     changed = true
                 }
             }
@@ -1151,6 +1200,7 @@ internal class AppleLineWidePronunciationRow {
                     fullPronunciation = text,
                     rows = visibleSoftRows ?: committedRows,
                     row = row,
+                    verifiedCrossRow = visibleSoftRows != null || rows != null,
                 ))
             }
             // Source rows remain unmodified and in their original order.
@@ -1188,17 +1238,40 @@ internal class AppleLineWidePronunciationRow {
                 "readingChars=${text.length} nativeTimedWords=${payload.timedWords.size}",
             root,
         )
+        if (rows == null && visibleSoftRows == null) AppleLyricUiRuntimeProbe.record(
+            "linewide_fallback_geometry",
+            "sourceCells=${sourceChildren.size} " +
+                "nativeWrappedCells=${sourceWords.count { (it.layout?.lineCount ?: 0) > 1 }} " +
+                "sourcePhoneticSpans=${payload.phoneticSpans.size} " +
+                "verifiedProjection=${if (hasVerifiedProjection) 1 else 0} " +
+                "rawCellValid=${if (rawCells != null) 1 else 0} " +
+                "geometryPending=${if (geometryPending) 1 else 0} " +
+                "readingChars=${text.length}",
+            root,
+        )
         if (rows == null && visibleSoftRows == null && maxSourceLines > 1) AppleLyricUiRuntimeProbe.record(
             "linewide_internal_wrap_fallback",
             "maxSourceLines=$maxSourceLines sourceCells=${sourceChildren.size} customPaint=true",
             root,
         )
-        if (rows != null) AppleLyricUiRuntimeProbe.record(
-            "linewide_visual_rows_interleaved",
-            "sourceCells=${sourceChildren.size} visualRows=${rows.size} " +
-                "readingChars=${text.length} nativeTimedWords=${payload.timedWords.size}",
-            root,
-        )
+        if (rows != null) {
+            val sweptFragments = rows.sumOf { row ->
+                timedVariants.sumOf { units ->
+                    units.count { unit ->
+                        !unit.isWholeLine && unit.start < row.readingEnd &&
+                            unit.end > row.readingStart &&
+                            (unit.start < row.readingStart || unit.end > row.readingEnd)
+                    }
+                }
+            }
+            AppleLyricUiRuntimeProbe.record(
+                "linewide_visual_rows_interleaved",
+                "sourceCells=${sourceChildren.size} visualRows=${rows.size} " +
+                    "readingChars=${text.length} nativeTimedWords=${payload.timedWords.size} " +
+                    "crossRowSweepFragments=$sweptFragments",
+                root,
+            )
+        }
         return true
     }
 

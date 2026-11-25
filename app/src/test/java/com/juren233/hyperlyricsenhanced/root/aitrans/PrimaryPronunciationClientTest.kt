@@ -1,6 +1,7 @@
 package com.juren233.hyperlyricsenhanced.root.aitrans
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PrimaryPronunciationClientTest {
@@ -31,5 +32,19 @@ class PrimaryPronunciationClientTest {
         assertEquals(listOf(1), accepted.map { it.index })
         assertEquals("", accepted.single().trans)
         assertEquals("키미노 나와", accepted.single().roma)
+    }
+
+    @Test fun recoveredNasalReadingIsStoredComposedAndNoLongerMarkedMissing() {
+        val payload = TranslationRequest(listOf(
+            TranslationRequestItem(7, "バラバラんなる"),
+        ))
+        val accepted = PrimaryPronunciationClient.accepted(payload, listOf(
+            TranslationItem(7, "ignored", "바라바라 ㄴ나루"),
+        ))
+        assertEquals("바라바란 나루", accepted.single().roma)
+        assertEquals("", accepted.single().trans)
+        assertTrue(AIPronunciationPolicy.missingReadingIndices(
+            payload.lyrics, accepted,
+        ).isEmpty())
     }
 }

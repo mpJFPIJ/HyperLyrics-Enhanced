@@ -26,6 +26,11 @@ internal data class AppleTimedReadingUnit(
     // Original visible native word index; -1 if several words or a line share this window.
     val sourceWordIndex: Int = -1,
     val isWholeLine: Boolean = false,
+    // A word with one native clock may occupy two *verified* visual rows.
+    // Retain its entire Hangul reading for a continuous pixel-width sweep;
+    // sweepStartOffset locates this row's first character within that word.
+    val sweepFullReading: String? = null,
+    val sweepStartOffset: Int = 0,
 )
 
 /** Never fabricate Korean syllable boundaries from Japanese character lengths. */
@@ -137,6 +142,9 @@ internal object AppleTimedPronunciationHighlightPolicy {
 
     // A dictionary token can contain more than one native word, even across
     // a real rest. Its original sound anchors both ends of any finer mapping.
+    // A mixed Kanji+kana token can split at a real native word rest only if
+    // the literal kana independently determines *every* remaining syllable.
+    // Continuous native words keep their original combined token clock.
     private fun splitVerifiedKana(
         source: String,
         readingLetters: String,
@@ -149,21 +157,39 @@ internal object AppleTimedPronunciationHighlightPolicy {
         return sounds.flatMap { sound ->
             val first = wordsByStart[sound.sourceStart]
             if (first == null || first.sourceEnd >= sound.sourceEnd) return@flatMap listOf(sound)
-            val cells = mutableListOf<AppleTimedSourceWord>()
+            val cells = mutableListOf<LocatedWord>()
             var cursor = sound.sourceStart
             while (cursor < sound.sourceEnd) {
                 val word = wordsByStart[cursor] ?: return@flatMap listOf(sound)
                 if (word.sourceEnd > sound.sourceEnd) return@flatMap listOf(sound)
-                cells += nativeWords[word.nativeIndex]
+                cells += word
                 cursor = word.sourceEnd
             }
+            val nativeCells = cells.map { nativeWords[it.nativeIndex] }
             val fragment = source.substring(sourceOffsets[sound.sourceStart],
                 sourceOffsets[sound.sourceEnd - 1] + 1)
             val expected = readingLetters.substring(sound.readingStart, sound.readingEnd)
-            val finer = literalKanaSounds(fragment, expected, cells)
-            if (finer.isEmpty()) listOf(sound) else finer.map { local ->
+            val finer = literalKanaSounds(fragment, expected, nativeCells)
+            if (finer.isNotEmpty()) finer.map { local ->
                 LocatedSound(sound.sourceStart + local.sourceStart, sound.sourceStart + local.sourceEnd,
                     sound.readingStart + local.readingStart, sound.readingStart + local.readingEnd)
+            } else if (cells.zipWithNext().all { (left, right) ->
+                    right.beginMs >= left.endMs && right.endMs >= left.endMs
+                } && cells.zipWithNext().any { (left, right) ->
+                    right.beginMs > left.endMs
+                }
+            ) {
+                val verified = AppleInterleavedReadingPolicy.verifiedFragmentSounds(
+                    nativeCells.map { it.text.filter(Char::isLetterOrDigit) }, expected,
+                ) ?: return@flatMap listOf(sound)
+                var readingCursor = sound.readingStart
+                cells.zip(verified).map { (word, token) ->
+                    val start = readingCursor
+                    readingCursor += token.length
+                    LocatedSound(word.sourceStart, word.sourceEnd, start, readingCursor)
+                }.takeIf { readingCursor == sound.readingEnd } ?: listOf(sound)
+            } else {
+                listOf(sound)
             }
         }
     }
@@ -256,12 +282,10 @@ internal object AppleTimedPronunciationHighlightPolicy {
             (unit.endMs - unit.beginMs).toFloat()
     }
 
-    /**
-     * A line must not be highlighted when no source lyric occurrence is
-     * currently playing. The old closestVariant() returned a previous or
-     * future chorus even HOURS outside its timestamps.
-     */
-    fun activeVariant(
+    /** The actual speaking intervals are intentionally sparse. The scheduler
+     * may slow down between native words, but the already sung reading glyphs
+     * must remain painted during that rest. */
+    fun speakingVariant(
         positionMs: Long,
         variants: List<List<AppleTimedReadingUnit>>,
     ): Int? = variants.indices.firstOrNull { index ->
@@ -269,6 +293,26 @@ internal object AppleTimedPronunciationHighlightPolicy {
         // A partial verified map can contain an unknown interval between two
         // real source words. It is not evidence of continuous singing.
         timed.any { positionMs >= it.beginMs && positionMs < it.endMs }
+    }
+
+    /**
+     * Keep completed words white until the last trusted native word of this
+     * lyric occurrence. Otherwise every short rest resets the entire Hangul
+     * row to grey, even while Apple keeps the completed Japanese words lit.
+     * Unlike closestVariant(), this never selects an unrelated past/future
+     * chorus: only the measured first-to-last word window can own the paint.
+     */
+    fun activeVariant(
+        positionMs: Long,
+        variants: List<List<AppleTimedReadingUnit>>,
+    ): Int? = variants.indices.firstOrNull { index ->
+        val timed = variants[index]
+        if (timed.isEmpty() || timed.any { it.beginMs < 0 || it.endMs <= it.beginMs } ||
+            timed.zipWithNext().any { (left, right) ->
+                left.beginMs > right.beginMs || left.endMs > right.endMs
+            }
+        ) return@firstOrNull false
+        positionMs >= timed.first().beginMs && positionMs < timed.last().endMs
     }
 
     /** Two identical choruses have the same text but different native timecodes. */

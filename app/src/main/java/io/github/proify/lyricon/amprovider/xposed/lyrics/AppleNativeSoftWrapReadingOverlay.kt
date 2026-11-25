@@ -1,7 +1,6 @@
 package io.github.proify.lyricon.amprovider.xposed
 
 import android.graphics.Canvas
-import android.graphics.Color
 import android.graphics.ColorFilter
 import android.graphics.Paint
 import android.graphics.PixelFormat
@@ -12,8 +11,6 @@ import android.text.SpannableString
 import android.text.Spanned
 import android.text.StaticLayout
 import android.text.TextPaint
-import android.text.style.CharacterStyle
-import android.text.style.UpdateAppearance
 import android.view.View
 import android.widget.TextView
 import android.view.ViewGroup
@@ -100,23 +97,12 @@ internal class AppleNativeSoftWrapReadingOverlay(
     private val rows: List<AppleInterleavedReadingRow>,
     private val timedVariants: List<List<AppleTimedReadingUnit>>,
 ) : Drawable() {
-    private class ReadingStyle : CharacterStyle(), UpdateAppearance {
-        var progress = 0f
-        var brightness = 0.52f
-
-        override fun updateDrawState(paint: TextPaint) {
-            val intensity = (brightness * (0.56f + 0.44f * progress)).coerceIn(0f, 1f)
-            val channel = (255f * intensity).toInt().coerceIn(0, 255)
-            paint.shader = null
-            paint.color = Color.rgb(channel, channel, channel)
-        }
-    }
-
     private data class PaintedRow(
         val visualLine: Int,
         val layout: StaticLayout,
-        val styles: List<Pair<Int, ReadingStyle>>,
+        val styles: List<Pair<Int, AppleReadingKaraokeStyle>>,
         val variantOwners: List<Map<Int, AppleReadingGlyphCoveragePolicy.GlyphOwner>>,
+        val variantGeometry: List<Map<Int, AppleMeasuredReadingGlyph>>,
     )
 
     private val originalLineSpacingExtra = source.lineSpacingExtra
@@ -124,7 +110,7 @@ internal class AppleNativeSoftWrapReadingOverlay(
     private val paint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
         textSize = readingTextPx
         typeface = source.typeface
-        color = Color.rgb(110, 110, 110)
+        color = android.graphics.Color.rgb(110, 110, 110)
     }
     private val measuredWidth = (source.width - source.compoundPaddingLeft -
         source.compoundPaddingRight).coerceAtLeast(0)
@@ -161,25 +147,30 @@ internal class AppleNativeSoftWrapReadingOverlay(
         require(measuredWidth > 0 && readingTextPx > 0f)
         paintedRows = rows.dropLast(1).map { row ->
             val variants = AppleInterleavedReadingTimingPolicy.project(
-                timedVariants, pronunciation, rows, row,
+                timedVariants, pronunciation, rows, row, verifiedCrossRow = true,
             )
             val text = SpannableString(row.text)
             val styles = AppleReadingGlyphCoveragePolicy.offsets(row.text, variants).map { offset ->
-                val style = ReadingStyle()
+                val style = AppleReadingKaraokeStyle()
+                style.brightness = 0.52f
                 text.setSpan(style, offset, offset + 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
                 offset to style
             }
+            val layout = StaticLayout.Builder.obtain(
+                text, 0, text.length, TextPaint(paint), measuredWidth,
+            )
+                .setAlignment(Layout.Alignment.ALIGN_NORMAL)
+                .setIncludePad(false)
+                .build()
             PaintedRow(
                 visualLine = row.insertAfterSourceCell,
-                layout = StaticLayout.Builder.obtain(
-                    text, 0, text.length, TextPaint(paint), measuredWidth,
-                )
-                    .setAlignment(Layout.Alignment.ALIGN_NORMAL)
-                    .setIncludePad(false)
-                    .build(),
+                layout = layout,
                 styles = styles,
                 variantOwners = variants.map { units ->
                     AppleReadingGlyphCoveragePolicy.glyphOwners(row.text, units)
+                },
+                variantGeometry = variants.map { units ->
+                    AppleReadingSweepLayout.measure(row.text, layout, units)
                 },
             )
         }
@@ -300,10 +291,26 @@ internal class AppleNativeSoftWrapReadingOverlay(
         var changed = false
         for (row in paintedRows) for ((offset, style) in row.styles) {
             val owner = variant?.let { row.variantOwners.getOrNull(it)?.get(offset) }
+            val geometry = variant?.let { row.variantGeometry.getOrNull(it)?.get(offset) }
             val progress = positionMs?.let {
-                owner?.let { glyph -> AppleReadingGlyphCoveragePolicy.glyphProgress(glyph, it) }
+                owner?.let { glyph ->
+                    val wordProgress = AppleTimedPronunciationHighlightPolicy.progress(it, glyph.unit)
+                    if (glyph.unit.isWholeLine) wordProgress else geometry?.let { metrics ->
+                        AppleReadingSweepGeometry.glyphCoverage(
+                            wordProgress, metrics.unitStartPx, metrics.glyphWidthPx,
+                            metrics.unitWidthPx,
+                        )
+                    } ?: 0f
+                }
             } ?: 0f
             val brightness = (if (variant == null) 0.52f else 1f) * nativeOpacity
+            if (style.measured != geometry ||
+                style.coarseLineClock != (owner?.unit?.isWholeLine == true)
+            ) {
+                style.measured = geometry
+                style.coarseLineClock = owner?.unit?.isWholeLine == true
+                changed = true
+            }
             if (abs(style.progress - progress) > 0.01f ||
                 abs(style.brightness - brightness) > 0.01f
             ) {

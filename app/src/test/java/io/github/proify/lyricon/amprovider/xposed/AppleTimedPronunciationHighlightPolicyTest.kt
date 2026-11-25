@@ -37,6 +37,51 @@ class AppleTimedPronunciationHighlightPolicyTest {
         assertEquals(-1, units.single().sourceWordIndex)
     }
 
+    @Test fun `verified kanji kana native words keep their individual clocks through a real rest`() {
+        val units = AppleTimedPronunciationHighlightPolicy.units(
+            sourceText = "脳みそ", pronunciation = "노미소",
+            timedWords = listOf(
+                AppleTimedSourceWord("脳", 1000L, 1300L),
+                AppleTimedSourceWord("みそ", 1500L, 1900L),
+            ),
+            phoneticSpans = listOf(ApplePronunciationSourceToken(0, 3, "노미소", "脳みそ")),
+        )
+        assertEquals(listOf("노", "미소"), units.map { "노미소".substring(it.start, it.end) })
+        assertEquals(listOf(1000L, 1500L), units.map { it.beginMs })
+        assertEquals(listOf(1300L, 1900L), units.map { it.endMs })
+        assertEquals(listOf(0, 1), units.map { it.sourceWordIndex })
+        assertEquals(null, AppleTimedPronunciationHighlightPolicy.speakingVariant(
+            1400L, listOf(units),
+        ))
+    }
+
+    @Test fun `two unknown kanji native fragments never inherit invented split clocks`() {
+        val units = AppleTimedPronunciationHighlightPolicy.units(
+            sourceText = "世界", pronunciation = "세카이",
+            timedWords = listOf(
+                AppleTimedSourceWord("世", 1000L, 1300L),
+                AppleTimedSourceWord("界", 1500L, 1900L),
+            ),
+            phoneticSpans = listOf(ApplePronunciationSourceToken(0, 2, "세카이", "世界")),
+        )
+        assertEquals(1, units.size)
+        assertTrue(units.single().isWholeLine)
+    }
+
+    @Test fun `nonmonotonic native word clocks cannot be split at a single apparent rest`() {
+        val units = AppleTimedPronunciationHighlightPolicy.units(
+            sourceText = "脳みそよ", pronunciation = "노미소요",
+            timedWords = listOf(
+                AppleTimedSourceWord("脳", 1000L, 1300L),
+                AppleTimedSourceWord("みそ", 1500L, 1900L),
+                AppleTimedSourceWord("よ", 1600L, 2000L),
+            ),
+            phoneticSpans = listOf(ApplePronunciationSourceToken(0, 4, "노미소요", "脳みそよ")),
+        )
+        assertEquals(1, units.size)
+        assertTrue(units.single().isWholeLine)
+    }
+
     @Test fun `no phonetic map only reveals full line at real line bounds`() {
         val timed = listOf(
             AppleTimedSourceWord("みその中", 1_000L, 2_000L),
@@ -75,14 +120,49 @@ class AppleTimedPronunciationHighlightPolicyTest {
             AppleTimedReadingUnit(0, 1, 1_000L, 1_200L),
             AppleTimedReadingUnit(2, 3, 1_600L, 1_800L),
         )
-        assertEquals(0, AppleTimedPronunciationHighlightPolicy.activeVariant(
+        assertEquals(0, AppleTimedPronunciationHighlightPolicy.speakingVariant(
             1_100L, listOf(units),
         ))
-        assertEquals(null, AppleTimedPronunciationHighlightPolicy.activeVariant(
+        assertEquals(null, AppleTimedPronunciationHighlightPolicy.speakingVariant(
             1_400L, listOf(units),
         ))
-        assertEquals(0, AppleTimedPronunciationHighlightPolicy.activeVariant(
+        assertEquals(0, AppleTimedPronunciationHighlightPolicy.speakingVariant(
             1_700L, listOf(units),
+        ))
+        assertEquals(0, AppleTimedPronunciationHighlightPolicy.activeVariant(
+            1_400L, listOf(units),
+        ))
+    }
+
+    @Test
+    fun `current lyric keeps completed Hangul word bright through a native inter-word rest`() {
+        val chorus = listOf(
+            AppleTimedReadingUnit(0, 2, 1_000L, 1_200L),
+            AppleTimedReadingUnit(3, 5, 1_600L, 1_800L),
+        )
+        val nextChorus = listOf(
+            AppleTimedReadingUnit(0, 2, 9_000L, 9_200L),
+            AppleTimedReadingUnit(3, 5, 9_600L, 9_800L),
+        )
+        val variants = listOf(chorus, nextChorus)
+        // Apple keeps already sung words bright while waiting for the next
+        // word in the same lyric. The old implementation reset everything
+        // to grey as soon as no word was *currently* being sung.
+        assertEquals(0, AppleTimedPronunciationHighlightPolicy.activeVariant(
+            1_400L, variants,
+        ))
+        assertEquals(1f, AppleTimedPronunciationHighlightPolicy.progress(
+            1_400L, chorus[0],
+        ), 0f)
+        assertEquals(0f, AppleTimedPronunciationHighlightPolicy.progress(
+            1_400L, chorus[1],
+        ), 0f)
+        // This must not activate a prior chorus during the next verse.
+        assertEquals(null, AppleTimedPronunciationHighlightPolicy.activeVariant(
+            5_000L, variants,
+        ))
+        assertEquals(1, AppleTimedPronunciationHighlightPolicy.activeVariant(
+            9_400L, variants,
         ))
     }
 
@@ -378,7 +458,8 @@ class AppleTimedPronunciationHighlightPolicyTest {
         ), units)
         assertEquals(listOf(AppleTimedReadingUnit(0, 2, 400, 550, 1)),
             AppleInterleavedReadingTimingPolicy.project(listOf(units), reading, rows, rows[1]).single())
-        assertEquals(null, AppleTimedPronunciationHighlightPolicy.activeVariant(300, listOf(units)))
+        assertEquals(null, AppleTimedPronunciationHighlightPolicy.speakingVariant(300, listOf(units)))
+        assertEquals(0, AppleTimedPronunciationHighlightPolicy.activeVariant(300, listOf(units)))
     }
 
     @Test fun literalKanaNeverInventsClocksAcrossNonAdditiveSourceBoundaries() {
@@ -412,7 +493,8 @@ class AppleTimedPronunciationHighlightPolicyTest {
             AppleInterleavedReadingTimingPolicy.project(listOf(units), reading, rows, rows[0]).single())
         assertEquals(listOf(AppleTimedReadingUnit(0, 2, 300, 400, 1)),
             AppleInterleavedReadingTimingPolicy.project(listOf(units), reading, rows, rows[1]).single())
-        assertEquals(null, AppleTimedPronunciationHighlightPolicy.activeVariant(250, listOf(units)))
+        assertEquals(null, AppleTimedPronunciationHighlightPolicy.speakingVariant(250, listOf(units)))
+        assertEquals(0, AppleTimedPronunciationHighlightPolicy.activeVariant(250, listOf(units)))
     }
 
     @Test fun storedDigraphStillUsesOnlyItsIntactWindow() {

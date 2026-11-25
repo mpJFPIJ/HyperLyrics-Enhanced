@@ -21,6 +21,8 @@ internal data class LyricBuildIdentity(
             "originalLines", "translationLines", "readingLines", "alignedLines",
             "lineWideLines", "missingLines", "rowBound", "rowOverflow",
             "holderWidth", "holderHeight", "holderChildren", "holderGroup", "position",
+            "fullSourceSpanLines", "partialSourceSpanLines", "missingSourceSpanLines",
+            "alignedWordRows",
         )
         private val allowedReasons = setOf(
             "missing", "unsupported", "source_mismatch", "boundary_split",

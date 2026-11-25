@@ -307,12 +307,19 @@ class AppleMusicAiTranslationService : Service() {
                             TAG,
                             "stage=translation_completed lines=$translatedLines pronouncedLines=$pronouncedLines"
                         )
+                        val anchorCoverage = AppleSourceAnchorCoverageDiagnostics.summarize(
+                            resultSong.lyrics.orEmpty(),
+                        )
                         LogManager.i(TAG, LyricBuildIdentity.safeStage("reading_finished", mapOf(
                             "originalLines" to resultSong.lyrics.orEmpty().size,
                             "translationLines" to translatedLines,
                             "readingLines" to pronouncedLines,
                             "alignedLines" to resultSong.lyrics.orEmpty().count { it.pronunciationStatus == "ALIGNED" },
                             "lineWideLines" to resultSong.lyrics.orEmpty().count { it.pronunciationStatus == "LINE_WIDE" },
+                            "fullSourceSpanLines" to anchorCoverage.full,
+                            "partialSourceSpanLines" to anchorCoverage.partial,
+                            "missingSourceSpanLines" to anchorCoverage.absent,
+                            "alignedWordRows" to anchorCoverage.alignedWords,
                             "missingLines" to resultSong.lyrics.orEmpty().count {
                                 it.pronunciationStatus == "MISSING_UNSUPPORTED"
                             },

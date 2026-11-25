@@ -2,6 +2,7 @@ package io.github.proify.lyricon.amprovider.xposed
 
 import com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation
 import com.juren233.hyperlyricsenhanced.root.aitrans.JapaneseToHangul
+import com.juren233.hyperlyricsenhanced.root.aitrans.VerifiedJapaneseFragmentReading
 
 /** The actual laid-out native cell bounds, before inserting any Hangul child. */
 internal data class AppleVisualSourceCell(
@@ -21,10 +22,11 @@ internal data class AppleInterleavedReadingRow(
 
 /**
  * Detect real flexbox wraps and map verified phonetic boundaries to their
- * corresponding Japanese rows. A crossing literal-kana token can only be cut
- * when independently transcribing each measured source fragment reproduces
- * the exact original Hangul token. Kanji compounds and non-additive kana
- * sequences remain indivisible; we never guess Hangul offsets by length.
+ * corresponding Japanese rows. Crossing literal kana must independently
+ * reproduce the full sound. One mixed Kanji/kana token can also split when
+ * verified kana fragments pin down both sides of exactly one remaining
+ * Kanji-containing row. Multiple unknown Kanji fragments and non-additive
+ * kana sequences remain indivisible; we never guess offsets by length.
  */
 internal object AppleInterleavedReadingPolicy {
     /** An absent AI token map can still be recovered for literal kana, but
@@ -160,19 +162,8 @@ internal object AppleInterleavedReadingPolicy {
                 fragments.keys.toList() != fragments.keys.sorted()
             ) return null
             val resolvedSounds = if (fragments.size == 1) listOf(sound) else {
-                // For a nontrivial split, independently re-transcribe the
-                // *literal* kana on each side of Apple's measured wrap. This
-                // rejects Kanji, digraph halves, final-consonant changes and
-                // lengthening whose Hangul offsets cannot be proved.
-                val sounds = fragments.values.map { offsets ->
-                    val fragment = sourceText.substring(offsets.first(), offsets.last() + 1)
-                    if (fragment.any { it !in '\u3040'..'\u30ff' && it != 'ー' }) null
-                    else JapaneseToHangul.fromKana(fragment)
-                        ?.filter(Char::isLetterOrDigit)
-                }
-                if (sounds.any { it.isNullOrEmpty() } || sounds.joinToString("") != sound)
-                    return null
-                sounds.filterNotNull()
+                resolveCrossRowSounds(sourceText, fragments.values.toList(), sound)
+                    ?: return null
             }
             var localReading = readingCursor
             fragments.keys.zip(resolvedSounds).forEach { (row, fragmentSound) ->
@@ -209,6 +200,28 @@ internal object AppleInterleavedReadingPolicy {
         }
         return result
     }
+
+    /** A verified full-context phonetic token may cross a native wrap between
+     * one Kanji-containing fragment and independently readable literal kana.
+     * The known kana must reproduce an exact sound prefix/suffix. Only then
+     * does the *one* remaining source row own the residual verified sound.
+     * Neither two unverified Kanji rows nor a non-additive kana/digraph split
+     * may be divided by character ratios or syllable timing guesses. */
+    private fun resolveCrossRowSounds(
+        source: String,
+        fragments: List<List<Int>>,
+        fullSound: String,
+    ): List<String>? = verifiedFragmentSounds(fragments.map { offsets ->
+        source.substring(offsets.first(), offsets.last() + 1)
+    }, fullSound)
+
+    /** Exact text fragments may come from measured visual rows *or* Apple's
+     * independently timed native word cells. Keep one shared phonetic proof
+     * so row placement and native karaoke use identical guarded boundaries. */
+    internal fun verifiedFragmentSounds(
+        surfaces: List<String>,
+        fullSound: String,
+    ): List<String>? = VerifiedJapaneseFragmentReading.split(surfaces, fullSound)
 }
 
 /** Project a single native TextView's *measured* internal soft lines into the
@@ -254,18 +267,36 @@ internal object AppleInterleavedReadingTimingPolicy {
         fullPronunciation: String,
         rows: List<AppleInterleavedReadingRow>,
         row: AppleInterleavedReadingRow,
+        verifiedCrossRow: Boolean = false,
     ): List<List<AppleTimedReadingUnit>> {
         return variants.map { units ->
             units.mapNotNull { unit ->
                 // A sentence-level clock cannot identify which visual row is
-                // sung. Leave the split rows readable without simultaneous sweeps.
+                // sung. Leave the split rows readable without fabricated clocks.
                 if ((rows.size > 1 && unit.isWholeLine) ||
-                    unit.start < row.readingStart || unit.end > row.readingEnd ||
                     unit.start < 0 || unit.end > fullPronunciation.length || unit.start >= unit.end
                 ) null else unit.copy(
                     start = unit.start - row.readingStart,
                     end = unit.end - row.readingStart,
-                )
+                ).let { local ->
+                    val crosses = unit.start < row.readingStart ||
+                        unit.end > row.readingEnd
+                    if (!crosses) local else {
+                        // The original native word window is one indivisible
+                        // clock. Only fully verified source↔reading visual rows
+                        // can share its *same* interval: each row's TextPaint
+                        // measures cumulative Hangul advances for that word.
+                        val start = maxOf(unit.start, row.readingStart)
+                        val end = minOf(unit.end, row.readingEnd)
+                        if (!verifiedCrossRow || unit.isWholeLine || end <= start) null
+                        else local.copy(
+                            start = start - row.readingStart,
+                            end = end - row.readingStart,
+                            sweepFullReading = fullPronunciation.substring(unit.start, unit.end),
+                            sweepStartOffset = start - unit.start,
+                        )
+                    }
+                }
             }
         }
     }

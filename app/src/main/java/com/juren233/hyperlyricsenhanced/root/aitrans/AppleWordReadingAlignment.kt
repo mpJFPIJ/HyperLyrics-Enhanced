@@ -69,6 +69,7 @@ internal object AppleWordReadingAlignment {
                 span.sourceEnd > original.length ||
                 original.substring(span.sourceStart, span.sourceEnd) != span.sourceText ||
                 span.hangul.isBlank() ||
+                span.hangul.any { it !in '가'..'힣' && !it.isWhitespace() } ||
                 // Punctuation may occupy a native lyric cell, but it cannot
                 // own phonetic syllables or inherit a sung-word clock.
                 span.sourceText.none(Char::isLetterOrDigit)
@@ -81,25 +82,21 @@ internal object AppleWordReadingAlignment {
             if (wordIndex == endWordIndex) {
                 sounds[wordIndex].append(span.hangul)
             } else {
-                // A mixed Japanese sentence may contain a grouped *literal kana*
-                // token (e.g. 駄目 + あい). Read each real Apple cell independently,
-                // but accept a split ONLY if the concatenated syllables are
-                // identical to the full-line Sudachi reading. This cannot split
-                // Kanji, a digraph such as きゃ, or a separated long-vowel mark.
-                val literalKana = (wordIndex..endWordIndex).map { index ->
+                // The very same phonetic boundary proof is used for Apple's
+                // timed cells and measured visual rows. An isolated Kanji
+                // fragment may receive the exact residual of a verified token
+                // when the neighboring kana fragments establish its edges.
+                val fragments = (wordIndex..endWordIndex).map { index ->
                     val range = ranges[index]
                     val start = maxOf(span.sourceStart, range.first)
                     val end = minOf(span.sourceEnd, range.last + 1)
-                    val fragment = original.substring(start, end)
-                    if (fragment.isEmpty() || fragment.any { it !in '\u3040'..'\u30ff' }) null
-                    else JapaneseToHangul.fromKana(fragment)
-                        ?.filter { it in '가'..'힣' }
-                        ?.takeIf(String::isNotEmpty)
+                    original.substring(start, end)
                 }
-                if (literalKana.all { it != null } &&
-                    literalKana.joinToString("") == span.hangul.filter { it in '가'..'힣' }
-                ) {
-                    literalKana.forEachIndexed { index, sound ->
+                val proven = VerifiedJapaneseFragmentReading.split(
+                    fragments, span.hangul.filter { it in '가'..'힣' },
+                )?.takeIf { span.hangul.all { it in '가'..'힣' || it.isWhitespace() } }
+                if (proven != null) {
+                    proven.forEachIndexed { index, sound ->
                         sounds[wordIndex + index].append(sound)
                     }
                 } else {

@@ -7,6 +7,72 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AppleNativeReadingProjectionTest {
+    @Test fun verifiedKanjiResidualNowUsesOriginalWordHighlightAndClock() {
+        val cases = listOf(
+            Triple("脳みそ", listOf("脳", "みそ"), listOf("노", "미소")),
+            Triple("喚く", listOf("喚", "く"), listOf("와메", "쿠")),
+            Triple("溺れ", listOf("溺", "れ"), listOf("오보", "레")),
+        )
+        cases.forEach { (source, words, sounds) ->
+            val full = sounds.joinToString("")
+            val projected = AppleNativeReadingProjection.projectForNativeKaraoke(
+                source, words,
+                listOf(SourceReadingSpan(0, source.length, source, source, full)), full,
+            )
+            assertEquals("native cells for $source", sounds, projected?.words?.map { it.hangul })
+            assertFalse(projected?.approximate ?: true)
+        }
+    }
+
+    @Test fun aVerifiedSingleNativeCellNoLongerNeedsTheSecondWordGuard() {
+        val result = AppleNativeReadingProjection.projectForNativeKaraoke(
+            "溺れ", listOf("溺れ"),
+            listOf(SourceReadingSpan(0, 2, "溺れ", "オボレ", "오보레")), "오보레",
+        )
+        assertEquals(listOf("오보레"), result?.words?.map { it.hangul })
+        assertFalse(result?.approximate ?: true)
+    }
+
+    @Test fun anUnverifiedGapInsideOneCellDoesNotPretendToBeAProvenReading() {
+        assertNull(AppleNativeReadingProjection.projectForNativeKaraoke(
+            "世界", listOf("世界"),
+            listOf(SourceReadingSpan(0, 1, "世", "セ", "세")), "세카이",
+        ))
+    }
+
+    @Test fun aCorruptedSpanWithAnOrphanJamoCannotBeNormalizedIntoNativeClocks() {
+        assertNull(AppleNativeReadingProjection.projectForNativeKaraoke(
+            "脳みそ", listOf("脳", "みそ"),
+            listOf(SourceReadingSpan(0, 3, "脳みそ", "ノウミソ", "ㄴ노미소")),
+            "노미소",
+        ))
+    }
+
+    @Test fun aMissingSupplementaryHanGlyphCannotBeTreatedAsSilentPunctuation() {
+        val source = "脳𠮷みそ"
+        assertNull(AppleNativeReadingProjection.projectForNativeKaraoke(
+            source, listOf("脳", "みそ"),
+            listOf(SourceReadingSpan(0, source.length, source, "ノウヨシミソ", "노요시미소")),
+            "노요시미소",
+        ))
+        assertNull(AppleNativeReadingProjection.projectAnchored(
+            source, listOf("脳", "みそ"),
+            listOf(SourceReadingSpan(0, source.length, source, "ノウヨシミソ", "노요시미소")),
+            "노요시미소",
+        ))
+    }
+
+    @Test fun verifiedDigraphAndTwoKanjiUnknownsStillCannotAcquireNativeClocks() {
+        assertNull(AppleNativeReadingProjection.projectForNativeKaraoke(
+            "きゃ", listOf("き", "ゃ"),
+            listOf(SourceReadingSpan(0, 2, "きゃ", "キャ", "캬")), "캬",
+        ))
+        assertNull(AppleNativeReadingProjection.projectForNativeKaraoke(
+            "世界", listOf("世", "界"),
+            listOf(SourceReadingSpan(0, 2, "世界", "セカイ", "세카이")), "세카이",
+        ))
+    }
+
     @Test fun unverifiedTopicParticleCannotStealTheFollowingKanjiReading() {
         // 鳥は羽 is read トリワハネ. A context-free は→하 guess must not
         // steal 羽's unique 하 and shift the Apple clocks to 토리와 / 하 / 네.
@@ -305,7 +371,7 @@ class AppleNativeReadingProjectionTest {
         assertEquals(listOf("라부", AppleNativeReadingProjection.EMPTY_PRONUNCIATION_CELL, "토"),
             result?.words?.map { it.hangul })
     }
-    @Test fun oboreCannotLeaveItsFinalSyllableInTheNextNativeCell() {
+    @Test fun oboreAndShinisouUseVerifiedKanaSuffixWithoutStealingNativeClocks() {
         val result = AppleNativeReadingProjection.project(
             original = "溺れ死にそう",
             appleWords = listOf("溺", "れ", "死に", "そう"),
@@ -315,9 +381,12 @@ class AppleNativeReadingProjectionTest {
             ),
             expectedHangul = "오보레시니소",
         )
-        // The whole line can be rendered, but the separate word cells have
-        // no trustworthy place to divide 오보레 or 시니소.
-        assertNull(result)
+        // れ and そう have independently reproducible complete sounds.
+        // Only one Kanji-bearing cell remains in each verified whole token,
+        // so no Hangul sound is borrowed from a neighboring native clock.
+        assertEquals(listOf("오보", "레", "시니", "소"),
+            result?.words?.map { it.hangul })
+        assertFalse(result?.approximate ?: true)
     }
     @Test fun repeatedVerifiedMorphemesRetainEverySoundAndCellIdentity() {
         val result = AppleNativeReadingProjection.project(

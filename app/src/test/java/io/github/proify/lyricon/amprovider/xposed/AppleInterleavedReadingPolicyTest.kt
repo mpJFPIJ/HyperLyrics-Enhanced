@@ -1,5 +1,7 @@
 package io.github.proify.lyricon.amprovider.xposed
 
+import com.juren233.hyperlyricsenhanced.root.aitrans.AppleNativeReadingProjection
+import com.juren233.hyperlyricsenhanced.root.aitrans.SourceReadingSpan
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -147,6 +149,105 @@ class AppleInterleavedReadingPolicyTest {
                 AppleVisualSourceCell("界", 52, 92),
             ),
             listOf(ApplePronunciationSourceToken(0, 2, "세카이", "世界")),
+        ))
+    }
+
+    @Test fun `verified kana suffix can locate the remaining sound of one Kanji fragment`() {
+        val rows = requireNotNull(AppleInterleavedReadingPolicy.plan(
+            "脳みそ", "노미소",
+            listOf(
+                AppleVisualSourceCell("脳", 0, 42),
+                AppleVisualSourceCell("みそ", 55, 97),
+            ),
+            listOf(ApplePronunciationSourceToken(0, 3, "노미소", "脳みそ")),
+        ))
+        assertEquals(listOf("노", "미소"), rows.map { it.text })
+        assertEquals(listOf(0, 1), rows.map { it.insertAfterSourceCell })
+        assertEquals("노미소", rows.joinToString("") { it.text })
+    }
+
+    @Test fun `native timed cells and measured wrapped rows use identical phonetic proof`() {
+        val cases = listOf(
+            Triple("脳みそ", listOf("脳", "みそ"), "노미소"),
+            Triple("喚く", listOf("喚", "く"), "와메쿠"),
+            Triple("溺れ", listOf("溺", "れ"), "오보레"),
+        )
+        cases.forEach { (source, fragments, full) ->
+            val native = AppleNativeReadingProjection.project(
+                source, fragments,
+                listOf(SourceReadingSpan(0, source.length, source, source, full)), full,
+            )
+            val cells = fragments.mapIndexed { index, surface ->
+                AppleVisualSourceCell(surface, index * 50, index * 50 + 40)
+            }
+            val rows = AppleInterleavedReadingPolicy.plan(
+                source, full, cells,
+                listOf(ApplePronunciationSourceToken(0, source.length, full, source)),
+            )
+            val actualRows = requireNotNull(rows) { "$source must create verified visual rows" }
+            val actualNative = requireNotNull(native) { "$source must use native clocks" }
+            assertEquals("$source source-to-sound boundaries diverged",
+                actualRows.map { it.text }, actualNative.words.map { it.hangul })
+        }
+    }
+
+    @Test fun `IRIS OUT Kanji verb split before its final kana remains source anchored`() {
+        val rows = requireNotNull(AppleInterleavedReadingPolicy.plan(
+            "喚く", "와메쿠",
+            listOf(
+                AppleVisualSourceCell("喚", 0, 42),
+                AppleVisualSourceCell("く", 55, 97),
+            ),
+            listOf(ApplePronunciationSourceToken(0, 2, "와메쿠", "喚く")),
+        ))
+        assertEquals(listOf("와메", "쿠"), rows.map { it.text })
+    }
+
+    @Test fun `known kana prefix may identify one Kanji suffix without estimating character lengths`() {
+        val rows = requireNotNull(AppleInterleavedReadingPolicy.plan(
+            "みそ脳", "미소노",
+            listOf(
+                AppleVisualSourceCell("みそ", 0, 42),
+                AppleVisualSourceCell("脳", 55, 97),
+            ),
+            listOf(ApplePronunciationSourceToken(0, 3, "미소노", "みそ脳")),
+        ))
+        assertEquals(listOf("미소", "노"), rows.map { it.text })
+    }
+
+    @Test fun `two unknown Kanji row sounds cannot borrow one another's syllables`() {
+        assertNull(AppleInterleavedReadingPolicy.plan(
+            "歌の声", "우타노코에",
+            listOf(
+                AppleVisualSourceCell("歌", 0, 40),
+                AppleVisualSourceCell("の", 55, 95),
+                AppleVisualSourceCell("声", 110, 150),
+            ),
+            listOf(ApplePronunciationSourceToken(0, 3, "우타노코에", "歌の声")),
+        ))
+        assertNull(AppleInterleavedReadingPolicy.plan(
+            "脳みそ", "노미소",
+            listOf(
+                AppleVisualSourceCell("脳", 0, 40),
+                AppleVisualSourceCell("みそ", 55, 95),
+            ),
+            listOf(ApplePronunciationSourceToken(0, 3, "노미사", "脳みそ")),
+        ))
+        assertNull(AppleInterleavedReadingPolicy.plan(
+            "脳みそ", "노마소",
+            listOf(
+                AppleVisualSourceCell("脳", 0, 40),
+                AppleVisualSourceCell("みそ", 55, 95),
+            ),
+            listOf(ApplePronunciationSourceToken(0, 3, "노마소", "脳みそ")),
+        ))
+        assertNull(AppleInterleavedReadingPolicy.plan(
+            "脳みそ", "ㄴ미소",
+            listOf(
+                AppleVisualSourceCell("脳", 0, 40),
+                AppleVisualSourceCell("みそ", 55, 95),
+            ),
+            listOf(ApplePronunciationSourceToken(0, 3, "ㄴ미소", "脳みそ")),
         ))
     }
 
@@ -325,5 +426,40 @@ class AppleInterleavedReadingPolicyTest {
             AppleInterleavedReadingTimingPolicy.project(
                 timing, "도코 바치", listOf(first, second), second,
             ).single())
+    }
+
+    @Test fun `verified kanji wrap carries one original word sweep across reading rows`() {
+        // Both fragments derive from the same fully verified 脳みそ pronunciation.
+        // They share the unmodified native word window; only the measured
+        // glyph geometry decides which portion of its sweep each row paints.
+        val first = AppleInterleavedReadingRow(0, "노", 0, 1)
+        val second = AppleInterleavedReadingRow(1, "미소", 1, 3)
+        val original = AppleTimedReadingUnit(0, 3, 1000L, 2000L, sourceWordIndex = 0)
+        val rows = listOf(first, second)
+        assertEquals(listOf(original.copy(
+            end = 1, sweepFullReading = "노미소", sweepStartOffset = 0,
+        )), AppleInterleavedReadingTimingPolicy.project(
+            listOf(listOf(original)), "노미소", rows, first, verifiedCrossRow = true,
+        ).single())
+        assertEquals(listOf(original.copy(
+            start = 0, end = 2, sweepFullReading = "노미소", sweepStartOffset = 1,
+        )), AppleInterleavedReadingTimingPolicy.project(
+            listOf(listOf(original)), "노미소", rows, second, verifiedCrossRow = true,
+        ).single())
+    }
+
+    @Test fun `verified row split never fabricates a fine clock from a whole line interval`() {
+        val rows = listOf(
+            AppleInterleavedReadingRow(0, "노", 0, 1),
+            AppleInterleavedReadingRow(1, "미소", 1, 3),
+        )
+        val coarse = AppleTimedReadingUnit(0, 3, 1000L, 2000L, isWholeLine = true)
+        rows.forEach { row ->
+            assertEquals(listOf(emptyList<AppleTimedReadingUnit>()),
+                AppleInterleavedReadingTimingPolicy.project(
+                    listOf(listOf(coarse)), "노미소", rows, row,
+                    verifiedCrossRow = true,
+                ))
+        }
     }
 }

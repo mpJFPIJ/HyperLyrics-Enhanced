@@ -33,6 +33,35 @@ class AppleNativeReadingProjectionTest {
         assertFalse(result?.approximate ?: true)
     }
 
+    @Test fun anUnverifiedGapInsideOneCellDoesNotPretendToBeAProvenReading() {
+        assertNull(AppleNativeReadingProjection.projectForNativeKaraoke(
+            "世界", listOf("世界"),
+            listOf(SourceReadingSpan(0, 1, "世", "セ", "세")), "세카이",
+        ))
+    }
+
+    @Test fun aCorruptedSpanWithAnOrphanJamoCannotBeNormalizedIntoNativeClocks() {
+        assertNull(AppleNativeReadingProjection.projectForNativeKaraoke(
+            "脳みそ", listOf("脳", "みそ"),
+            listOf(SourceReadingSpan(0, 3, "脳みそ", "ノウミソ", "ㄴ노미소")),
+            "노미소",
+        ))
+    }
+
+    @Test fun aMissingSupplementaryHanGlyphCannotBeTreatedAsSilentPunctuation() {
+        val source = "脳𠮷みそ"
+        assertNull(AppleNativeReadingProjection.projectForNativeKaraoke(
+            source, listOf("脳", "みそ"),
+            listOf(SourceReadingSpan(0, source.length, source, "ノウヨシミソ", "노요시미소")),
+            "노요시미소",
+        ))
+        assertNull(AppleNativeReadingProjection.projectAnchored(
+            source, listOf("脳", "みそ"),
+            listOf(SourceReadingSpan(0, source.length, source, "ノウヨシミソ", "노요시미소")),
+            "노요시미소",
+        ))
+    }
+
     @Test fun verifiedDigraphAndTwoKanjiUnknownsStillCannotAcquireNativeClocks() {
         assertNull(AppleNativeReadingProjection.projectForNativeKaraoke(
             "きゃ", listOf("き", "ゃ"),

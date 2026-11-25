@@ -69,6 +69,7 @@ internal object AppleWordReadingAlignment {
                 span.sourceEnd > original.length ||
                 original.substring(span.sourceStart, span.sourceEnd) != span.sourceText ||
                 span.hangul.isBlank() ||
+                span.hangul.any { it !in '가'..'힣' && !it.isWhitespace() } ||
                 // Punctuation may occupy a native lyric cell, but it cannot
                 // own phonetic syllables or inherit a sung-word clock.
                 span.sourceText.none(Char::isLetterOrDigit)

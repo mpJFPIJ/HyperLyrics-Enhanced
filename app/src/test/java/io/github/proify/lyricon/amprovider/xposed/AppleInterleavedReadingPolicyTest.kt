@@ -184,8 +184,10 @@ class AppleInterleavedReadingPolicyTest {
                 source, full, cells,
                 listOf(ApplePronunciationSourceToken(0, source.length, full, source)),
             )
+            val actualRows = requireNotNull(rows) { "$source must create verified visual rows" }
+            val actualNative = requireNotNull(native) { "$source must use native clocks" }
             assertEquals("$source source-to-sound boundaries diverged",
-                rows?.map { it.text }, native?.words?.map { it.hangul })
+                actualRows.map { it.text }, actualNative.words.map { it.hangul })
         }
     }
 

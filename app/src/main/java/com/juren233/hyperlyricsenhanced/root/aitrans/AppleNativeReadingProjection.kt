@@ -15,6 +15,23 @@ internal object AppleNativeReadingProjection {
 
     data class Result(val words: List<LyricWordPronunciation>, val approximate: Boolean)
 
+    private fun validVerifiedSpan(span: SourceReadingSpan): Boolean =
+        span.hangul.isNotBlank() && span.hangul.all {
+            it in '가'..'힣' || it.isWhitespace()
+        }
+
+    /** Kotlin Char checks see neither half of a supplementary Han glyph as
+     * a letter. Such a glyph is not an ignorable gap between Apple cells. */
+    private fun containsSourceLetters(value: String): Boolean {
+        var offset = 0
+        while (offset < value.length) {
+            val codePoint = Character.codePointAt(value, offset)
+            if (Character.isLetterOrDigit(codePoint)) return true
+            offset += Character.charCount(codePoint)
+        }
+        return false
+    }
+
     /**
      * Prefer the native lyric word renderer so a wrapped line never becomes
      * several Japanese rows followed by one unrelated block of Hangul.
@@ -32,7 +49,10 @@ internal object AppleNativeReadingProjection {
         spans: List<SourceReadingSpan>,
         pronunciation: String,
     ): Result? {
-        if (appleWords.none { word -> word.any(Char::isLetterOrDigit) }) return null
+        if (appleWords.none(::containsSourceLetters)) return null
+        // Do not discard orphan jamo or unexpected script characters when
+        // looking up an exact sound anchor: normalization is not verification.
+        if (spans.any { !validVerifiedSpan(it) }) return null
         if (com.juren233.hyperlyricsenhanced.common.lyric.RomanizationPolicy
                 .sanitizeHangulSupplement(original, pronunciation) == null
         ) return null
@@ -49,8 +69,17 @@ internal object AppleNativeReadingProjection {
             }
         }
         val anchors = (spans + additions).sortedBy { it.sourceStart }
-        return if (anchors.isEmpty()) null else
-            projectAnchored(original, appleWords, anchors, pronunciation)
+        if (anchors.isEmpty()) return null
+        val projected = projectAnchored(original, appleWords, anchors, pronunciation)
+            ?: return null
+        // A one-word track may render a fully verified reading naturally, but
+        // cannot claim a timing proof when part of its sound was inferred from
+        // a partial dictionary anchor. More than one native word retains the
+        // legacy single-cell-gap inference, never a cross-word syllable split.
+        if (appleWords.count(::containsSourceLetters) == 1 &&
+            projected.approximate
+        ) return null
+        return projected
     }
 
     /** A unique Hangul substring is not proof that its kana source owns it.
@@ -100,8 +129,9 @@ internal object AppleNativeReadingProjection {
             val word = native.trim()
             if (word.isEmpty()) continue
             val sourceStart = original.indexOf(word, sourceCursor)
-            if (sourceStart < 0 || original.substring(sourceCursor, sourceStart)
-                    .any(Char::isLetterOrDigit)
+            if (sourceStart < 0 || containsSourceLetters(
+                    original.substring(sourceCursor, sourceStart),
+                )
             ) return emptyList()
             sourceCursor = sourceStart + word.length
             if (word.any { it !in '\u3040'..'\u30ff' } ||
@@ -149,6 +179,7 @@ internal object AppleNativeReadingProjection {
         pronunciation: String,
     ): Result? {
         if (spans.isEmpty() || appleWords.isEmpty() ||
+            spans.any { !validVerifiedSpan(it) } ||
             com.juren233.hyperlyricsenhanced.common.lyric.RomanizationPolicy
                 .sanitizeHangulSupplement(original, pronunciation) == null
         ) return null
@@ -163,12 +194,12 @@ internal object AppleNativeReadingProjection {
             if (token.isEmpty()) return null
             val start = original.indexOf(token, sourceCursor)
             if (start < sourceCursor || start < 0 ||
-                original.substring(sourceCursor, start).any(Char::isLetterOrDigit)
+                containsSourceLetters(original.substring(sourceCursor, start))
             ) return null
             ranges += start until start + token.length
             sourceCursor = start + token.length
         }
-        if (original.substring(sourceCursor).any(Char::isLetterOrDigit)) return null
+        if (containsSourceLetters(original.substring(sourceCursor))) return null
         data class Piece(val start: Int, val end: Int, val reading: String,
             val independentlyVerified: Boolean)
         val pieces = mutableListOf<Piece>()
@@ -178,7 +209,7 @@ internal object AppleNativeReadingProjection {
             if (span.sourceStart < sourceOffset || span.sourceEnd > original.length ||
                 span.sourceEnd <= span.sourceStart ||
                 original.substring(span.sourceStart, span.sourceEnd) != span.sourceText ||
-                span.sourceText.none(Char::isLetterOrDigit)
+                !containsSourceLetters(span.sourceText)
             ) return null
             val anchor = span.hangul.filter { it in '가'..'힣' }
             if (anchor.isEmpty()) return null
@@ -223,17 +254,17 @@ internal object AppleNativeReadingProjection {
                 if (right > left) index to (left until right) else null
             }
             val fragment = original.substring(piece.start, piece.end)
-            val soundedSource = fragment.filter(Char::isLetterOrDigit)
+            val soundedSource = containsSourceLetters(fragment)
             // A punctuation-only gap is silent. A complete but inconsistent
             // AI sentence cannot turn an exclamation mark into a sung word.
-            if (piece.reading.isNotEmpty() && soundedSource.isEmpty()) return null
+            if (piece.reading.isNotEmpty() && !soundedSource) return null
             // Literal kana has independently knowable sound, unlike Kanji.
             // Do not label e.g. こ as 카 merely because one native clock is
             // left between two verified anchors. Context-dependent particles
             // and non-additive kana fail closed if the literal read disagrees.
             val literalKanaGap = !piece.independentlyVerified &&
                 piece.reading.isNotEmpty() &&
-                soundedSource.all { it in '\u3040'..'\u30ff' }
+                soundedSource && fragment.all { it in '\u3040'..'\u30ff' }
             if (literalKanaGap && !hasContextIndependentKanaSound(
                     original, piece.start, piece.end, piece.reading,
                 )
@@ -242,12 +273,12 @@ internal object AppleNativeReadingProjection {
             if (overlaps.isEmpty()) {
                 // Apple's word vector may omit punctuation/whitespace, never
                 // a source letter or a phonetic syllable.
-                if (piece.reading.isNotEmpty() || fragment.any(Char::isLetterOrDigit))
+                if (piece.reading.isNotEmpty() || containsSourceLetters(fragment))
                     return null
                 continue
             }
             if (piece.reading.isEmpty()) {
-                if (fragment.any(Char::isLetterOrDigit) &&
+                if (containsSourceLetters(fragment) &&
                     !(verifiedSilentKana && fragment.all { it == 'ー' })
                 ) return null
                 continue
@@ -289,6 +320,7 @@ internal object AppleNativeReadingProjection {
         spans: List<SourceReadingSpan>,
         expectedHangul: String,
     ): Result? {
+        if (spans.any { !validVerifiedSpan(it) }) return null
         val verified = AppleWordReadingAlignment.align(
             original, appleWords, spans, expectedHangul,
         ) as? WordAlignmentResult.Verified ?: return null
@@ -302,7 +334,7 @@ internal object AppleNativeReadingProjection {
                 // The alignment has already proved source AND sound offsets.
                 // Only punctuation cells may remain silent; keep Apple from
                 // rendering their original glyph as a pronunciation fallback.
-                if (word.source.any(Char::isLetterOrDigit)) return null
+                if (containsSourceLetters(word.source)) return null
                 word.copy(hangul = EMPTY_PRONUNCIATION_CELL)
             }
         }

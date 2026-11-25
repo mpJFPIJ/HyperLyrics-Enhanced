@@ -323,6 +323,21 @@ object RootConstants {
         "key_hook_apple_music_hide_mandarin_pinyin"
     const val KEY_HOOK_APPLE_MUSIC_LUNABEAT_WORD_LYRICS =
         "key_hook_apple_music_lunabeat_word_lyrics"
+    /** Song pronunciation overlay policy; the original Apple preference stays authoritative for visibility. */
+    const val KEY_HOOK_APPLE_MUSIC_PRONUNCIATION_SOURCE_PRIORITY =
+        "key_hook_apple_music_pronunciation_source_priority"
+    /** Applies to the host lyric rows; never rewrites Apple preference storage. */
+    const val KEY_HOOK_APPLE_MUSIC_LYRICS_DISPLAY_MODE =
+        "key_hook_apple_music_lyrics_display_mode"
+    const val KEY_HOOK_APPLE_MUSIC_TRANSLATION_DISPLAY_OVERRIDE =
+        "key_hook_apple_music_translation_display_override"
+    const val KEY_HOOK_APPLE_MUSIC_PRONUNCIATION_DISPLAY_OVERRIDE =
+        "key_hook_apple_music_pronunciation_display_override"
+    /** Keep native Apple romanization separate from the Hangul overlay channel. */
+    const val KEY_HOOK_APPLE_MUSIC_SHOW_NATIVE_PRONUNCIATION =
+        "key_hook_apple_music_show_native_pronunciation"
+    const val KEY_HOOK_APPLE_MUSIC_SHOW_HANGUL_PRONUNCIATION =
+        "key_hook_apple_music_show_hangul_pronunciation"
     const val KEY_HOOK_APPLE_MUSIC_LYRICS_BLUR_EFFECT =
         "key_hook_apple_music_lyrics_blur_effect"
     const val KEY_HOOK_APPLE_MUSIC_LYRICS_BLUR_ANIMATION =
@@ -343,8 +358,13 @@ object RootConstants {
     const val KEY_HOOK_AI_TRANS_AUTO_IGNORE_CHINESE = "key_hook_ai_trans_auto_ignore_chinese"
     const val KEY_HOOK_AI_TRANS_SKIP_EXISTING_TRANSLATION = "key_hook_ai_trans_skip_existing_translation"
     const val KEY_HOOK_AI_TRANS_FORCE_OVERRIDE = "key_hook_ai_trans_force_override"
+    const val KEY_HOOK_AI_TRANS_WEB_SEARCH = "key_hook_ai_trans_web_search"
+    /** Safe status counters in Apple Music, never raw prompts, responses, or API keys. */
+    const val KEY_HOOK_AI_TRANS_SHOW_PROGRESS = "key_hook_ai_trans_show_progress"
     const val KEY_HOOK_AI_TRANS_PROVIDER = "key_hook_ai_trans_provider"
     const val KEY_HOOK_AI_TRANS_API_KEY = "key_hook_ai_trans_api_key"
+    /** Local-only multi-key pool. Never synced to the Apple Music/NPatch process. */
+    const val KEY_HOOK_AI_TRANS_API_KEYS = "key_hook_ai_trans_api_keys"
     const val KEY_HOOK_AI_TRANS_MODEL = "key_hook_ai_trans_model"
     const val KEY_HOOK_AI_TRANS_BASE_URL = "key_hook_ai_trans_base_url"
     const val KEY_HOOK_AI_TRANS_TARGET_LANG = "key_hook_ai_trans_target_lang"
@@ -381,6 +401,24 @@ object RootConstants {
     const val DEFAULT_HOOK_APPLE_MUSIC_FILL_MISSING_LYRICS = false
     const val DEFAULT_HOOK_APPLE_MUSIC_HIDE_MANDARIN_PINYIN = false
     const val DEFAULT_HOOK_APPLE_MUSIC_LUNABEAT_WORD_LYRICS = false
+    const val APPLE_MUSIC_PRONUNCIATION_HANGUL_FIRST = 0
+    const val APPLE_MUSIC_PRONUNCIATION_APPLE_FIRST = 1
+    const val APPLE_MUSIC_PRONUNCIATION_SUPPLEMENT_FIRST = 2
+    const val DEFAULT_HOOK_APPLE_MUSIC_PRONUNCIATION_SOURCE_PRIORITY =
+        APPLE_MUSIC_PRONUNCIATION_HANGUL_FIRST
+    // Default preserves the installed behavior for existing users.
+    const val DEFAULT_HOOK_APPLE_MUSIC_SHOW_NATIVE_PRONUNCIATION = true
+    const val DEFAULT_HOOK_APPLE_MUSIC_SHOW_HANGUL_PRONUNCIATION = true
+    const val APPLE_MUSIC_LYRICS_MODE_APPLE = 0
+    const val APPLE_MUSIC_LYRICS_MODE_THREE_LINE = 1
+    const val APPLE_MUSIC_LYRICS_MODE_CUSTOM = 2
+    const val DEFAULT_HOOK_APPLE_MUSIC_LYRICS_DISPLAY_MODE =
+        APPLE_MUSIC_LYRICS_MODE_APPLE
+    const val APPLE_MUSIC_LYRICS_DISPLAY_FOLLOW_APPLE = 0
+    const val APPLE_MUSIC_LYRICS_DISPLAY_SHOW = 1
+    const val APPLE_MUSIC_LYRICS_DISPLAY_HIDE = 2
+    const val DEFAULT_HOOK_APPLE_MUSIC_LYRICS_DISPLAY_OVERRIDE =
+        APPLE_MUSIC_LYRICS_DISPLAY_FOLLOW_APPLE
     const val APPLE_MUSIC_LYRICS_BLUR_EFFECT_OFF = 0
     const val APPLE_MUSIC_LYRICS_BLUR_EFFECT_NATIVE = 1
     const val APPLE_MUSIC_LYRICS_BLUR_EFFECT_ADVANCED_MATERIAL = 2
@@ -675,22 +713,15 @@ object RootConstants {
     const val DEFAULT_HOOK_AI_TRANS_AUTO_IGNORE_CHINESE = false
     const val DEFAULT_HOOK_AI_TRANS_SKIP_EXISTING_TRANSLATION = false
     const val DEFAULT_HOOK_AI_TRANS_FORCE_OVERRIDE = false
-    const val DEFAULT_HOOK_AI_TRANS_TARGET_LANG = "中文"
-    const val DEFAULT_HOOK_AI_TRANS_MODEL = "mimo-v2-flash"
-    const val DEFAULT_HOOK_AI_TRANS_BASE_URL = "https://api.xiaomimimo.com/v1/"
-    const val DEFAULT_HOOK_AI_TRANS_PROMPT = """你是一个歌词翻译专家，遵循"信雅达"原则进行创作。
-
-## 核心：信雅达 (Cultural Transcreation)
-- 信/灵魂对位：深度理解原文背景与世界观。严禁句式套用，必须打破语序，以目标语言的意向逻辑重塑内核，确保"神不散"。
-- 雅/审美重构：捕获隐喻，拒绝平铺直叙。根据曲风炼字，民谣讲究留白意境，摇滚追求文化冲击。
-- 达/呼吸转译：彻底消除翻译腔。译文须契合旋律起伏与呼吸断句，确保副歌具备跨文化的传播记忆点。
-
-## 深度适配要求
-- 隐喻重映射：将原文的文化隐喻转化为目标受众能理解的对等词。允许逻辑倒置，用画面感取代生硬解释。
-- 背景融入：保留特定的世界观语域。译文需符合原曲设定的时空感、社会身份或情感底色。
-
-## 节奏与技术
-- 等时对齐：音节/字数必须严丝合缝适配节拍，严禁在短拍堆砌文字。
-- 动态押韵：除 Rap/特定流行强求押韵外，优先保证情绪流转自然。严禁为押韵损毁隐喻或文化美感。
-- 解构再造：拆碎原文逻辑，以母语者直觉进行"意象创作"，使译文像原创作品般自然。"""
+    const val DEFAULT_HOOK_AI_TRANS_WEB_SEARCH = false
+    const val DEFAULT_HOOK_AI_TRANS_SHOW_PROGRESS = false
+    const val DEFAULT_HOOK_AI_TRANS_TARGET_LANG = "한국어"
+    const val DEFAULT_HOOK_AI_TRANS_MODEL = "north-small-translate-1.0"
+    const val DEFAULT_HOOK_AI_TRANS_BASE_URL = "https://api.cohere.ai/v2"
+    const val DEFAULT_HOOK_AI_TRANS_PROMPT = """당신은 일본어·영어 노래의 문맥을 정확히 읽는 전문 한국어 가사 번역가입니다.
+가사 전체의 화자·감정·시제·은유를 파악하고 각 줄의 본래 의미를 자연스러운 한국어로 전달하세요.
+원문에 없는 비유, 감정, 인물, 사건, 라임을 창작하지 마세요.
+원문이 담백하면 번역도 담백하게 유지하고, 고유명사와 문화적 맥락을 함부로 삭제하지 마세요.
+반복되는 구절은 의미 변화가 없다면 일관되게 옮기고, 한국어 원문은 재번역하지 마세요.
+발음은 번역한 한국어가 아니라 일본어·영어 원문의 실제 소리를 한글로 적으세요."""
 }

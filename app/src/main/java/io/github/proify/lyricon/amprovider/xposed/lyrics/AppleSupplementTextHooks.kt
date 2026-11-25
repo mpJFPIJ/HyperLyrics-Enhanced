@@ -233,7 +233,11 @@ internal fun AppleLyricsSupplementHooks.ensureAppleNativeOnlineTranslationHooks(
                 return@installResultOverrideHook original
             }
             val songId = nativeSongId(chain.thisObject)
-            val resolved = original == true || hasOnlineContent(songId)
+            // Availability describes the presence of a track, not whether it
+            // is currently hidden. Returning false here removes Apple's Show
+            // Translation menu entry and prevents restoring a hidden row.
+            val resolved = original == true || hasOnlineContent(songId) ||
+                nativeOnlineTranslationStore.hasAiTranslation(songId)
             if (BuildConfig.DEBUG) {
                 logTranslationAvailabilityOverride(
                     method = name,
@@ -272,6 +276,8 @@ internal fun AppleLyricsSupplementHooks.ensureAppleNativeOnlineTranslationHooks(
 
         hookRegistrar.installResultOverrideHook(method) { chain, original ->
             val songId = nativeSongId(chain.thisObject)
+            // Never disguise Hide as missing data: Apple's restore control
+            // still needs the underlying pronunciation availability.
             val requestedLanguage = chain.args.firstOrNull() as? String
             if (
                 shouldHideMandarinPronunciation(
@@ -281,15 +287,28 @@ internal fun AppleLyricsSupplementHooks.ensureAppleNativeOnlineTranslationHooks(
             ) {
                 return@installResultOverrideHook false
             }
-            val hasOnlineRomanization = isNativeOnlineTranslationEnabled() &&
-                nativeOnlineTranslationStore.hasPronunciation(songId)
+            val hasOnlineRomanization = showHangulSupplementPronunciation() &&
+                (hasUserPronunciationCorrection(songId) ||
+                    (isNativeOnlineTranslationEnabled() && if (
+                        pronunciationSourcePriority() ==
+                            RootConstants.APPLE_MUSIC_PRONUNCIATION_HANGUL_FIRST
+                    ) {
+                        nativeOnlineTranslationStore.hasAiHangulPronunciation(songId)
+                    } else {
+                        nativeOnlineTranslationStore.hasHangulPronunciation(songId)
+                    }))
             val resolved = hasOnlineRomanization ||
-                (original == true && hasValidOfficialRomanization(chain.thisObject))
+                (showNativeApplePronunciation() &&
+                    original == true && hasValidOfficialRomanization(chain.thisObject))
             reportApplePronunciationRuntimeDiagnostic(
                 stage = "availability_$name",
                 songId = songId,
-                details = "requested=$requestedLanguage, original=$original, " +
-                    "online=$hasOnlineRomanization, resolved=$resolved, " +
+                // This hook also wraps setPronunciation(Boolean). Its returned
+                // value is EFFECTIVE UI availability, not necessarily proof
+                // that Apple's native selection succeeded. Retain both values.
+                details = "methodRole=${if (name == lyricsRuntimeMember(AppleMusicRuntimeMember.LYRICS_NATIVE_SET_PRONUNCIATION_METHOD)) "setter" else "availability"}, " +
+                    "requested=$requestedLanguage, nativeResult=$original, " +
+                    "online=$hasOnlineRomanization, effectiveResult=$resolved, " +
                     "selected=${PreferencesMonitor.isPronunciationSelected()}",
                 dedupeKey = "availability_$name:$requestedLanguage:$original:$resolved",
             )
@@ -339,9 +358,12 @@ internal fun AppleLyricsSupplementHooks.hookAppleOfficialPronunciationLanguageMa
             return@installResultOverrideHook null
         }
         ApplePronunciationPolicy.selectLanguage(
-            systemMatch = original as? String,
-            appleLanguages = appleLanguages,
+            systemMatch = (original as? String).takeIf { showNativeApplePronunciation() },
+            appleLanguages = appleLanguages.takeIf { showNativeApplePronunciation() }
+                .orEmpty(),
             onlineFallbackLanguage = thirdPartyPronunciationFallbackLanguage(),
+            hangulFirst = pronunciationSourcePriority() ==
+                RootConstants.APPLE_MUSIC_PRONUNCIATION_HANGUL_FIRST,
         )
     }
     ProviderLogger.debug(
@@ -375,7 +397,9 @@ internal fun AppleLyricsSupplementHooks.hookAppleLyricsPreferredLanguages() {
             val originalPronunciationLanguages =
                 chain.args.getOrNull(pronunciationIndex) as? Array<*>
             val expandedPronunciationLanguages = expandAppleLyricsPronunciationLanguages(
-                originalPronunciationLanguages?.filterIsInstance<String>().orEmpty()
+                original = originalPronunciationLanguages?.filterIsInstance<String>().orEmpty(),
+                hangulFirst = pronunciationSourcePriority() ==
+                    RootConstants.APPLE_MUSIC_PRONUNCIATION_HANGUL_FIRST,
             ).toTypedArray()
             ProviderLogger.debug(
                 "Apple Music 官方歌词翻译候选请求: " +
@@ -421,9 +445,12 @@ internal fun AppleLyricsSupplementHooks.thirdPartyPronunciationFallbackLanguage(
             pronunciationLanguages = listOfNotNull(systemLanguage),
         )
     ) return null
-    if (!isNativeOnlineTranslationEnabled()) return null
     val songId = currentAppleLyricsSongId
-    if (!nativeOnlineTranslationStore.hasPronunciation(songId)) return null
+    if (!showHangulSupplementPronunciation()) return null
+    if (!hasUserPronunciationCorrection(songId) &&
+        (!isNativeOnlineTranslationEnabled() ||
+            !nativeOnlineTranslationStore.hasHangulPronunciation(songId))
+    ) return null
     return systemLanguage
         ?.takeIf(RomanizationPolicy::isLatinLanguageTag)
         ?: "und-Latn"
@@ -431,16 +458,22 @@ internal fun AppleLyricsSupplementHooks.thirdPartyPronunciationFallbackLanguage(
 
 internal fun AppleLyricsSupplementHooks.applyAppleNativeSupplementSelection(songNative: Any) {
     val songId = nativeSongId(songNative)
+    // Use the same effective visibility for track selection and RecyclerView binding.
+    // In three-line mode the host toggle may be off, but its pronunciation/translation
+    // track still needs to be selected. Do not mutate Apple's stored preferences.
+    val requested = requestedAppleLyricsRowVisibility()
     reportApplePronunciationRuntimeDiagnostic(
         stage = "supplement_selection",
         songId = songId,
         details = "pronunciationSelected=${PreferencesMonitor.isPronunciationSelected()}, " +
             "translationSelected=${PreferencesMonitor.isTranslationSelected()}, " +
+            "effectivePronunciation=${requested.pronunciation}, " +
+            "effectiveTranslation=${requested.translation}, " +
             "hasOnlinePronunciation=${nativeOnlineTranslationStore.hasPronunciation(songId)}",
     )
     val tracks = appleNativeSupplementTracks(
-        pronunciationSelected = PreferencesMonitor.isPronunciationSelected(),
-        translationSelected = PreferencesMonitor.isTranslationSelected(),
+        pronunciationSelected = requested.pronunciation,
+        translationSelected = requested.translation,
     )
     if (AppleNativeSupplementTrack.TRANSLATION in tracks) {
         applyAppleNativeTranslationSelection(songNative)
@@ -458,7 +491,7 @@ internal fun AppleLyricsSupplementHooks.applyAppleNativePronunciationSelection(s
                 AppleMusicRuntimeMember.LYRICS_NATIVE_SONG_PRONUNCIATION_LANGUAGES_METHOD,
             )
         }.getOrNull()
-    ).filter(RomanizationPolicy::isLatinLanguageTag)
+    )
     val songId = nativeSongId(songNative)
     rememberApplePronunciationLanguages(songNative, officialLanguages)
     if (
@@ -472,11 +505,21 @@ internal fun AppleLyricsSupplementHooks.applyAppleNativePronunciationSelection(s
         )
         return
     }
-    val language = officialLanguages
-        .firstOrNull()
-        ?.takeIf { hasValidOfficialRomanization(songNative) }
-        ?: thirdPartyPronunciationFallbackLanguage()
-        ?: return
+    // A disabled Apple romanization is not a content source. When Hangul
+    // arrives later, the existing supplement refresh can select its carrier.
+    // The setter ranks the languages Apple advertises; actual line content
+    // remains a separate getter-level decision. Avoid scanning the native
+    // lyric tree solely to influence that ranking on release builds.
+    val materializedBefore = if (BuildConfig.DEBUG) hasValidOfficialRomanization(songNative)
+        else false
+    val language = AppleNativePronunciationLanguagePolicy.select(
+        languages = officialLanguages,
+        hangulFirst = pronunciationSourcePriority() ==
+            RootConstants.APPLE_MUSIC_PRONUNCIATION_HANGUL_FIRST,
+        allowNative = showNativeApplePronunciation(),
+        hasLatinText = materializedBefore,
+        supplementLanguage = thirdPartyPronunciationFallbackLanguage(),
+    ) ?: return
     val selected = runCatching {
         lyricsNativeCall(
             songNative,
@@ -490,7 +533,9 @@ internal fun AppleLyricsSupplementHooks.applyAppleNativePronunciationSelection(s
         stage = "pronunciation_selection_applied",
         songId = songId,
         details = "language=$language, officialLanguages=$officialLanguages, " +
-            "selected=$selected, preference=${PreferencesMonitor.isPronunciationSelected()}",
+            "effectiveReturn=$selected, nativeSetterMayBeOverridden=1, " +
+            "materializedBefore=$materializedBefore, " +
+            "preference=${PreferencesMonitor.isPronunciationSelected()}",
     )
     ProviderLogger.debug(
         "Apple 歌词发音轨道选择：language=$language, " +

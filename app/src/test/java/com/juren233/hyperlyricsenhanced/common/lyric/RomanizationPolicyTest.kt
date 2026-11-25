@@ -61,4 +61,88 @@ class RomanizationPolicyTest {
         assertFalse(RomanizationPolicy.isLatinLanguageTag("zh-Hans"))
         assertFalse(RomanizationPolicy.isLatinLanguageTag(null))
     }
+
+    @Test
+    fun `accepts Hangul pronunciations for both English and Japanese supplements`() {
+        assertEquals(
+            "아이 러브 유",
+            RomanizationPolicy.sanitizeSupplement("I love you", "아이 러브 유"),
+        )
+        assertEquals(
+            "키미노 나와",
+            RomanizationPolicy.sanitizeSupplement("君の名は", "키미노 나와"),
+        )
+        assertEquals(
+            "아리가토",
+            RomanizationPolicy.sanitizeHangulSupplement("ありがとう", "아리가토"),
+        )
+        assertNull(RomanizationPolicy.sanitize("I love you", "아이 러브 유"))
+        assertNull(RomanizationPolicy.sanitizeSupplement("I love you", "アイ ラブ ユー"))
+        assertNull(RomanizationPolicy.sanitizeHangulSupplement("君の名は", "Kimi no na wa"))
+        assertNull(RomanizationPolicy.sanitizeSupplement("I love you", "아이 love 유"))
+        assertNull(RomanizationPolicy.sanitizeSupplement("안녕하세요", "안녕하세요"))
+        assertNull(RomanizationPolicy.sanitizeSupplement("...", "아이 러브 유"))
+        assertEquals(
+            "Kimi no na wa",
+            RomanizationPolicy.sanitizeSupplement("君の名は", "Kimi no na wa"),
+        )
+        assertTrue(RomanizationPolicy.isHangulPronunciation("키미노 나와"))
+        assertFalse(RomanizationPolicy.isHangulPronunciation("kimi no na wa"))
+    }
+
+    @Test
+    fun `Japanese prolonged vowel mark does not invalidate a Hangul pronunciation`() {
+        assertEquals(
+            "다링 한파나쿠 라부 토 키라메키 우키아시다츠 피로소피",
+            RomanizationPolicy.sanitizeHangulSupplement(
+                "ダーリン半端なくラブ！ときらめき浮き足立つフィロソフィ",
+                "다링 한파나쿠 라부 토 키라메키 우키아시다츠 피로소피",
+            ),
+        )
+        assertNull(RomanizationPolicy.sanitizeHangulSupplement("한국어ー", "한국어"))
+    }
+
+    @Test
+    fun `isolated Hangul jamo never reaches a visible Japanese pronunciation row`() {
+        val broken = listOf("ㄴ", "노ㄴ미소", "노미소", "노ㅏ미소")
+        broken.forEach { candidate ->
+            assertFalse("compatibility or combining jamo: $candidate",
+                RomanizationPolicy.isHangulPronunciation(candidate))
+            assertNull(RomanizationPolicy.sanitizeHangulSupplement("脳みそ", candidate))
+            assertFalse(RomanizationPolicy.sameHangulSounds(candidate, "노미소"))
+        }
+        assertEquals("노미소", RomanizationPolicy.sanitizeHangulSupplement("脳みそ", "노미소"))
+    }
+
+    @Test
+    fun `Japanese nasal can compose orphan consonant into preceding Korean syllable`() {
+        // Visible in the supplied IRIS OUT video: バラバラんなる rendered a
+        // separate ㄴ at the edge of a wrapped Korean fallback row.
+        assertEquals("바라바란 나루", RomanizationPolicy.sanitizeHangulSupplement(
+            "バラバラんなる", "바라바라 ㄴ나루",
+        ))
+        assertEquals("바라바란 나루", RomanizationPolicy.sanitizeSupplement(
+            "バラバラんなる", "바라바라 ㄴ나루",
+        ))
+        // No Japanese ん, no uniquely attachable Korean syllable, and no
+        // known coda slot: reject instead of inventing a phonetic sound.
+        assertNull(RomanizationPolicy.sanitizeHangulSupplement("バラバラなる", "바라바라 ㄴ나루"))
+        assertNull(RomanizationPolicy.sanitizeHangulSupplement("んなる", "ㄴ나루"))
+        assertNull(RomanizationPolicy.sanitizeHangulSupplement("こんなる", "콘ㄴ나루"))
+        assertNull(RomanizationPolicy.sanitizeHangulSupplement("こんなる", "코ㄴㄴ나루"))
+        assertNull(RomanizationPolicy.sanitizeHangulSupplement("こんにちは", "콘니치와 ㄴ"))
+        assertNull(RomanizationPolicy.sanitizeHangulSupplement("こんにちは", "코ㄴ니치하"))
+        assertNull(RomanizationPolicy.sanitizeHangulSupplement("かん", "카ㄴ 2"))
+        // A nasal sound that appears somewhere in the sentence cannot be
+        // reassigned to a later Kanji word just because its syllables match.
+        assertNull(RomanizationPolicy.sanitizeHangulSupplement("かん、蚊", "카 카ㄴ"))
+        assertNull(RomanizationPolicy.sanitizeHangulSupplement(
+            "かん".repeat(250), "카 ㄴ",
+        ))
+        assertNull(RomanizationPolicy.sanitizeHangulSupplement(
+                "やたらとしんどい恋煩いバラバラんなる頭とこの身体",
+                "야타라토신도이 코이와즈라이 바라바라 ㄴ나루 아타마토코노카라다",
+            ))
+        assertNull(RomanizationPolicy.sanitizeHangulSupplement("あ、かん、蚊、い", "아 카 카ㄴ 이"))
+    }
 }

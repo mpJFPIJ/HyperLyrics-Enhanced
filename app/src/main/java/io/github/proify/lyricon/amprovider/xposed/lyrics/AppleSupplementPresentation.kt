@@ -113,11 +113,29 @@ import android.content.SharedPreferences
  * 无歌词补充：写入 ViewModel 结果并显式调用 I2 主结果入口。I2 会验证
  * SongInfo.adamId、安装歌词适配器，并通过 Apple 自身的 L2/N2/R2 链路收尾。
  */
+internal object AppleMissingLyricsPresentationCommitPolicy {
+    /** A queued pointer is authoritative only while the same source selection
+     * still owns it. Identity, not value equality, matters for native pointers. */
+    fun canCommit(
+        requestedSongId: String?,
+        currentQueueSongId: String?,
+        requestedPointer: Any?,
+        selectedPointer: Any?,
+        bindingUnchanged: Boolean,
+        fragmentUnchanged: Boolean,
+    ): Boolean = !requestedSongId.isNullOrBlank() &&
+        requestedSongId == currentQueueSongId && requestedPointer != null &&
+        requestedPointer === selectedPointer && bindingUnchanged && fragmentUnchanged
+}
+
 internal fun AppleLyricsSupplementHooks.requestMissingLyricsPresentationRefresh(
     supplementPointer: Any? = null,
     fragmentOverride: Any? = null,
     currentPlaybackItem: Any? = null,
 ) {
+    val queuedBinding = presentationBinding.ticket()
+    val queuedSongId = currentPlaybackQueueMediaId()?.takeIf(String::isNotBlank)
+        ?: missingLyricsSupplement().store.contentSongId()?.takeIf(String::isNotBlank)
     mainHandler.post {
         ProviderLogger.debug(
             "Apple Music 无歌词补充呈现刷新进入: method=" +
@@ -132,6 +150,29 @@ internal fun AppleLyricsSupplementHooks.requestMissingLyricsPresentationRefresh(
             ?: presentationBinding.pointer()
             ?: return@post
         if (supplementPointer != null) {
+            val supplement = missingLyricsSupplement()
+            val selectedSource = queuedSongId?.let(supplement.lyricsSourceSelection::selected)
+            val selectedPointer = if (
+                selectedSource == AppleMissingLyricsHooks.Companion.SourceName.APPLE_NATIVE
+            ) queuedSongId?.let(supplement.nativeAlternatives::pointer)
+            else supplement.store.nativeSongInfoPointer(queuedSongId)
+            val currentFragment = presentationBinding.fragment()
+            if (!AppleMissingLyricsPresentationCommitPolicy.canCommit(
+                    requestedSongId = queuedSongId,
+                    currentQueueSongId = currentPlaybackQueueMediaId(),
+                    requestedPointer = supplementPointer,
+                    selectedPointer = selectedPointer,
+                    bindingUnchanged = presentationBinding.isCurrent(queuedBinding),
+                    fragmentUnchanged = fragmentOverride == null || currentFragment == null ||
+                        currentFragment === fragmentOverride,
+                )
+            ) {
+                ProviderLogger.debug(
+                    "Apple Music 已拒绝过期补充歌词页面注入: id=$queuedSongId, " +
+                        "queue=${currentPlaybackQueueMediaId()}, source=$selectedSource",
+                )
+                return@post
+            }
             if (!injectSupplementIntoViewModel(
                     fragment = fragment,
                     pointer = supplementPointer,
@@ -151,8 +192,23 @@ internal fun AppleLyricsSupplementHooks.requestMissingLyricsPresentationRefresh(
             scrollPresentationState.beginPresentation()
             ensureAppleLyricsScrollTracking(fragment, presentedSongId)
         }
+        val adapterBeforePresentation = resolveAppleLyricsRecyclerView(fragment)
+            ?.let(::appleRecyclerAdapter)
         runCatching { method.invoke(fragment, pointer) }
             .onSuccess {
+                if (supplementPointer != null && presentedSongId != null &&
+                    currentPlaybackQueueMediaId() == presentedSongId
+                ) {
+                    val installedAdapter = resolveAppleLyricsRecyclerView(fragment)
+                        ?.let(::appleRecyclerAdapter)
+                    if (installedAdapter != null && installedAdapter !== adapterBeforePresentation) {
+                        // Some I2 versions bind the new adapter without traversing the
+                        // native presentation hook; admit only an observed adapter swap.
+                        ensureAppleLyricsScrollTracking(
+                            fragment, presentedSongId, nativePresentationCompleted = true,
+                        )
+                    }
+                }
                 if (supplementPointer != null && presentedSongId != null) {
                     // I2/结果呈现可能只更新 ViewModel，不经过原生歌词呈现 Hook。
                     // 仍走一次已有的完整 bind 清理路径，避免旧 holder 的翻译子行残留。
@@ -231,9 +287,10 @@ internal fun AppleLyricsSupplementHooks.dismissAppleLyricsLoadingOverlay(fragmen
                             oldRight: Int,
                             oldBottom: Int,
                         ) {
-                            val currentSong = currentAppleLyricsSongId ?: currentPlaybackQueueMediaId()
-                            val hasSupplement = currentSong != null && missingLyricsSupplement().hasSupplementContent(currentSong)
-                            if (hasSupplement && changedView.visibility != View.GONE) {
+                            val currentSong = currentMissingLyricsSupplementSong(
+                                currentAppleLyricsSongId, currentPlaybackQueueMediaId(),
+                            ) { missingLyricsSupplement().hasSupplementContent(it) }
+                            if (currentSong != null && changedView.visibility != View.GONE) {
                                 changedView.visibility = View.GONE
                                 changedView.isClickable = false
                                 ProviderLogger.debug(
@@ -267,10 +324,9 @@ internal fun AppleLyricsSupplementHooks.dismissAppleLyricsLoadingOverlay(fragmen
  */
 internal fun AppleLyricsSupplementHooks.ensureMissingLyricsTranslationButtonVisible(fragment: Any?) {
     fragment ?: return
-    val songId = currentAppleLyricsSongId
-        ?: currentPlaybackQueueMediaId()
-        ?: return
-    if (!missingLyricsSupplement().hasSupplementContent(songId)) return
+    val songId = currentMissingLyricsSupplementSong(
+        currentAppleLyricsSongId, currentPlaybackQueueMediaId(),
+    ) { missingLyricsSupplement().hasSupplementContent(it) } ?: return
     val root = runCatching {
         AppleReflection.call(
             fragment,
@@ -306,10 +362,11 @@ internal fun AppleLyricsSupplementHooks.ensureMissingLyricsTranslationButtonVisi
                             oldRight: Int,
                             oldBottom: Int,
                         ) {
-                            if (
-                                missingLyricsSupplement()
-                                    .hasSupplementContent(songId) &&
-                                changedView.visibility != View.VISIBLE
+                            val currentSong = currentMissingLyricsSupplementSong(
+                                currentAppleLyricsSongId, currentPlaybackQueueMediaId(),
+                            ) { missingLyricsSupplement().hasSupplementContent(it) }
+                            if (currentSong != null &&
+                                (changedView.visibility != View.VISIBLE || !changedView.isEnabled)
                             ) {
                                 changedView.visibility = View.VISIBLE
                                 changedView.isEnabled = true
@@ -391,16 +448,16 @@ internal fun AppleLyricsSupplementHooks.injectSupplementIntoViewModel(
             .getConstructor(Any::class.java, Any::class.java)
             .newInstance(pointer, null)
     }.getOrNull() ?: return false
-    runCatching {
+    // The caller is already on main. postValue would queue an unguarded mutation which could
+    // execute after a track switch and overwrite the newer song's LiveData result.
+    val posted = runCatching {
         AppleReflection.call(resultLiveData, "setValue", resultValue)
-    }.recoverCatching {
-        AppleReflection.call(resultLiveData, "postValue", resultValue)
     }.onSuccess {
         ProviderLogger.debug("Apple Music 无歌词补充结果 LiveData 已写入")
     }.onFailure {
         ProviderLogger.error("Apple Music 无歌词补充结果 LiveData 写入失败", it)
     }
-    return true
+    return posted.isSuccess
 }
 
 /**

@@ -15,6 +15,8 @@ class AppleLyricsRecyclerUtilsTest {
         var lineText: String? = "line"
         var translation: String? = "translation"
         var lineId: Int = 3
+        var songId: String? = "song-42"
+        val immutableLabel = "keep"
     }
 
     private class Holder : BaseHolder() {
@@ -23,8 +25,18 @@ class AppleLyricsRecyclerUtilsTest {
         var selected: Boolean = true
     }
 
+    private class ImmutableHolder(val lineText: String, var opaqueId: String)
+
     @Test
-    fun `clears string caches across hierarchy but keeps other fields`() {
+    fun `unknown and immutable fields are left to the host`() {
+        val holder = ImmutableHolder("original", "opaque")
+        assertEquals(0, clearAppleLyricsHolderTextCaches(holder))
+        assertEquals("original", holder.lineText)
+        assertEquals("opaque", holder.opaqueId)
+    }
+
+    @Test
+    fun `clears known mutable text caches across hierarchy but keeps other fields`() {
         val holder = Holder()
 
         assertEquals(3, clearAppleLyricsHolderTextCaches(holder))
@@ -32,6 +44,8 @@ class AppleLyricsRecyclerUtilsTest {
         assertNull(holder.lineText)
         assertNull(holder.translation)
         assertNull(holder.pronunciation)
+        assertEquals("song-42", holder.songId)
+        assertEquals("keep", holder.immutableLabel)
         assertEquals(3, holder.lineId)
         assertTrue(holder.selected)
         assertEquals(0, holder.payloads.size)

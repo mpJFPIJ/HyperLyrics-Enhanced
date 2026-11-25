@@ -33,6 +33,38 @@ import org.junit.Test
 class AppleMissingLyricsStoreTest {
 
     @Test
+    fun `supplement active line honors line endings pauses and overlapping intervals`() {
+        val lines = listOf(
+            AppleMissingLyricsLine(begin = 100, end = 250, text = "첫째", words = emptyList(), translation = null),
+            AppleMissingLyricsLine(begin = 300, end = 500, text = "둘째", words = emptyList(), translation = null),
+            AppleMissingLyricsLine(begin = 420, end = 550, text = "셋째", words = emptyList(), translation = null),
+        )
+        assertNull(activeSupplementLineIndex(lines, 99L))
+        assertEquals(0, activeSupplementLineIndex(lines, 100L))
+        assertNull(activeSupplementLineIndex(lines, 250L))
+        assertNull(activeSupplementLineIndex(lines, 299L))
+        assertEquals(1, activeSupplementLineIndex(lines, 300L))
+        assertEquals(2, activeSupplementLineIndex(lines, 420L))
+        assertEquals(2, activeSupplementLineIndex(lines, 500L))
+        assertNull(activeSupplementLineIndex(lines, 550L))
+    }
+
+    @Test
+    fun `out of order supplement input is ordered and duration uses latest ending`() {
+        val store = AppleMissingLyricsStore()
+        assertTrue(store.update(Song(
+            id = "out-of-order", duration = 100L,
+            lyrics = listOf(
+                line(200L, 300L, "후반"),
+                line(0L, 500L, "긴 소절"),
+                line(100L, 150L, "중간"),
+            ),
+        )))
+        assertEquals(listOf(0L, 100L, 200L), store.lines("out-of-order").map { it.begin })
+        assertEquals(500L, store.durationMs("out-of-order"))
+    }
+
+    @Test
     fun `LunaBeat remains preferred when Apple native timing is unknown`() {
         assertTrue(
             shouldUseLunaBeatOverAppleNativeLyrics(
@@ -633,6 +665,17 @@ class AppleMissingLyricsStoreTest {
     }
 
     @Test
+    fun `translation lookup requires matching source text even for a unique interval`() {
+        val store = AppleMissingLyricsStore()
+        val translated = line(0L, 1_000L, "Original line").copy(translation = "원문")
+        store.update(Song(id = "overlay", lyrics = listOf(translated)))
+
+        assertNull(store.translation("overlay", 0L, 1_000L, "Different line"))
+        assertNull(store.translation("overlay", 0L, 1_000L, null))
+        assertEquals("원문", store.translation("overlay", 0L, 1_000L, "Original  line"))
+    }
+
+    @Test
     fun `update migrates old cache whose words lost boundary whitespace`() {
         val store = AppleMissingLyricsStore()
         val song = Song(
@@ -683,11 +726,20 @@ class AppleMissingLyricsStoreTest {
     }
 
     @Test
-    fun `duplicate update is ignored`() {
+    fun `duplicate update keeps the current native model and presentation`() {
         val store = AppleMissingLyricsStore()
         val song = Song(id = "123", lyrics = listOf(line(0L, 1_000L, "歌词")))
-        assertTrue(store.update(song))
-        assertFalse(store.update(song))
+        val first = store.receive(song)
+        val identity = AppleMissingLyricsPlaybackIdentity("123", 1L, 2L)
+        store.updatePlaybackIdentity(identity)
+        val pointer = FakeNativePointer()
+        assertTrue(store.updateNativeSongInfoPointer(pointer, identity))
+
+        val duplicate = store.receive(song)
+
+        assertEquals(AppleMissingLyricsUpdateKind.UNCHANGED, duplicate.result.kind)
+        assertTrue(store.isCurrentPresentation(first.presentation))
+        assertSame(pointer, store.nativeSongInfoPointer("123"))
     }
 
     @Test
@@ -900,6 +952,26 @@ class AppleMissingLyricsStoreTest {
         assertSame(pointer, store.nativeSongInfoPointer("translation-only"))
         // 翻译 getter 会动态读取 Store；已暴露给 Apple 的指针继续有效。
         assertFalse(pointer.deallocated)
+    }
+
+    @Test
+    fun `metadata update preserves pending translation refresh`() {
+        val store = AppleMissingLyricsStore()
+        val original = line(0L, 1_000L, "Original line")
+        val song = Song(id = "overlay", lyrics = listOf(original))
+        val first = store.receive(song)
+        val translated = song.copy(lyrics = listOf(original.copy(translation = "원문")))
+        val pending = store.receive(translated)
+        assertEquals(AppleMissingLyricsUpdateKind.TRANSLATION_ONLY, pending.result.kind)
+        assertFalse(store.isCurrentPresentation(first.presentation))
+
+        val metadata = store.receive(translated.copy(metadata = lyricMetadataOf(
+            LyricMetadataKeys.ONLINE_TRANSLATION_SOURCE to "NE",
+        )))
+
+        assertEquals(AppleMissingLyricsUpdateKind.METADATA_ONLY, metadata.result.kind)
+        assertEquals("NE", store.translationSource("overlay"))
+        assertTrue(store.isCurrentPresentation(pending.presentation))
     }
 
     @Test

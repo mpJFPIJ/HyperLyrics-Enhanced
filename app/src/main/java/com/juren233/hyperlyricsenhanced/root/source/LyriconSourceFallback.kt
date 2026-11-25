@@ -99,6 +99,7 @@ internal fun LyriconSource.scheduleFallback(
     if (configuredSources.isEmpty() && !lunaBeatRequested) return
     val previousSnapshot = appleFallbackRequest.snapshot()
     val generation = appleFallbackRequest.invalidate(mainHandler::removeCallbacks)
+    directBridge?.rememberMissingRequestOrigin(generation, baseSong.id)
     sourceSwitchCoreStage(
         request = sourceSwitchRequest,
         stage = "fallback_scheduled",
@@ -572,7 +573,7 @@ internal fun LyriconSource.applyFallbackResult(
             }
             val publishStartedAtNanos = SystemClock.elapsedRealtimeNanos()
             val published = !untimedNativeFallback &&
-                directBridge?.publishMissingLyricsSupplement(supplementSong) == true
+                directBridge?.publishMissingLyricsSupplement(supplementSong, generation) == true
             sourceSwitchCoreStage(
                 request = sourceSwitchRequest,
                 stage = "supplement_binder_published",

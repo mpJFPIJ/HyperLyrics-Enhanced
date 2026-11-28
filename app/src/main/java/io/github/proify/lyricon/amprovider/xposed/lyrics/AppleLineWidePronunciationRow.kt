@@ -919,6 +919,7 @@ internal class AppleLineWidePronunciationRow {
 
         override fun onAttachedToWindow() {
             super.onAttachedToWindow()
+            lastGeometryDiagnostic = null
             inheritSeekRecovery(seekRecoveryProvider())
             cancelPulse()
             schedulePulse()
@@ -931,6 +932,7 @@ internal class AppleLineWidePronunciationRow {
             if (changed) {
                 removeCallbacks(updatePaintLayer)
                 post(updatePaintLayer)
+                post { recordGeometryIfChanged() }
             }
             if ((layout?.lineCount ?: 0) > 1 && width > 0) {
                 val available = (width - compoundPaddingLeft - compoundPaddingRight).toFloat()
@@ -973,9 +975,17 @@ internal class AppleLineWidePronunciationRow {
                 isLayoutRequested || currentLayout.lineCount <= 0
             ) return
 
-            val readingTop = totalPaddingTop + currentLayout.getLineTop(0)
-            val readingBottom = totalPaddingTop +
+            val readingRect = Rect(0, 0, width, height)
+            if (runCatching {
+                    root.offsetDescendantRectToMyCoords(this, readingRect)
+                }.isFailure
+            ) return
+            val readingTop = readingRect.top + totalPaddingTop +
+                currentLayout.getLineTop(0)
+            val readingBottom = readingRect.top + totalPaddingTop +
                 currentLayout.getLineBottom(currentLayout.lineCount - 1)
+            val readingHolderOverTop = (-readingTop).coerceAtLeast(0)
+            val readingHolderOverBottom = (readingBottom - root.height).coerceAtLeast(0)
             var sourceOverTop = 0
             var sourceOverBottom = 0
             var sourceHolderOverTop = 0
@@ -1017,7 +1027,9 @@ internal class AppleLineWidePronunciationRow {
             val summary = "extent=line_box hostW=${root.width} hostH=${root.height} " +
                 "readingW=$width readingH=$height readingTextPx=$textSize " +
                 "readingLines=${currentLayout.lineCount} readingTop=$readingTop " +
-                "readingBottom=$readingBottom readingLocale=${textLocales.toLanguageTags()} " +
+                "readingBottom=$readingBottom readingHolderOverTop=$readingHolderOverTop " +
+                "readingHolderOverBottom=$readingHolderOverBottom " +
+                "readingLocale=${textLocales.toLanguageTags()} " +
                 "readingFontPad=$includeFontPadding readingFallback=${isFallbackLineSpacing} " +
                 "readingBreak=$breakStrategy readingHyphen=$hyphenationFrequency " +
                 "readingWordStyle=$lineBreakWordStyle readingTextDir=$textDirection " +

@@ -279,7 +279,7 @@ internal class AppleNativeSoftWrapReadingOverlay(
             source.fontVariationSettings == originalGeometry.fontVariationSettings &&
             source.includeFontPadding == originalGeometry.includeFontPadding &&
             source.isFallbackLineSpacing == originalGeometry.fallbackLineSpacing &&
-            source.elegantTextHeight == originalGeometry.elegantTextHeight &&
+            source.isElegantTextHeight == originalGeometry.elegantTextHeight &&
             source.breakStrategy == originalGeometry.breakStrategy &&
             source.hyphenationFrequency == originalGeometry.hyphenationFrequency &&
             source.justificationMode == originalGeometry.justificationMode &&

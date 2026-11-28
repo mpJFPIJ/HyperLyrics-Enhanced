@@ -297,7 +297,7 @@ internal class AppleNativeSoftWrapReadingOverlay(
     private val visibleSourceRect = Rect()
     private val inheritedClip = Rect()
     private val appliedClip = Rect()
-    private var sampledClip = false
+    private var lastClipSample: Pair<AppleOverlayAddedInkLoss, AppleOverlayAddedInkLoss>? = null
     private var installed = false
 
     fun bindOwner(check: () -> Boolean) {
@@ -558,7 +558,7 @@ internal class AppleNativeSoftWrapReadingOverlay(
         if (bounds.width() != holderRoot.width || bounds.height() != holderRoot.height)
             setBounds(0, 0, holderRoot.width, holderRoot.height)
 
-        val inheritedClipVisible = !sampledClip && canvas.getClipBounds(inheritedClip)
+        val inheritedClipVisible = canvas.getClipBounds(inheritedClip)
         val clipped = canvas.save()
         try {
             canvas.clipRect(0, 0, holderRoot.width, holderRoot.height)
@@ -606,7 +606,10 @@ internal class AppleNativeSoftWrapReadingOverlay(
             if (sampleAll && firstInkTop != Int.MAX_VALUE &&
                 lastInkBottom != Int.MIN_VALUE
             ) {
-                sampledClip = true
+                val inheritedLoss = AppleOverlayClipPolicy.clippedInkLoss(
+                    firstInkTop, lastInkBottom,
+                    inheritedClip.top, inheritedClip.bottom,
+                )
                 val added = AppleOverlayClipPolicy.addedInkLoss(
                     firstInkTop, lastInkBottom,
                     inheritedClip.top, inheritedClip.bottom,
@@ -623,18 +626,24 @@ internal class AppleNativeSoftWrapReadingOverlay(
                     ) transformedAncestors++
                     ancestor = ancestor.parent as? View
                 }
-                val summary = "hostH=${holderRoot.height} " +
-                    "canvasBeforeTop=${inheritedClip.top} " +
-                    "canvasBeforeBottom=${inheritedClip.bottom} " +
-                    "canvasAfterTop=${appliedClip.top} " +
-                    "canvasAfterBottom=${appliedClip.bottom} " +
-                    "inkTop=$firstInkTop inkBottom=$lastInkBottom " +
-                    "manualLostTop=${added.topPx} manualLostBottom=${added.bottomPx} " +
-                    "transformedAncestors=$transformedAncestors"
-                holderRoot.post {
-                    AppleLyricUiRuntimeProbe.record(
-                        "softwrap_paint_clip", summary, holderRoot,
-                    )
+                val clipSample = inheritedLoss to added
+                if (clipSample != lastClipSample) {
+                    lastClipSample = clipSample
+                    val summary = "extent=line_box hostH=${holderRoot.height} " +
+                        "canvasBeforeTop=${inheritedClip.top} " +
+                        "canvasBeforeBottom=${inheritedClip.bottom} " +
+                        "canvasAfterTop=${appliedClip.top} " +
+                        "canvasAfterBottom=${appliedClip.bottom} " +
+                        "layoutTop=$firstInkTop layoutBottom=$lastInkBottom " +
+                        "inheritedLostTop=${inheritedLoss.topPx} " +
+                        "inheritedLostBottom=${inheritedLoss.bottomPx} " +
+                        "manualLostTop=${added.topPx} manualLostBottom=${added.bottomPx} " +
+                        "transformedAncestors=$transformedAncestors"
+                    holderRoot.post {
+                        AppleLyricUiRuntimeProbe.record(
+                            "softwrap_paint_clip", summary, holderRoot,
+                        )
+                    }
                 }
             }
         } finally {

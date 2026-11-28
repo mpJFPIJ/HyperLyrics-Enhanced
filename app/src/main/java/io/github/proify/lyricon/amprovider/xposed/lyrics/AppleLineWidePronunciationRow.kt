@@ -639,6 +639,7 @@ internal class AppleLineWidePronunciationRow {
             emptyList()
         private var timedVariantGeometry: List<Map<Int, AppleMeasuredReadingGlyph>> = emptyList()
         private val visibleBounds = Rect()
+        private var lastGeometryDiagnostic: String? = null
         private var seekRecoveryUntilElapsedMs = 0L
         private val highlightPulse = object : Runnable {
             override fun run() {
@@ -720,6 +721,7 @@ internal class AppleLineWidePronunciationRow {
         fun setTimedText(value: String, variants: List<List<AppleTimedReadingUnit>>) {
             seekRecoveryUntilElapsedMs = 0L
             plainReading = value
+            lastGeometryDiagnostic = null
             val styled = SpannableString(value)
             timedVariants = variants.map { units ->
                 units.filter { it.start >= 0 && it.end <= value.length && it.start < it.end }
@@ -745,6 +747,7 @@ internal class AppleLineWidePronunciationRow {
                 rebindRequests.cancel()
                 detachOuterForeground()
                 paintRoot = next
+                lastGeometryDiagnostic = null
             }
             removeCallbacks(updatePaintLayer)
             post(updatePaintLayer)
@@ -954,8 +957,85 @@ internal class AppleLineWidePronunciationRow {
                 timedVariantGeometry = timedVariants.map { units ->
                     AppleReadingSweepLayout.measure(plainReading, currentLayout, units)
                 }
+                post { recordGeometryIfChanged() }
             }
             syncTimedHighlight()
+        }
+
+        /** Capture measured line boxes after Android has completed the new
+         * layout. This is a layout-event diagnostic, not a frame poll; it
+         * detects late font fallback, size and native-source changes without
+         * recording lyric text or identifiers. */
+        private fun recordGeometryIfChanged() {
+            val root = paintRoot ?: return
+            val currentLayout = layout ?: return
+            if (!isAttachedToWindow || !root.isAttachedToWindow ||
+                isLayoutRequested || currentLayout.lineCount <= 0
+            ) return
+
+            val readingTop = totalPaddingTop + currentLayout.getLineTop(0)
+            val readingBottom = totalPaddingTop +
+                currentLayout.getLineBottom(currentLayout.lineCount - 1)
+            var sourceOverTop = 0
+            var sourceOverBottom = 0
+            var sourceHolderOverTop = 0
+            var sourceHolderOverBottom = 0
+            var wrappedSourceViews = 0
+            var maxSourceLines = 0
+            var fallbackDisabled = 0
+            var fontPaddingDisabled = 0
+            var sourceShaderCells = 0
+            val sourceLocales = linkedSetOf<String>()
+            for (word in sourceWords) {
+                if (!word.isAttachedToWindow || word.width <= 0 || word.height <= 0)
+                    continue
+                val native = word.layout ?: continue
+                if (native.lineCount <= 0) continue
+                val rect = Rect(0, 0, word.width, word.height)
+                if (runCatching {
+                        root.offsetDescendantRectToMyCoords(word, rect)
+                    }.isFailure
+                ) continue
+                val top = rect.top + word.totalPaddingTop + native.getLineTop(0)
+                val bottom = rect.top + word.totalPaddingTop +
+                    native.getLineBottom(native.lineCount - 1)
+                sourceOverTop = maxOf(sourceOverTop, (rect.top - top).coerceAtLeast(0))
+                sourceOverBottom = maxOf(
+                    sourceOverBottom, (bottom - rect.bottom).coerceAtLeast(0),
+                )
+                sourceHolderOverTop = maxOf(sourceHolderOverTop, (-top).coerceAtLeast(0))
+                sourceHolderOverBottom = maxOf(
+                    sourceHolderOverBottom, (bottom - root.height).coerceAtLeast(0),
+                )
+                if (native.lineCount > 1) wrappedSourceViews++
+                maxSourceLines = maxOf(maxSourceLines, native.lineCount)
+                if (!word.isFallbackLineSpacing) fallbackDisabled++
+                if (!word.includeFontPadding) fontPaddingDisabled++
+                if (word.paint.shader != null) sourceShaderCells++
+                sourceLocales += word.textLocales.toLanguageTags()
+            }
+            val summary = "extent=line_box hostW=${root.width} hostH=${root.height} " +
+                "readingW=$width readingH=$height readingTextPx=$textSize " +
+                "readingLines=${currentLayout.lineCount} readingTop=$readingTop " +
+                "readingBottom=$readingBottom readingLocale=${textLocales.toLanguageTags()} " +
+                "readingFontPad=$includeFontPadding readingFallback=${isFallbackLineSpacing} " +
+                "readingBreak=$breakStrategy readingHyphen=$hyphenationFrequency " +
+                "readingWordStyle=$lineBreakWordStyle readingTextDir=$textDirection " +
+                "sourceWords=${sourceWords.size} wrappedSourceViews=$wrappedSourceViews " +
+                "maxSourceLines=$maxSourceLines sourceOverTop=$sourceOverTop " +
+                "sourceOverBottom=$sourceOverBottom sourceHolderOverTop=$sourceHolderOverTop " +
+                "sourceHolderOverBottom=$sourceHolderOverBottom " +
+                "sourceFallbackDisabled=$fallbackDisabled sourceFontPadDisabled=$fontPaddingDisabled " +
+                "sourceShaderCells=$sourceShaderCells sourceLocaleKinds=${sourceLocales.size}"
+            if (summary == lastGeometryDiagnostic) return
+            lastGeometryDiagnostic = summary
+            root.post {
+                if (paintRoot === root && bindingCurrent()) {
+                    AppleLyricUiRuntimeProbe.record(
+                        "linewide_geometry_update", summary, root,
+                    )
+                }
+            }
         }
 
         override fun onDetachedFromWindow() {

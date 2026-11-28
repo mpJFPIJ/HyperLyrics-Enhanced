@@ -855,13 +855,15 @@ internal class AppleLineWidePronunciationRow {
                         ) rect.top else null
                     }
                     val lines = layout?.lineCount ?: 0
-                    val fm = paint.fontMetricsInt
-                    val firstInkTop = if (positioned && lines > 0)
+                    // Layout line boxes include the actual fallback-font
+                    // metrics and TextView font padding; base Paint metrics
+                    // can under-report Hangul glyph extents.
+                    val readingLayoutTop = if (positioned && lines > 0)
                         readingRect.top + totalPaddingTop +
-                            layout!!.getLineBaseline(0) + fm.top else null
-                    val lastInkBottom = if (positioned && lines > 0)
+                            layout!!.getLineTop(0) else null
+                    val readingLayoutBottom = if (positioned && lines > 0)
                         readingRect.top + totalPaddingTop +
-                            layout!!.getLineBaseline(lines - 1) + fm.bottom else null
+                            layout!!.getLineBottom(lines - 1) else null
                     val sourceTopSpan = if (sourceTops.isNotEmpty())
                         sourceTops.max() - sourceTops.min() else -1
                     val sourceLineCounts = sourceWords.map { it.layout?.lineCount ?: 0 }
@@ -870,8 +872,8 @@ internal class AppleLineWidePronunciationRow {
                     "hostW=${root.width} hostH=${root.height} " +
                         "flexW=${(parent as? View)?.width ?: -1} " +
                         "readingW=$width readingH=$height readingTop=${if (positioned) readingRect.top else -1} " +
-                        "readingLines=$lines firstInkTop=${firstInkTop ?: -1} " +
-                        "lastInkBottom=${lastInkBottom ?: -1} " +
+                        "readingLines=$lines readingLayoutTop=${readingLayoutTop ?: -1} " +
+                        "readingLayoutBottom=${readingLayoutBottom ?: -1} " +
                         "sourceWords=${sourceWords.size} sourceTopSpan=$sourceTopSpan " +
                         "wrappedSourceViews=$wrappedSourceViews maxSourceLines=$maxSourceLineCount"
                 }
@@ -889,11 +891,9 @@ internal class AppleLineWidePronunciationRow {
                                 root.offsetDescendantRectToMyCoords(word, rect)
                             }.isFailure
                         ) return@mapNotNull null
-                        val fm = word.paint.fontMetricsInt
-                        val top = rect.top + word.totalPaddingTop +
-                            native.getLineBaseline(0) + fm.top
+                        val top = rect.top + word.totalPaddingTop + native.getLineTop(0)
                         val bottom = rect.top + word.totalPaddingTop +
-                            native.getLineBaseline(native.lineCount - 1) + fm.bottom
+                            native.getLineBottom(native.lineCount - 1)
                         intArrayOf(
                             (rect.top - top).coerceAtLeast(0),
                             (bottom - rect.bottom).coerceAtLeast(0),
@@ -901,13 +901,13 @@ internal class AppleLineWidePronunciationRow {
                             (bottom - root.height).coerceAtLeast(0),
                         )
                     }
-                    "hostH=${root.height} nativeSourceWordCount=${ink.size} " +
-                        "nativeInkOverTop=${ink.maxOfOrNull { it[0] } ?: -1} " +
-                        "nativeInkOverBottom=${ink.maxOfOrNull { it[1] } ?: -1} " +
-                        "nativeHolderOverTop=${ink.maxOfOrNull { it[2] } ?: -1} " +
-                        "nativeHolderOverBottom=${ink.maxOfOrNull { it[3] } ?: -1} " +
-                        "nativeTopClippedCount=${ink.count { it[0] > 0 }} " +
-                        "nativeBottomClippedCount=${ink.count { it[1] > 0 }} " +
+                    "extent=line_box hostH=${root.height} nativeSourceWordCount=${ink.size} " +
+                        "nativeLineBoxOverTop=${ink.maxOfOrNull { it[0] } ?: -1} " +
+                        "nativeLineBoxOverBottom=${ink.maxOfOrNull { it[1] } ?: -1} " +
+                        "nativeHolderLineBoxOverTop=${ink.maxOfOrNull { it[2] } ?: -1} " +
+                        "nativeHolderLineBoxOverBottom=${ink.maxOfOrNull { it[3] } ?: -1} " +
+                        "nativeTopLineBoxClippedCount=${ink.count { it[0] > 0 }} " +
+                        "nativeBottomLineBoxClippedCount=${ink.count { it[1] > 0 }} " +
                         "nativeShaderCells=${sourceWords.count { it.paint.shader != null }}"
                 }
                 outerForeground?.invalidateSelf()

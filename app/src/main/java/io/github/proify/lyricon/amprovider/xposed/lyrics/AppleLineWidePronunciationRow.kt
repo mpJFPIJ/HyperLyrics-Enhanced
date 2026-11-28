@@ -1232,8 +1232,14 @@ internal class AppleLineWidePronunciationRow {
         var adjusted = 0
         var nativeHangulCount = 0
         var nativeFontPaddingAdded = 0
+        var nativeFallbackSpacingAdded = 0
+        var nativeLocaleAdjusted = 0
+        var nativeDirectionAdjusted = 0
         var nativeShaderCells = 0
         var nativeUnmeasuredCells = 0
+        val koreanLocales = android.os.LocaleList.forLanguageTags(
+            AppleSoftWrapReadingLayoutPolicy.READING_LOCALE_TAG,
+        )
         for (view in views) {
             if (!isUnder(view, "pronunciation") || isUnder(view, "translation") ||
                 !view.text.any { it in '가'..'힣' }
@@ -1248,6 +1254,18 @@ internal class AppleLineWidePronunciationRow {
                 view.includeFontPadding = true
                 nativeFontPaddingAdded++
             }
+            if (!view.isFallbackLineSpacing) {
+                view.setFallbackLineSpacing(true)
+                nativeFallbackSpacingAdded++
+            }
+            if (view.textLocales != koreanLocales) {
+                view.textLocales = koreanLocales
+                nativeLocaleAdjusted++
+            }
+            if (view.textDirection != View.TEXT_DIRECTION_FIRST_STRONG_LTR) {
+                view.textDirection = View.TEXT_DIRECTION_FIRST_STRONG_LTR
+                nativeDirectionAdjusted++
+            }
             if (kotlin.math.abs(view.textSize - targetSize) > 0.8f) {
                 view.setTextSize(TypedValue.COMPLEX_UNIT_PX, targetSize)
                 adjusted++
@@ -1256,6 +1274,8 @@ internal class AppleLineWidePronunciationRow {
         if (nativeHangulCount > 0) AppleLyricUiRuntimeProbe.record(
             "native_reading_paint_path",
             "nativeCells=$nativeHangulCount fontPaddingAdded=$nativeFontPaddingAdded " +
+                "fallbackSpacingAdded=$nativeFallbackSpacingAdded " +
+                "localeAdjusted=$nativeLocaleAdjusted directionAdjusted=$nativeDirectionAdjusted " +
                 "shaders=$nativeShaderCells unmeasured=$nativeUnmeasuredCells " +
                 "lineWide=${if ((0 until parent.childCount).any {
                     parent.getChildAt(it) is ReadingView

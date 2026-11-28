@@ -163,7 +163,7 @@ internal class AppleHangulReadingForeground(
     private val ownership = AppleOverlayPaintOwnership()
     private val inheritedClip = Rect()
     private val appliedClip = Rect()
-    private var sampledClip = false
+    private var lastClipSample: Pair<AppleOverlayAddedInkLoss, AppleOverlayAddedInkLoss>? = null
 
     fun bindOwner(check: () -> Boolean) = ownership.bind(check)
 
@@ -185,7 +185,7 @@ internal class AppleHangulReadingForeground(
                 holderRoot.offsetDescendantRectToMyCoords(reading, localRect)
             }.isFailure
         ) return
-        val inheritedClipVisible = !sampledClip && canvas.getClipBounds(inheritedClip)
+        val inheritedClipVisible = canvas.getClipBounds(inheritedClip)
         val save = canvas.save()
         try {
             // A native flexbox can measure the baseline tightly even after
@@ -195,7 +195,6 @@ internal class AppleHangulReadingForeground(
             canvas.clipRect(0, 0, holderRoot.width, holderRoot.height)
             if (inheritedClipVisible && layout.lineCount > 0) {
                 if (canvas.getClipBounds(appliedClip)) {
-                    sampledClip = true
                     // Layout line bounds include fallback-font metrics and
                     // TextView font padding; base TextPaint metrics alone can
                     // under-report a Korean fallback glyph's vertical extent.
@@ -228,21 +227,25 @@ internal class AppleHangulReadingForeground(
                     // Keep lyric content and canvas objects out of the log.
                     // A posted bounded sample avoids traversing the holder's
                     // view tree from the middle of Canvas.draw().
-                    val summary = "extent=line_box hostH=${holderRoot.height} " +
-                        "canvasBeforeTop=${inheritedClip.top} " +
-                        "canvasBeforeBottom=${inheritedClip.bottom} " +
-                        "canvasAfterTop=${appliedClip.top} " +
-                        "canvasAfterBottom=${appliedClip.bottom} " +
-                        "layoutTop=$layoutTop layoutBottom=$layoutBottom " +
-                        "inheritedLostTop=${inheritedLoss.topPx} " +
-                        "inheritedLostBottom=${inheritedLoss.bottomPx} " +
-                        "manualLostTop=${added.topPx} " +
-                        "manualLostBottom=${added.bottomPx} " +
-                        "transformedAncestors=$transformedAncestors"
-                    holderRoot.post {
-                        AppleLyricUiRuntimeProbe.record(
-                            "linewide_paint_clip", summary, holderRoot,
-                        )
+                    val clipSample = inheritedLoss to added
+                    if (clipSample != lastClipSample) {
+                        lastClipSample = clipSample
+                        val summary = "extent=line_box hostH=${holderRoot.height} " +
+                            "canvasBeforeTop=${inheritedClip.top} " +
+                            "canvasBeforeBottom=${inheritedClip.bottom} " +
+                            "canvasAfterTop=${appliedClip.top} " +
+                            "canvasAfterBottom=${appliedClip.bottom} " +
+                            "layoutTop=$layoutTop layoutBottom=$layoutBottom " +
+                            "inheritedLostTop=${inheritedLoss.topPx} " +
+                            "inheritedLostBottom=${inheritedLoss.bottomPx} " +
+                            "manualLostTop=${added.topPx} " +
+                            "manualLostBottom=${added.bottomPx} " +
+                            "transformedAncestors=$transformedAncestors"
+                        holderRoot.post {
+                            AppleLyricUiRuntimeProbe.record(
+                                "linewide_paint_clip", summary, holderRoot,
+                            )
+                        }
                     }
                 }
             }

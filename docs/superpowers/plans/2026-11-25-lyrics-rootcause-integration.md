@@ -12,6 +12,22 @@
 
 ## Maintainer checkpoint — 2026-11-28 (source only)
 
+### Final CI #308 compile-gate RED and source correction (awaiting rerun)
+
+The first actual integrated GitHub Actions run after the source-only period,
+[#308](https://github.com/mpJFPIJ/HyperLyrics-Enhanced/actions/runs/46102271835),
+failed `compileDebugKotlin` and `compileReleaseKotlin` before JVM tests or
+lint could run. Both reported precisely two unresolved references in
+`AppleLyricsSupplementPronunciationSupport.kt`: a translation getter used
+`revision` outside its scope despite capturing `observedRevision` for this
+holder callback, and a reading bind invoked the injected `playbackHooks`
+**function** as if it were already an `ApplePlaybackHooks` object. The
+minimal source correction uses `observedRevision` and `playbackHooks()`.
+The compiler failure itself is the reproduced RED; passing compilation,
+regression tests, lint and APK integrity remain **unproven until the next
+integrated CI run**. No APK was built in #308, and device acceptance is still
+open.
+
 ### Pronunciation-selection diagnostics across revisions and long sessions (unexecuted)
 
 The native pronunciation-selection hook previously emitted

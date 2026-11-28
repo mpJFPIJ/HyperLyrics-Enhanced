@@ -164,7 +164,7 @@ internal fun AppleLyricsSupplementHooks.hookAppleLyricTextGetter(clazz: Class<*>
                         beginMs = lineBegin,
                         endMs = lineEnd,
                         translation = result,
-                        revision = revision,
+                        revision = observedRevision,
                         adapterPosition = timedContext?.position,
                         adapterOwner = timedContext?.adapterInstance,
                         displayedSourceText = displayedNativeSource,
@@ -497,7 +497,7 @@ internal fun AppleLyricsSupplementHooks.bindLineWidePronunciation(
         currentSourcePriority = pronunciationSourcePriority(),
         trustedHolder = trustedHolder,
         playbackPositionMs = { appleLyricsCurrentPlaybackPositionMs() },
-        timelineAdvancing = { playbackHooks.isTimelineAdvancing() },
+        timelineAdvancing = { playbackHooks().isTimelineAdvancing() },
         isCurrentBinding = bindingIsCurrent,
         onNeedsRebind = {
             if (root != null && root.isAttachedToWindow && bindingIsCurrent()) {

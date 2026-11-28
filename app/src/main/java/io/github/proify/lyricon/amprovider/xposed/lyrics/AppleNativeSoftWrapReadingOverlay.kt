@@ -42,6 +42,7 @@ internal data class AppleSoftWrapResumeGeometry(
     val fontFeatureSettings: String? = null,
     val fontVariationSettings: String? = null,
     val includeFontPadding: Boolean = true,
+    val fallbackLineSpacing: Boolean = true,
     val elegantTextHeight: Boolean = false,
     val breakStrategy: Int = LineBreaker.BREAK_STRATEGY_SIMPLE,
     val hyphenationFrequency: Int = Layout.HYPHENATION_FREQUENCY_NONE,
@@ -157,6 +158,7 @@ internal object AppleSoftWrapResumePolicy {
             saved.fontFeatureSettings == current.fontFeatureSettings &&
             saved.fontVariationSettings == current.fontVariationSettings &&
             saved.includeFontPadding == current.includeFontPadding &&
+            saved.fallbackLineSpacing == current.fallbackLineSpacing &&
             saved.elegantTextHeight == current.elegantTextHeight &&
             saved.breakStrategy == current.breakStrategy &&
             saved.hyphenationFrequency == current.hyphenationFrequency &&
@@ -242,6 +244,7 @@ internal class AppleNativeSoftWrapReadingOverlay(
             fontFeatureSettings = source.fontFeatureSettings,
             fontVariationSettings = source.fontVariationSettings,
             includeFontPadding = source.includeFontPadding,
+            fallbackLineSpacing = source.isFallbackLineSpacing,
             elegantTextHeight = source.elegantTextHeight,
             breakStrategy = source.breakStrategy,
             hyphenationFrequency = source.hyphenationFrequency,
@@ -275,6 +278,7 @@ internal class AppleNativeSoftWrapReadingOverlay(
             source.fontFeatureSettings == originalGeometry.fontFeatureSettings &&
             source.fontVariationSettings == originalGeometry.fontVariationSettings &&
             source.includeFontPadding == originalGeometry.includeFontPadding &&
+            source.isFallbackLineSpacing == originalGeometry.fallbackLineSpacing &&
             source.elegantTextHeight == originalGeometry.elegantTextHeight &&
             source.breakStrategy == originalGeometry.breakStrategy &&
             source.hyphenationFrequency == originalGeometry.hyphenationFrequency &&

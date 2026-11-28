@@ -412,6 +412,9 @@ private fun LyriconSource.applyCurrentOnlineTranslationResult(
             onlineTranslationMatched = hasOnlineEnrichment,
             publishToSink = overlayPublicationEnabled,
         )
+        acceptedOnlinePublication.remember(
+            currentPublishedAppleSong.takeIf { it === mergedResult.song }, generation,
+        )
     } else {
         publishThirdPartySong(
             mergedResult.song,

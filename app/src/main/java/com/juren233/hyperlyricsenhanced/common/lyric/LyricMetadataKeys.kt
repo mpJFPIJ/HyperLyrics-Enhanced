@@ -18,6 +18,10 @@ object LyricMetadataKeys {
     const val APPLE_LYRICS_CACHE_SOURCE = "appleLyricsCacheSource"
     const val APPLE_NATIVE_LYRICS_CONFIRMED = "appleNativeLyricsConfirmed"
     const val APPLE_NATIVE_LYRICS_UNTIMED = "appleNativeLyricsUntimed"
+    /** Standalone service kept a provider meaning while independently producing other fields. */
+    const val STANDALONE_INHERITED_TRANSLATION = "hleStandaloneInheritedTranslation"
+    /** Alternate generated meaning only when the ordinary line retains a different provider meaning. */
+    const val STANDALONE_GENERATED_TRANSLATION = "hleStandaloneGeneratedTranslation"
     const val ONLINE_TRANSLATION_SOURCE = "onlineTranslationSource"
     const val ONLINE_TRANSLATION_MATCH_STATS = "onlineTranslationMatchStats"
     const val ONLINE_PRONUNCIATION_SOURCE = "onlinePronunciationSource"

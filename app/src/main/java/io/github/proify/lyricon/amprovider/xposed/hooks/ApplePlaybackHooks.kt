@@ -48,11 +48,29 @@ internal class ApplePlaybackHooks(
     private val isAodLyricsEnabled: () -> Boolean,
     private val currentMetadataId: () -> String?,
     private val currentLyricsSongId: () -> String?,
+    private val onAcceptedSeek: (String?) -> Unit,
     private val queueItemMediaId: (Any) -> String?,
     private val refreshCurrentQueueItem: (Any?, String) -> Unit,
     private val isNetworkAutoSkipPreventionEnabled: () -> Boolean,
     private val isVolumeBalanceEnabled: () -> Boolean,
 ) {
+    private data class MeasuredClockSample(
+        val positionMs: Long,
+        val songId: String?,
+        val sourcePlayer: WeakReference<Any>,
+        val observedAtMs: Long,
+        val sequence: Long,
+    )
+
+    private data class AcceptedSeekEvent(
+        val sample: AppleAcceptedSeekClockSample,
+        val sourcePlayer: WeakReference<Any>,
+        val receivedAtMs: Long,
+        val sequence: Long,
+    )
+
+    private val clockEventGate = ApplePlaybackClockEventGate()
+
     @Volatile
     private var playbackPositionSource: PlaybackPositionSource? = null
     @Volatile
@@ -61,9 +79,9 @@ internal class ApplePlaybackHooks(
     private var progressJob: Job? = null
     private var remotePlayer: RemotePlayer? = null
     /** Playback surface activity. BUFFERING remains active. */
-    private var playing = false
+    @Volatile private var playing = false
     /** True only while the media clock may advance. BUFFERING is false. */
-    private var timelineAdvancing = false
+    @Volatile private var timelineAdvancing = false
     private val exoPlaybackSignals =
         WeakIdentityMap<Any, AppleExoPlaybackIntentPolicy.Resolution>()
     private val networkErrorPlayer = ThreadLocal<Any?>()
@@ -73,12 +91,14 @@ internal class ApplePlaybackHooks(
     private var networkRetryAccess: NetworkRetryAccess? = null
     private var zeroPositionReadCount = 0
     private var hasLoggedNonZeroPosition = false
-    private var lastTimingSamplePosition = -1L
-    private var lastTimingSampleAtMs = 0L
+    /** Position, provenance and event order must be one atomic observation. */
+    @Volatile private var lastTimingSample: MeasuredClockSample? = null
     private var lastTimingTraceAtMs = 0L
     private var lastTimingStateSignature: String? = null
-    private var lastExplicitSeekAtMs = 0L
-    private var lastExplicitSeekPosition = -1L
+    @Volatile private var lastExplicitSeekAtMs = 0L
+    @Volatile private var lastExplicitSeekPosition = -1L
+    /** Separate a confirmed seek request from an actual player-time sample. */
+    @Volatile private var lastAcceptedSeekClock: AcceptedSeekEvent? = null
     private var lastPlaybackAnchorAtMs = 0L
     private val atmosphereSessionCallbackHit = AtomicBoolean(false)
     private val atmosphereVariantCallbackHit = AtomicBoolean(false)
@@ -186,10 +206,37 @@ internal class ApplePlaybackHooks(
             parameterCount = 1,
         )
         runtime.hookRegistrar.installHook(seekMethod, after = { chain, _ ->
-            val position = chain.args.firstOrNull() as? Long ?: 0L
-            if (BuildConfig.DEBUG) {
-                lastExplicitSeekAtMs = SystemClock.elapsedRealtime()
+            val sourcePlayer = playbackPositionSource?.player
+            val accepted = ApplePausedPlaybackClockPolicy.acceptedSeekClockSample(
+                callbackPlayer = chain.thisObject,
+                positionSourcePlayer = sourcePlayer,
+                positionMs = chain.args.firstOrNull() as? Long,
+                songId = currentLyricsSongId() ?: currentMetadataId(),
+            ) ?: return@installHook
+            val player = sourcePlayer ?: return@installHook
+            val position = accepted.positionMs
+            // The callback follows a successful Exo seek. Preserve its target
+            // separately: only a later *measured* getter sample can supersede
+            // it. This also handles long pauses and seeks to nonzero positions.
+            val delivered = clockEventGate.acceptSeek(stillCurrent = {
+                playbackPositionSource?.player === player &&
+                    (currentLyricsSongId() ?: currentMetadataId()) == accepted.songId
+            }) { sequence ->
+                val now = SystemClock.elapsedRealtime()
+                lastAcceptedSeekClock = AcceptedSeekEvent(
+                    accepted, WeakReference(player), now, sequence,
+                )
+                lastExplicitSeekAtMs = now
                 lastExplicitSeekPosition = position
+                // This is an *explicit seek* for Central and Direct SystemUI,
+                // regardless of pause state. A PlaybackState anchor carries
+                // no position through AppleDirectPlayer and is not a seek.
+                remotePlayer?.seekTo(position)
+            }
+            // Notify only for accepted native seeks, outside the clock gate's
+            // lock. Rejected or stale callbacks must not wake old lyric rows.
+            if (delivered) onAcceptedSeek(accepted.songId)
+            if (delivered && BuildConfig.DEBUG) {
                 ProviderLogger.diagnostic(
                     "Timing seek: requested=$position, callbackPlayer=" +
                         "${chain.thisObject?.let(System::identityHashCode)}, " +
@@ -197,7 +244,6 @@ internal class ApplePlaybackHooks(
                         "sourcePlayer=${playbackPositionSource?.player?.let(System::identityHashCode)}"
                 )
             }
-            if (playing) remotePlayer?.seekTo(position)
         })
 
         val stateMethod = runtime.hookResolver.resolveMethod(
@@ -241,11 +287,57 @@ internal class ApplePlaybackHooks(
 
     fun isPlaying(): Boolean = playing
 
+    /** BUFFERING remains a live session but does not advance Exo's lyric clock. */
+    fun isTimelineAdvancing(): Boolean = timelineAdvancing
+
     fun activePlayer(): Any? = activePlaybackPlayer
 
-    fun currentPositionMs(): Long? =
-        runCatching { playbackPositionSource?.readPosition() }.getOrNull()
-            ?: lastTimingSamplePosition.takeIf { it >= 0L }
+    fun currentPositionMs(): Long? {
+        val source = playbackPositionSource ?: return null
+        val songAtReadStart = currentLyricsSongId() ?: currentMetadataId()
+        // The synchronous foreground getter can be slow too. A seek or a
+        // different Exo player may complete while it is reading the old
+        // clock, exactly as in the coroutine polling path below.
+        val ticket = clockEventGate.readTicket()
+        val raw = runCatching { source.readPosition() }.getOrNull()
+        val stillCurrent = {
+            playbackPositionSource === source &&
+                (currentLyricsSongId() ?: currentMetadataId()) == songAtReadStart
+        }
+        fun choose(currentMs: Long?): Long? {
+            val measured = lastTimingSample?.takeIf {
+                songAtReadStart != null &&
+                    it.songId == songAtReadStart && it.sourcePlayer.get() === source.player
+            }
+            val seek = lastAcceptedSeekClock?.takeIf {
+                songAtReadStart != null &&
+                    it.sample.songId == songAtReadStart && it.sourcePlayer.get() === source.player
+            }
+            val fallback = ApplePausedPlaybackClockPolicy.newestFallback(
+                measuredMs = measured?.positionMs,
+                measuredSequence = measured?.sequence,
+                acceptedSeekMs = seek?.sample?.positionMs,
+                acceptedSeekSequence = seek?.sequence,
+            )
+            val anchorAtMs = if (fallback.fromSeek) seek?.receivedAtMs else measured?.observedAtMs
+            val sampleAgeMs = anchorAtMs?.takeIf { it > 0L }
+                ?.let { SystemClock.elapsedRealtime() - it }
+            return ApplePausedPlaybackClockPolicy.select(
+                currentMs = currentMs,
+                lastValidMs = fallback.positionMs,
+                timelineAdvancing = timelineAdvancing,
+                explicitSeekToZero = fallback.fromSeek && fallback.positionMs == 0L,
+                lastValidAgeMs = sampleAgeMs,
+                fallbackFromAcceptedSeek = fallback.fromSeek,
+            )
+        }
+        return clockEventGate.readIfCurrent(ticket, stillCurrent) { choose(raw) }
+            // If an accepted seek invalidated the slow getter, reselect the
+            // *new* confirmed seek/measurement without trusting that sample.
+            ?: clockEventGate.readIfCurrent(clockEventGate.readTicket(), stillCurrent) {
+                choose(null)
+            }
+    }
 
     private fun startSyncAction() {
         if (playing && timelineAdvancing) return
@@ -268,10 +360,36 @@ internal class ApplePlaybackHooks(
         progressJob = coroutineScope.launch {
             while (isActive && timelineAdvancing) {
                 runCatching {
-                    playbackPositionSource?.readPosition()?.let { position ->
-                        logPositionSyncState(position)
-                        remotePlayer?.setPosition(position)
-                        publishPlaybackAnchor(position, playing = true, force = false)
+                    // Capture the generation *before* the potentially slow Exo
+                    // getter. A seek, pause, or player switch invalidates it.
+                    val source = playbackPositionSource
+                    val songAtReadStart = currentLyricsSongId() ?: currentMetadataId()
+                    val ticket = clockEventGate.readTicket()
+                    if (source != null) source.readPosition()?.let { position ->
+                        var priorSample: MeasuredClockSample? = null
+                        val committed = clockEventGate.publishIfCurrent(
+                            ticket = ticket,
+                            stillCurrent = {
+                                isActive && timelineAdvancing &&
+                                    playbackPositionSource === source &&
+                                    (currentLyricsSongId() ?: currentMetadataId()) == songAtReadStart
+                            },
+                        ) { sequence ->
+                            priorSample = lastTimingSample
+                            lastTimingSample = MeasuredClockSample(
+                                positionMs = position,
+                                songId = songAtReadStart,
+                                sourcePlayer = WeakReference(source.player),
+                                observedAtMs = SystemClock.elapsedRealtime(),
+                                sequence = sequence,
+                            )
+                            // Position and explicit seek deliveries share a
+                            // serialized gate, so delayed IPC cannot reorder
+                            // an earlier tick after a completed seek.
+                            remotePlayer?.setPosition(position)
+                            publishPlaybackAnchor(position, playing = true, force = false)
+                        }
+                        if (committed) logPositionSyncState(position, priorSample)
                     }
                 }.onFailure {
                     ProviderLogger.error("读取 Apple Music 当前播放进度失败", it)
@@ -802,12 +920,12 @@ internal class ApplePlaybackHooks(
             return
         }
         val previous = playbackPositionSource
-        playbackPositionSource = resolved
         if (previous?.player !== mediaPlayer) {
+            clockEventGate.invalidate()
             zeroPositionReadCount = 0
             hasLoggedNonZeroPosition = false
-            lastTimingSamplePosition = -1L
-            lastTimingSampleAtMs = 0L
+            lastTimingSample = null
+            lastAcceptedSeekClock = null
             lastTimingStateSignature = null
             lastPlaybackAnchorAtMs = 0L
             ProviderLogger.info(
@@ -815,10 +933,11 @@ internal class ApplePlaybackHooks(
                     "instance=${System.identityHashCode(mediaPlayer)}"
             )
         }
+        playbackPositionSource = resolved
     }
 
-    private fun logPositionSyncState(position: Long) {
-        logPlaybackTimingDiagnostic(position)
+    private fun logPositionSyncState(position: Long, priorSample: MeasuredClockSample?) {
+        logPlaybackTimingDiagnostic(position, priorSample)
         if (position > 0L) {
             if (!hasLoggedNonZeroPosition) {
                 hasLoggedNonZeroPosition = true
@@ -837,7 +956,8 @@ internal class ApplePlaybackHooks(
         }
     }
 
-    private fun logPlaybackTimingDiagnostic(position: Long) {
+    private fun logPlaybackTimingDiagnostic(position: Long, priorSample: MeasuredClockSample?) {
+        // Always committed independently of diagnostics by the clock gate.
         if (!BuildConfig.DEBUG) return
         val now = SystemClock.elapsedRealtime()
         val source = playbackPositionSource
@@ -850,9 +970,8 @@ internal class ApplePlaybackHooks(
             currentLyricsSongId(),
             playing,
         ).joinToString("|")
-        val sampleElapsed = (now - lastTimingSampleAtMs).takeIf { lastTimingSampleAtMs > 0L }
-        val positionDelta = (position - lastTimingSamplePosition)
-            .takeIf { lastTimingSamplePosition >= 0L }
+        val sampleElapsed = priorSample?.observedAtMs?.let { now - it }
+        val positionDelta = priorSample?.positionMs?.let { position - it }
         val recentExplicitSeek = now - lastExplicitSeekAtMs <= 2_000L
         val unexpectedJump = sampleElapsed != null && positionDelta != null &&
             sampleElapsed in 1L..2_000L &&
@@ -895,8 +1014,6 @@ internal class ApplePlaybackHooks(
             lastTimingTraceAtMs = now
             lastTimingStateSignature = stateSignature
         }
-        lastTimingSampleAtMs = now
-        lastTimingSamplePosition = position
     }
 
     private fun publishPlaybackAnchor(position: Long, playing: Boolean, force: Boolean) {
@@ -947,6 +1064,9 @@ internal class ApplePlaybackHooks(
     }
 
     private fun pauseCoroutineTask() {
+        // Cancellation is cooperative: an Exo getter already in progress can
+        // finish after cancel(). Invalidate its captured generation first.
+        clockEventGate.invalidate()
         progressJob?.cancel()
         progressJob = null
     }

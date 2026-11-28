@@ -21,10 +21,13 @@ object PlaybackManager {
     private var lyricRequester: LyricRequester? = null
     private var lyricsParserAccess: AppleLyricsParserAccess? = null
     private var onMissingLyricsSupplementBuilt: ((Song) -> Unit)? = null
+    private var onSongVisitChanged: ((String?) -> Unit)? = null
+    private var currentPlaybackVisitEpoch: (() -> Long)? = null
     private var hasKnownNativeLyrics: ((String) -> Boolean)? = null
 
     // 状态追踪
     private var currentSongId: String? = null
+    private val playbackVisitLock = Any()
     private var runtimeUnavailablePromotionSongId: String? = null
     private var lastDisplayDiagnosticSignature: String? = null
     private var lastPublishedSong: Song? = null
@@ -35,12 +38,16 @@ object PlaybackManager {
         requester: LyricRequester,
         hookResolver: AppleMusicHookResolver,
         onMissingLyricsSupplementBuilt: (Song) -> Unit,
+        onSongVisitChanged: (String?) -> Unit,
+        currentPlaybackVisitEpoch: () -> Long,
         hasKnownNativeLyrics: (String) -> Boolean,
     ) {
         this.player = remotePlayer
         this.lyricRequester = requester
         this.lyricsParserAccess = AppleLyricsParserAccess.from(hookResolver)
         this.onMissingLyricsSupplementBuilt = onMissingLyricsSupplementBuilt
+        this.onSongVisitChanged = onSongVisitChanged
+        this.currentPlaybackVisitEpoch = currentPlaybackVisitEpoch
         this.hasKnownNativeLyrics = hasKnownNativeLyrics
     }
 
@@ -49,20 +56,31 @@ object PlaybackManager {
      */
     fun onSongChanged(newId: String?) {
         if (newId.isNullOrBlank()) {
-            currentSongId = null
-            setSong(null)
+            synchronized(playbackVisitLock) {
+                currentSongId = null
+                onSongVisitChanged?.invoke(null)
+                setSong(null)
+            }
             ProviderLogger.debug("PlaybackManager: Song changed to null")
             logDisplayDiagnostic(null, "cleared", "song_id_missing")
             return
         }
 
         // 避免重复处理同一首歌
-        if (newId == currentSongId) {
+        val didChange = synchronized(playbackVisitLock) {
+            if (newId == currentSongId) {
+                false
+            } else {
+                runtimeUnavailablePromotionSongId = null
+                currentSongId = newId
+                onSongVisitChanged?.invoke(newId)
+                true
+            }
+        }
+        if (!didChange) {
             logDisplayDiagnostic(lastSong, "skipped", "duplicate_song_id")
             return
         }
-        runtimeUnavailablePromotionSongId = null
-        currentSongId = newId
 
         ProviderLogger.debug("PlaybackManager: Song changed to $newId")
 
@@ -90,7 +108,10 @@ object PlaybackManager {
         } else {
             cachedSong
         }
-        setSong(song)
+        synchronized(playbackVisitLock) {
+            if (currentSongId != newId) return
+            setSong(song)
+        }
         if (BuildConfig.DEBUG) {
             ProviderLogger.diagnostic(
                 "[SongCacheIo] stage=song_changed_sync, id=$newId, " +
@@ -99,6 +120,7 @@ object PlaybackManager {
             )
         }
         if (cachedMissingLyricsSupplement) {
+            if (currentSongId != newId) return
             ProviderLogger.info(
                 if (legacyMissingLyricsCandidate) {
                     "Apple Music 无歌词补充冷启动迁移旧缓存候选: id=$newId, "
@@ -118,6 +140,7 @@ object PlaybackManager {
                 PreferencesMonitor.isTranslationSelected() &&
                 lyrics.any { it.translation.isNullOrBlank() }
         if (needsLyrics || needsTranslation) {
+            if (currentSongId != newId) return
             val queueId = MediaMetadataCache.getMetadataById(newId)?.queueId ?: 0L
             logDisplayDiagnostic(
                 song,
@@ -125,7 +148,11 @@ object PlaybackManager {
                 if (needsLyrics) "lyrics_download_requested" else "translation_download_requested",
                 "queueId=$queueId",
             )
-            lyricRequester?.requestDownload(newId, queueId)
+            synchronized(playbackVisitLock) {
+                // Request registration must not overtake a newer song's registration.
+                if (currentSongId != newId) return
+                lyricRequester?.requestDownload(newId, queueId)
+            }
         } else {
             ProviderLogger.debug("PlaybackManager: Song $newId has complete lyrics, skipping download.")
             logDisplayDiagnostic(song, "ready", "cached_lyrics_complete")
@@ -163,7 +190,10 @@ object PlaybackManager {
                 "resolvedLines=${resolvedSong.lyrics?.size ?: 0}, " +
                 "publishedLines=${mergedSong.lyrics?.size ?: 0}."
         )
-        val published = setSong(mergedSong)
+        val published = synchronized(playbackVisitLock) {
+            if (currentSongId != id) return
+            setSong(mergedSong)
+        }
         lastCatalogRepublish = if (published) {
             CatalogRepublish(republishInputs, mergedSong)
         } else {
@@ -207,7 +237,43 @@ object PlaybackManager {
         visibleSongId: String? = null,
         playbackSongId: String? = null,
         trigger: String = "",
+        scheduledVisitEpoch: Long,
+        activeVisitEpoch: Long,
+        nativeResultSongId: String?,
+        nativeResultQueueId: Long?,
+        isModuleRequest: Boolean,
+        moduleRequestProven: Boolean,
+        nativeRequestProven: Boolean,
+        receiptStillCurrent: () -> Boolean,
     ) {
+        // Check native result identity *before* SongRepository.saveSong: the repository
+        // writes disk/cache even when shouldPublishBuiltLyrics would later reject display.
+        val builtSongId = nativeResultSongId
+        val activeId = playbackSongId?.takeIf(String::isNotBlank)
+            ?: currentSongId?.takeIf(String::isNotBlank)
+            ?: visibleSongId?.takeIf(String::isNotBlank)
+        val activeQueueId = activeId?.let { MediaMetadataCache.getMetadataById(it)?.queueId }
+        var originVisitEpoch = scheduledVisitEpoch
+        var bootstrappedNativeVisit = false
+        if (!shouldAcceptAppleLyricsBuiltReceipt(
+                builtSongId = builtSongId,
+                activeSongId = activeId,
+                scheduledVisitEpoch = originVisitEpoch,
+                activeVisitEpoch = currentPlaybackVisitEpoch?.invoke() ?: activeVisitEpoch,
+                resultQueueId = nativeResultQueueId,
+                activeQueueId = activeQueueId,
+                isModuleResult = isModuleRequest,
+                moduleRequestProven = moduleRequestProven,
+                nativeRequestProven = nativeRequestProven,
+            )
+        ) {
+            ProviderLogger.diagnostic(
+                "PlaybackManager: 忽略过期原生歌词构建: id=$builtSongId, current=$activeId, " +
+                    "queue=$nativeResultQueueId/$activeQueueId, " +
+                    "visit=$originVisitEpoch/$activeVisitEpoch, trigger=$trigger"
+            )
+            return
+        }
         val previousSong = lastSong
         val parserAccess = lyricsParserAccess
         if (parserAccess == null) {
@@ -215,7 +281,61 @@ object PlaybackManager {
             logDisplayDiagnostic(null, "skipped", "lyrics_parser_profile_missing", "source=$source")
             return
         }
-        val song = SongRepository.saveSong(nativeSongObj, parserAccess, source, trigger)
+        val song = SongRepository.saveSong(
+            nativeSongObj = nativeSongObj,
+            parserAccess = parserAccess,
+            source = source,
+            trigger = trigger,
+            expectedSongId = builtSongId ?: return,
+            commitIfCurrent = { hasRenderableLyrics, diskMutation ->
+                // Parsing happens outside this monitor. Only the final disk commit is
+                // serialized with playback-visit revocation, so A1 cannot pass an old
+                // check and write after onSongChanged(B/A2) has completed.
+                synchronized(playbackVisitLock) {
+                    if (hasRenderableLyrics && receiptStillCurrent() &&
+                        shouldBootstrapNativePlaybackVisit(
+                            currentSongId = currentSongId,
+                            builtSongId = builtSongId,
+                            visibleSongId = visibleSongId,
+                            playbackSongId = playbackSongId,
+                            source = source,
+                            isModuleResult = isModuleRequest,
+                            resultQueueId = nativeResultQueueId,
+                            activeQueueId = activeQueueId,
+                            scheduledVisitEpoch = scheduledVisitEpoch,
+                            activeVisitEpoch = currentPlaybackVisitEpoch?.invoke() ?: activeVisitEpoch,
+                            nativeRequestProven = nativeRequestProven,
+                        )
+                    ) {
+                        currentSongId = builtSongId
+                        onSongVisitChanged?.invoke(builtSongId)
+                        originVisitEpoch = currentPlaybackVisitEpoch?.invoke() ?: scheduledVisitEpoch
+                        bootstrappedNativeVisit = true
+                        ProviderLogger.diagnostic(
+                            "PlaybackManager: 현재 큐 원생 가사 파싱 완료 후 Metadata 이전 방문 확정: id=$builtSongId"
+                        )
+                    }
+                    val latestSongId = currentSongId
+                    val latestQueueId = latestSongId?.let {
+                        MediaMetadataCache.getMetadataById(it)?.queueId
+                    }
+                    val accepted = (bootstrappedNativeVisit || receiptStillCurrent()) &&
+                        shouldAcceptAppleLyricsBuiltReceipt(
+                            builtSongId = builtSongId,
+                            activeSongId = latestSongId,
+                            scheduledVisitEpoch = originVisitEpoch,
+                            activeVisitEpoch = currentPlaybackVisitEpoch?.invoke() ?: -1L,
+                            resultQueueId = nativeResultQueueId,
+                            activeQueueId = latestQueueId,
+                            isModuleResult = isModuleRequest,
+                            moduleRequestProven = moduleRequestProven,
+                            nativeRequestProven = nativeRequestProven,
+                        )
+                    if (accepted) diskMutation()
+                    accepted
+                }
+            },
+        )
         if (song == null) {
             ProviderLogger.debug("PlaybackManager: Failed to save song.")
             logDisplayDiagnostic(null, "skipped", "lyrics_parse_failed", "source=$source")
@@ -252,50 +372,55 @@ object PlaybackManager {
                 "previous=${AppleMetadataFlowDiagnostics.provider(lastSong)}"
         }
         if (shouldPublish && isSongSame) {
-            if (id != currentSongId) {
-                currentSongId = id
-                ProviderLogger.debug(
-                    "PlaybackManager: Visible lyrics adopted as current song $id before playback."
+            synchronized(playbackVisitLock) {
+                if (id != currentSongId ||
+                    originVisitEpoch != currentPlaybackVisitEpoch?.invoke() ||
+                    (!bootstrappedNativeVisit && !receiptStillCurrent())
+                ) {
+                    ProviderLogger.diagnostic(
+                        "PlaybackManager: 阻止过期歌词发布: id=$id, current=$currentSongId"
+                    )
+                    return
+                }
+                ProviderLogger.debug("PlaybackManager: Lyrics ready for current song $id, updating player.")
+                val authoritativeNativeLyrics = source == "apple" &&
+                    hasKnownNativeLyrics?.invoke(id) == true
+                val missingLyricsSupplement = !authoritativeNativeLyrics &&
+                    shouldUseBuiltLyricsAsMissingSupplement(
+                        source = source,
+                        song = song,
+                        currentSongId = currentSongId,
+                        previousSong = previousSong,
+                    )
+                val publishedSong = when {
+                    authoritativeNativeLyrics -> markAsConfirmedAppleNativeLyrics(song)
+                    missingLyricsSupplement -> markAsMissingLyricsSupplement(song)
+                    else -> song
+                }
+                if (authoritativeNativeLyrics) {
+                    ProviderLogger.info(
+                        "Apple Music 原生歌词权威发布: id=$id, lines=$lyricLines"
+                    )
+                }
+                if (missingLyricsSupplement) {
+                    ProviderLogger.info(
+                        "Apple Music 无歌词补充采用模块歌词: id=$id, lines=$lyricLines"
+                    )
+                    onMissingLyricsSupplementBuilt?.invoke(publishedSong)
+                }
+                logDisplayDiagnostic(
+                    publishedSong,
+                    "ready",
+                    if (id == visibleSongId) {
+                        "lyrics_parsed_for_visible_song"
+                    } else {
+                        "lyrics_parsed_for_current_song"
+                    },
+                    "source=$source, currentSongId=$currentSongId, " +
+                        "visibleSongId=$visibleSongId, playbackSongId=$playbackSongId",
                 )
+                setSong(publishedSong)
             }
-            ProviderLogger.debug("PlaybackManager: Lyrics ready for current song $id, updating player.")
-            val authoritativeNativeLyrics = source == "apple" &&
-                hasKnownNativeLyrics?.invoke(id) == true
-            val missingLyricsSupplement = !authoritativeNativeLyrics &&
-                shouldUseBuiltLyricsAsMissingSupplement(
-                    source = source,
-                    song = song,
-                    currentSongId = currentSongId,
-                    previousSong = previousSong,
-                )
-            val publishedSong = when {
-                authoritativeNativeLyrics -> markAsConfirmedAppleNativeLyrics(song)
-                missingLyricsSupplement -> markAsMissingLyricsSupplement(song)
-                else -> song
-            }
-            if (authoritativeNativeLyrics) {
-                ProviderLogger.info(
-                    "Apple Music 原生歌词权威发布: id=$id, lines=$lyricLines"
-                )
-            }
-            if (missingLyricsSupplement) {
-                ProviderLogger.info(
-                    "Apple Music 无歌词补充采用模块歌词: id=$id, lines=$lyricLines"
-                )
-                onMissingLyricsSupplementBuilt?.invoke(publishedSong)
-            }
-            logDisplayDiagnostic(
-                publishedSong,
-                "ready",
-                if (id == visibleSongId) {
-                    "lyrics_parsed_for_visible_song"
-                } else {
-                    "lyrics_parsed_for_current_song"
-                },
-                "source=$source, currentSongId=$currentSongId, " +
-                    "visibleSongId=$visibleSongId, playbackSongId=$playbackSongId",
-            )
-            setSong(publishedSong)
         } else {
             ProviderLogger.debug(
                 if (shouldPublish) "PlaybackManager: Duplicate lyrics content for current song $id."

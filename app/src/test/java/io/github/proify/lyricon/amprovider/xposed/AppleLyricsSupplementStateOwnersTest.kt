@@ -111,6 +111,45 @@ class AppleLyricsSupplementStateOwnersTest {
         assertFalse(diagnostics.markBindingReported("a", "line"))
     }
 
+    @Test
+    fun `diagnostic dedup does not retain every song forever`() {
+        val diagnostics = AppleLyricsPronunciationDiagnostics()
+        assertTrue(diagnostics.markSongSnapshotLogged("old-snapshot"))
+        assertTrue(diagnostics.markRuntimeReported("old-song", "selection"))
+        assertTrue(diagnostics.markBindingReported("old-song", "row"))
+
+        repeat(1024) { index ->
+            assertTrue(diagnostics.markSongSnapshotLogged("snapshot-$index"))
+            assertTrue(diagnostics.markRuntimeReported("song-$index", "selection"))
+            assertTrue(diagnostics.markBindingReported("song-$index", "row"))
+        }
+
+        // Old diagnostics must be sampled again on revisits, instead of
+        // retaining every historical song identity for the whole process.
+        assertTrue(diagnostics.markSongSnapshotLogged("old-snapshot"))
+        assertTrue(diagnostics.markRuntimeReported("old-song", "selection"))
+        assertTrue(diagnostics.markBindingReported("old-song", "row"))
+        assertFalse(diagnostics.markRuntimeReported("old-song", "selection"))
+    }
+
+    @Test
+    fun `pronunciation selection diagnostic distinguishes revision and setter result`() {
+        val diagnostics = AppleLyricsPronunciationDiagnostics()
+        val unmaterialized = AppleLyricsPronunciationDiagnostics.selectionKey(
+            revision = 3L, language = "ja-Hang", result = null,
+        )
+        val accepted = AppleLyricsPronunciationDiagnostics.selectionKey(
+            revision = 3L, language = "ja-Hang", result = true,
+        )
+        val nextRevision = AppleLyricsPronunciationDiagnostics.selectionKey(
+            revision = 4L, language = "ja-Hang", result = true,
+        )
+        assertTrue(diagnostics.markRuntimeReported("same-song", unmaterialized))
+        assertFalse(diagnostics.markRuntimeReported("same-song", unmaterialized))
+        assertTrue(diagnostics.markRuntimeReported("same-song", accepted))
+        assertTrue(diagnostics.markRuntimeReported("same-song", nextRevision))
+    }
+
     private fun wordContext(label: String) = ApplePronunciationWordRenderContext(
         displayTextByWord = emptyMap(),
         wordIdMethod = label,

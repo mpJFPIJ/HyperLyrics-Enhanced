@@ -108,7 +108,16 @@ internal class AppleLyricsBlurState {
     )
 
     fun rememberRecycler(adapter: Any, recyclerView: View) {
-        recyclerViewsByAdapter[adapter] = WeakReference(recyclerView)
+        synchronized(recyclerViewsByAdapter) {
+            // One RecyclerView exposes only its *current* adapter. Retaining
+            // adapter A's reverse route after B takes over lets a late A
+            // callback re-adopt it and unsuspend an explicit user drag.
+            val retired = recyclerViewsByAdapter.keys.filter { prior ->
+                prior !== adapter && recyclerViewsByAdapter[prior]?.get() === recyclerView
+            }
+            retired.forEach { recyclerViewsByAdapter.remove(it) }
+            recyclerViewsByAdapter[adapter] = WeakReference(recyclerView)
+        }
     }
 
     fun recyclerFor(adapter: Any): View? =

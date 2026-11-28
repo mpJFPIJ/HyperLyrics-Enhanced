@@ -71,16 +71,49 @@ internal class AppleMusicDirectBridge(
     )
     private val translationReceiver: IAppleMusicTranslationReceiver?
         get() = translationConnection.current?.target
-    @Volatile
-    private var latestOnlineTranslationPayload: ByteArray? = null
-    @Volatile
-    private var latestOnlineTranslationGeneration: Int? = null
-    @Volatile
-    private var latestMissingLyricsSupplementPayload: ByteArray? = null
+    private data class OnlinePublication(
+        val bytes: ByteArray, val generation: Int?, val visitId: Long,
+    )
+
+    private data class SupplementPublication(val bytes: ByteArray, val visitId: Long)
+
+    /** The bytes and their origin must be observed as one immutable replay envelope. */
+    @Volatile private var latestOnlinePublication: OnlinePublication? = null
+    @Volatile private var latestSupplementPublication: SupplementPublication? = null
+    /** Never borrow B's visit for a request built from central A. */
+    @Volatile private var activeSourceVisit = AppleDirectSourceVisit(null, 0L)
+    private val onlineRequestOrigins = AppleDirectSourceRequestOrigin()
+    private val missingRequestOrigins = AppleDirectSourceRequestOrigin()
+
+    fun rememberOnlineRequestOrigin(generation: Int, songId: String?) {
+        onlineRequestOrigins.remember(generation, songId, activeSourceVisit.forSong(songId))
+    }
+
+    fun rememberMissingRequestOrigin(generation: Int, songId: String?) {
+        missingRequestOrigins.remember(generation, songId, activeSourceVisit.forSong(songId))
+    }
+
+    /** A central-first request was started before Apple advertised any visit.
+     * Restart that request with a fresh generation once the real app visit appears;
+     * never relabel the old in-flight result as if it came from this visit. */
+    private fun reissueRequestsWithoutOrigin(songId: String?) {
+        val active = source.currentAppleSong?.takeIf { it.id == songId } ?: return
+        if (onlineRequestOrigins.needsProvenVisit(songId)) {
+            source.cancelOnlineTranslation(
+                clearAttempt = true,
+                clearMatched = false,
+                reason = "direct_visit_origin_established",
+            )
+            source.scheduleOnlineTranslation(active)
+        }
+        if (missingRequestOrigins.needsProvenVisit(songId)) {
+            source.scheduleFallback(active, delayMs = 0L)
+        }
+    }
 
     private val binder = object : IAppleMusicLyricBridge.Stub() {
         override fun registerTranslationReceiver(receiver: IAppleMusicTranslationReceiver?) {
-            withAppleDirectLifecycle(lifecycleLock) {
+            val replay = withAppleDirectLifecycle(lifecycleLock) {
                 if (!isCurrentConnection()) return
                 val entry = translationConnection.replace(receiver)
                 if (entry != null && translationConnection.current === entry && entry.binder.isBinderAlive) {
@@ -93,27 +126,42 @@ internal class AppleMusicDirectBridge(
                 } else {
                     requestRegistration("translation_receiver_missing", onlyWhenDisconnected = true)
                 }
+                latestOnlinePublication to latestSupplementPublication
             }
+            val onlineReplay = replay.first
+            val supplementReplay = replay.second
             bridgeDiagnostic(
                 "stage=translation_receiver_registered, receiverPresent=${receiver != null}, " +
                     "binderAlive=${receiver?.asBinder()?.isBinderAlive}, " +
-                    "cachedOnlineBytes=${latestOnlineTranslationPayload?.size ?: 0}, " +
-                    "cachedSupplementBytes=${latestMissingLyricsSupplementPayload?.size ?: 0}",
+                    "cachedOnlineBytes=${onlineReplay?.bytes?.size ?: 0}, " +
+                    "cachedSupplementBytes=${supplementReplay?.bytes?.size ?: 0}",
             )
             pronunciationDiagnostic(
-                "stage=bridge_receiver_registered, generation=$latestOnlineTranslationGeneration, " +
+                "stage=bridge_receiver_registered, generation=${onlineReplay?.generation}, " +
                     "receiverPresent=${receiver != null}, " +
-                    "cachedBytes=${latestOnlineTranslationPayload?.size ?: 0}"
+                    "cachedBytes=${onlineReplay?.bytes?.size ?: 0}"
             )
-            latestOnlineTranslationPayload?.let { payload ->
-                sendOnlineTranslationPayload(payload, latestOnlineTranslationGeneration)
-            }
-            latestMissingLyricsSupplementPayload?.let { payload ->
-                sendMissingLyricsSupplementPayload(payload)
+            withAppleDirectLifecycle(lifecycleLock) {
+                onlineReplay?.takeIf { it === latestOnlinePublication }?.let { publication ->
+                    sendOnlineTranslationPayload(
+                        publication.bytes, publication.generation, publication.visitId,
+                    )
+                }
+                supplementReplay?.takeIf { it === latestSupplementPublication }?.let { publication ->
+                    sendMissingLyricsSupplementPayload(publication.bytes, publication.visitId)
+                }
             }
         }
 
         override fun onSongChanged(compressedSong: ByteArray) {
+            receiveSongChanged(compressedSong, 0L)
+        }
+
+        override fun onSongChangedForVisit(compressedSong: ByteArray, visitId: Long) {
+            receiveSongChanged(compressedSong, visitId)
+        }
+
+        private fun receiveSongChanged(compressedSong: ByteArray, visitId: Long) {
             if (!isCurrentConnection()) {
                 recordStaleSongDrop("before_post", compressedSong.size)
                 return
@@ -123,7 +171,10 @@ internal class AppleMusicDirectBridge(
                     "empty=${compressedSong.isEmpty()}",
             )
             if (compressedSong.isEmpty()) {
-                postToSource(songPayloadBytes = compressedSong.size) { source.onDirectSongChanged(null) }
+                postToSource(songPayloadBytes = compressedSong.size) {
+                    activeSourceVisit = AppleDirectSourceVisit(null, visitId)
+                    source.onDirectSongChanged(null)
+                }
                 return
             }
             val decoded = runCatching {
@@ -142,7 +193,11 @@ internal class AppleMusicDirectBridge(
                 "stage=direct_song_payload_decoded, id=${song.id}, " +
                     "lyrics=${song.lyrics.orEmpty().size}",
             )
-            postToSource(songPayloadBytes = compressedSong.size) { source.onDirectSongChanged(song) }
+            postToSource(songPayloadBytes = compressedSong.size) {
+                activeSourceVisit = AppleDirectSourceVisit(song.id, visitId)
+                source.onDirectSongChanged(song)
+                if (visitId > 0L) reissueRequestsWithoutOrigin(song.id)
+            }
         }
 
         override fun onPlaybackStateChanged(isPlaying: Boolean) {
@@ -288,6 +343,8 @@ internal class AppleMusicDirectBridge(
     }
 
     fun publishOnlineTranslation(song: LocalSong, generation: Int? = null): Boolean {
+        val originalVisit = generation?.let { onlineRequestOrigins.visitFor(it, song.id) }
+            ?: return false
         val payload = json.encodeToString(song)
             .toByteArray(Charsets.UTF_8)
             .deflate()
@@ -305,12 +362,16 @@ internal class AppleMusicDirectBridge(
             HookLogger.e(TAG, "Apple Music 在线翻译回传载荷过大: bytes=${payload.size}")
             return false
         }
-        latestOnlineTranslationPayload = payload
-        latestOnlineTranslationGeneration = generation
-        return sendOnlineTranslationPayload(payload, generation)
+        return withAppleDirectLifecycle(lifecycleLock) {
+            val publication = OnlinePublication(payload, generation, originalVisit)
+            latestOnlinePublication = publication
+            sendOnlineTranslationPayload(publication.bytes, publication.generation, publication.visitId)
+        }
     }
 
-    fun publishMissingLyricsSupplement(song: LocalSong): Boolean {
+    fun publishMissingLyricsSupplement(song: LocalSong, generation: Int): Boolean {
+        val originalVisit = missingRequestOrigins.visitFor(generation, song.id)
+            ?: return false
         val payload = json.encodeToString(song)
             .toByteArray(Charsets.UTF_8)
             .deflate()
@@ -318,18 +379,25 @@ internal class AppleMusicDirectBridge(
             HookLogger.e(TAG, "Apple Music 无歌词补充回传载荷过大: bytes=${payload.size}")
             return false
         }
-        latestMissingLyricsSupplementPayload = payload
-        return sendMissingLyricsSupplementPayload(payload)
+        return withAppleDirectLifecycle(lifecycleLock) {
+            val publication = SupplementPublication(payload, originalVisit)
+            latestSupplementPublication = publication
+            sendMissingLyricsSupplementPayload(publication.bytes, publication.visitId)
+        }
     }
 
     fun clearMissingLyricsSupplement(songId: String?) {
         withAppleDirectLifecycle(lifecycleLock) {
-            latestMissingLyricsSupplementPayload = null
+            latestSupplementPublication = null
             if (!isCurrentConnection()) return
             val entry = translationConnection.current ?: return
             val target = entry.target
             runCatching {
-                target.onMissingLyricsSupplementCleared(songId)
+                target.onMissingLyricsSupplementClearedForVisit(
+                    songId,
+                    if (songId == null) activeSourceVisit.visitId
+                    else activeSourceVisit.forSong(songId),
+                )
             }.onFailure {
                 onTranslationSendFailure(entry)
                 HookLogger.e(TAG, "清除 Apple Music 无歌词补充失败", it)
@@ -339,8 +407,7 @@ internal class AppleMusicDirectBridge(
 
     fun clearOnlineTranslation(songId: String?) {
         withAppleDirectLifecycle(lifecycleLock) {
-            latestOnlineTranslationPayload = null
-            latestOnlineTranslationGeneration = null
+            latestOnlinePublication = null
             pronunciationDiagnostic(
                 "stage=bridge_payload_cleared_systemui, id=$songId, " +
                     "receiverPresent=${translationReceiver != null}"
@@ -349,7 +416,11 @@ internal class AppleMusicDirectBridge(
             val entry = translationConnection.current ?: return
             val target = entry.target
             runCatching {
-                target.onOnlineTranslationCleared(songId)
+                target.onOnlineTranslationClearedForVisit(
+                    songId,
+                    if (songId == null) activeSourceVisit.visitId
+                    else activeSourceVisit.forSong(songId),
+                )
             }.onFailure {
                 onTranslationSendFailure(entry)
                 HookLogger.e(TAG, "清除 Apple Music 原生在线翻译失败", it)
@@ -473,6 +544,7 @@ internal class AppleMusicDirectBridge(
     private fun sendOnlineTranslationPayload(
         payload: ByteArray,
         generation: Int?,
+        visitId: Long,
     ): Boolean {
         withAppleDirectLifecycle(lifecycleLock) {
             if (!isCurrentConnection()) return false
@@ -485,7 +557,7 @@ internal class AppleMusicDirectBridge(
             }
             val target = entry.target
             val success = runCatching {
-                target.onOnlineTranslationResult(payload)
+                target.onOnlineTranslationResultForVisit(payload, visitId)
                 true
             }.onFailure {
                 onTranslationSendFailure(entry)
@@ -499,7 +571,7 @@ internal class AppleMusicDirectBridge(
         }
     }
 
-    private fun sendMissingLyricsSupplementPayload(payload: ByteArray): Boolean {
+    private fun sendMissingLyricsSupplementPayload(payload: ByteArray, visitId: Long): Boolean {
         withAppleDirectLifecycle(lifecycleLock) {
             if (!isCurrentConnection()) return false
             val entry = translationConnection.current ?: run {
@@ -511,7 +583,7 @@ internal class AppleMusicDirectBridge(
             }
             val target = entry.target
             val success = runCatching {
-                target.onMissingLyricsSupplementResult(payload)
+                target.onMissingLyricsSupplementResultForVisit(payload, visitId)
                 true
             }.onFailure {
                 onTranslationSendFailure(entry)

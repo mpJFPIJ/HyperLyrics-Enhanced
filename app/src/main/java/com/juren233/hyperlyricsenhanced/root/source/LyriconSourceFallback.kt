@@ -99,6 +99,7 @@ internal fun LyriconSource.scheduleFallback(
     if (configuredSources.isEmpty() && !lunaBeatRequested) return
     val previousSnapshot = appleFallbackRequest.snapshot()
     val generation = appleFallbackRequest.invalidate(mainHandler::removeCallbacks)
+    directBridge?.rememberMissingRequestOrigin(generation, baseSong.id)
     sourceSwitchCoreStage(
         request = sourceSwitchRequest,
         stage = "fallback_scheduled",
@@ -439,7 +440,10 @@ internal fun LunaBeatLookupResult.toSourceStatus(): AppleMissingLyricsSourceStat
 /** 全中文歌词不携带在线翻译：正文若全为中文，在线载荷的翻译列整体剔除。 */
 internal fun stripFullyChineseTranslations(lines: List<LrcLine>): List<LrcLine> {
     if (!ChineseLyricsPolicy.isFullyChineseLrc(lines)) return lines
-    return lines.map { it.copy(translation = null) }
+    return lines.map { line ->
+        if (ChineseLyricsPolicy.permitsOnlineTranslation(line.content, chineseDominant = true)) line
+        else line.copy(translation = null)
+    }
 }
 
 internal fun OnlineLyricTargeter.FetchOutcome.stripFullyChineseTranslations():
@@ -572,7 +576,7 @@ internal fun LyriconSource.applyFallbackResult(
             }
             val publishStartedAtNanos = SystemClock.elapsedRealtimeNanos()
             val published = !untimedNativeFallback &&
-                directBridge?.publishMissingLyricsSupplement(supplementSong) == true
+                directBridge?.publishMissingLyricsSupplement(supplementSong, generation) == true
             sourceSwitchCoreStage(
                 request = sourceSwitchRequest,
                 stage = "supplement_binder_published",

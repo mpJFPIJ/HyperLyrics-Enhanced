@@ -6,6 +6,8 @@
 
 package io.github.proify.lyricon.amprovider.xposed
 
+import com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation
+
 internal data class ApplePronunciationContext(
     val songId: String?,
     val pronunciationLanguages: List<String>,
@@ -18,6 +20,7 @@ internal enum class AppleNativeSupplementTrack {
 
 internal data class ApplePronunciationRenderPlan(
     val pronunciation: String,
+    val alignedWords: List<LyricWordPronunciation>? = null,
 )
 
 internal data class ApplePronunciationWordRenderContext(

@@ -1,0 +1,110 @@
+package com.juren233.hyperlyricsenhanced.root.aitrans
+
+import com.juren233.hyperlyricsenhanced.lyric.model.Song
+import com.juren233.hyperlyricsenhanced.lyric.style.AiTranslationConfigs
+import com.juren233.hyperlyricsenhanced.common.extensions.md5
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class AITranslationKeyTest {
+    @Test fun lineBreaksInsideLyricsCannotImpersonateAdditionalSongRows() {
+        val song = Song(name = "mixed track", artist = "performer")
+        val configs = AiTranslationConfigs(targetLanguage = "한국어")
+        val combined = listOf("ありがとう\n1:사랑해")
+        val split = listOf("ありがとう", "사랑해")
+        assertNotEquals(AITranslationKey.calculate(configs, song, combined),
+            AITranslationKey.calculate(configs, song, split))
+        assertNotEquals(AITranslationKey.pronunciation(song, combined),
+            AITranslationKey.pronunciation(song, split))
+    }
+
+    @Test fun ordinaryLyricRowsKeepTheirOriginalOfflineCacheIdentity() {
+        val song = Song(name = "IRIS OUT", artist = "Kenshi Yonezu")
+        val legacyPlainText = "sudachi-v2-kana-fallback-kanji-language-v4\n" +
+            "title=IRIS OUT\n" +
+            "artist=Kenshi Yonezu\n" +
+            "0:駄目\n"
+        assertEquals(legacyPlainText.md5(), AITranslationKey.pronunciation(song, listOf("駄目")))
+    }
+
+    @Test fun clearingCurrentSongRemovesBothOldAndNewOfflineReadingRevisions() {
+        val song = Song(name = "IRIS OUT", artist = "Kenshi Yonezu")
+        val lines = listOf("駄目", "脳みそ")
+        val configs = AiTranslationConfigs(targetLanguage = "한국어")
+        val deletionKeys = AITranslationKey.deletionKeys(configs, song, lines)
+        assertTrue(AITranslationKey.pronunciation(song, lines) in deletionKeys)
+        assertTrue(AITranslationKey.pronunciation(song, lines,
+            policyRevision = "sudachi-v1-20260723-full-line-offsets-v2") in deletionKeys)
+        assertTrue(AITranslationKey.pronunciation(song, lines,
+            policyRevision = "sudachi-v1-20260723-korean-phonetics-v1") in deletionKeys)
+        assertTrue(AITranslationKey.calculate(configs, song, lines,
+            includePronunciation = true) in deletionKeys)
+    }
+
+    @Test fun newSourceAwareTokenizerRetriesDoNotReuseOldOfflinePronunciationCache() {
+        val song = Song(name = "IRIS OUT", artist = "Kenshi Yonezu")
+        val lines = listOf("ダーリン半端なく", "駄目駄目")
+        assertNotEquals(
+            AITranslationKey.pronunciation(song, lines),
+            AITranslationKey.pronunciation(song, lines,
+                policyRevision = "sudachi-v1-20260723-full-line-offsets-v2"),
+        )
+    }
+
+    @Test fun pronunciationRevisionDoesNotInvalidateAlreadyTranslatedModelCache() {
+        val song = Song(name = "IRIS OUT", artist = "Kenshi Yonezu")
+        val lines = listOf("駄目 駄目", "脳みそ")
+        val configs = AiTranslationConfigs(model = "north-small-translate-1.0", targetLanguage = "한국어")
+        val translationKey = AITranslationKey.calculate(configs, song, lines)
+        assertNotEquals(
+            AITranslationKey.pronunciation(song, lines, policyRevision = "old"),
+            AITranslationKey.pronunciation(song, lines, policyRevision = "new"),
+        )
+        assertEquals(translationKey, AITranslationKey.calculate(configs, song, lines))
+    }
+
+    @Test fun changingProviderOrPromptDoesNotReuseStaleModelTranslation() {
+        val song = Song(name = "IRIS OUT", artist = "Kenshi Yonezu")
+        val lines = listOf("駄目 駄目", "脳みそ")
+        val cohere = AiTranslationConfigs(model = "north-small-translate-1.0",
+            baseUrl = "https://api.cohere.ai/compatibility/v1", targetLanguage = "한국어")
+        val nvidia = cohere.copy(model = "mistral-large", baseUrl = "https://integrate.api.nvidia.com/v1")
+        assertNotEquals(AITranslationKey.calculate(cohere, song, lines),
+            AITranslationKey.calculate(nvidia, song, lines))
+        assertNotEquals(AITranslationKey.calculate(cohere, song, lines),
+            AITranslationKey.calculate(cohere.copy(prompt = "literary tone"), song, lines))
+    }
+
+    @Test fun modelSamplingChangesMustNotReuseAnOlderTranslation() {
+        val song = Song(name = "IRIS OUT")
+        val lines = listOf("駄目")
+        val base = AiTranslationConfigs(model = "gemini", targetLanguage = "한국어")
+        val original = AITranslationKey.calculate(base, song, lines)
+        assertNotEquals(original, AITranslationKey.calculate(
+            base.copy(temperature = 0.2f), song, lines,
+        ))
+        assertNotEquals(original, AITranslationKey.calculate(
+            base.copy(topP = 0.7f), song, lines,
+        ))
+        assertNotEquals(original, AITranslationKey.calculate(
+            base.copy(maxTokens = 2048), song, lines,
+        ))
+        assertNotEquals(original, AITranslationKey.calculate(
+            base.copy(presencePenalty = 0f), song, lines,
+        ))
+        assertNotEquals(original, AITranslationKey.calculate(
+            base.copy(frequencyPenalty = 0f), song, lines,
+        ))
+    }
+
+    @Test fun phoneticCacheDoesNotDependOnTranslationProvider() {
+        val song = Song(name = "IRIS OUT", artist = "Kenshi Yonezu")
+        val lines = listOf("駄目 駄目", "脳みそ")
+        assertEquals(AITranslationKey.pronunciation(song, lines),
+            AITranslationKey.pronunciation(song, lines))
+        assertNotEquals(AITranslationKey.pronunciation(song, lines),
+            AITranslationKey.calculate(AiTranslationConfigs(), song, lines))
+    }
+}

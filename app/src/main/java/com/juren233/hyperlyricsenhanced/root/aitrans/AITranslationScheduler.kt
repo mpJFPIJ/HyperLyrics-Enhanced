@@ -14,12 +14,16 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import java.util.ArrayDeque
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicInteger
+
+/** Keeps a pre-deletion request separate from a fresh visit to the same song. */
+internal data class AiTranslationJobKey(
+    val contentId: String,
+    val ticket: AiCacheWriteTicket,
+)
 
 /** Bounded background scheduler for AI requests during aggressive song switching. */
 internal class AITranslationScheduler(
     private val cache: AITranslationCache,
-    private val generation: AtomicInteger,
     private val maxRunning: Int,
     private val maxPending: Int
 ) {
@@ -29,19 +33,21 @@ internal class AITranslationScheduler(
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val lock = Any()
-    private val jobs = ConcurrentHashMap<String, TranslationJob>()
+    private val jobs = ConcurrentHashMap<AiTranslationJobKey, TranslationJob>()
     private val pending = ArrayDeque<TranslationJob>()
     private var running = 0
 
     fun getOrEnqueue(
-        key: String,
+        key: AiTranslationJobKey,
         configs: AiTranslationConfigs,
         song: Song,
-        originalLines: List<String>
+        originalLines: List<String>,
+        onProgress: ((AiTranslationProgress) -> Unit)? = null,
     ): Deferred<List<TranslationItem>?> {
         synchronized(lock) {
             jobs[key]?.let {
-                HookLogger.d(TAG, "复用翻译任务: song=${song.name}, key=$key")
+                if (onProgress != null) it.onProgress = onProgress
+                HookLogger.d(TAG, "复用翻译任务: song=${song.name}, key=${key.contentId}")
                 return it.deferred
             }
 
@@ -51,7 +57,7 @@ internal class AITranslationScheduler(
                 configs = configs,
                 song = song,
                 originalLines = originalLines,
-                generation = generation.get()
+                onProgress = onProgress,
             )
             jobs[key] = job
             pending.addLast(job)
@@ -75,6 +81,34 @@ internal class AITranslationScheduler(
                 HookLogger.d(TAG, "取消等待中的翻译任务: song=${job.songName}")
             }
         }
+    }
+
+    /** Pending output may depend on a legacy key even if its own cache row does not exist. */
+    fun cancelSong(removed: AiCacheScope) = cancelMatching { job ->
+        val scope = job.key.ticket.scope
+        scope.groupId == removed.groupId || scope.keys.any(removed.keys::contains)
+    }
+
+    private fun cancelMatching(matches: (TranslationJob) -> Boolean) {
+        val toCancel = synchronized(lock) {
+            pending.removeAll { job ->
+                if (!matches(job)) return@removeAll false
+                job.state = TranslationJobState.CANCELLED
+                jobs.remove(job.key, job)
+                job.deferred.complete(null)
+                true
+            }
+            jobs.values.mapNotNull { job ->
+                if (!matches(job) || job.state != TranslationJobState.RUNNING)
+                    return@mapNotNull null
+                job.state = TranslationJobState.CANCELLED
+                jobs.remove(job.key, job)
+                running = (running - 1).coerceAtLeast(0)
+                job.deferred.cancel(CancellationException("Song translation cleared"))
+                job.coroutineJob
+            }.also { dispatchNextLocked() }
+        }
+        toCancel.forEach { it.cancel() }
     }
 
     fun releaseForReload() {
@@ -131,13 +165,17 @@ internal class AITranslationScheduler(
 
     private suspend fun runJob(job: TranslationJob) {
         try {
+            cache.ensureCurrent(job.key.ticket)
             val apiResults =
-                OpenAiTranslationClient.request(job.configs, job.song, job.originalLines)
+                OpenAiTranslationClient.request(job.configs, job.song, job.originalLines) {
+                    job.onProgress?.invoke(it)
+                }
             if (job.state == TranslationJobState.CANCELLED) return
-            if (!apiResults.isNullOrEmpty() && job.generation == generation.get()) {
-                HookLogger.d(TAG, "翻译任务完成: song=${job.songName}, cached=true")
-                cache.putMemory(job.key, apiResults)
-                cache.saveToDb(job.key, apiResults)
+            if (!apiResults.isNullOrEmpty()) {
+                val saved = cache.saveToDb(
+                    job.key.contentId, apiResults, job.song, job.key.ticket,
+                )
+                HookLogger.d(TAG, "翻译任务完成: song=${job.songName}, cached=$saved")
             }
             job.state = TranslationJobState.COMPLETED
             job.deferred.complete(apiResults)
@@ -160,12 +198,12 @@ internal class AITranslationScheduler(
     }
 
     private data class TranslationJob(
-        val key: String,
+        val key: AiTranslationJobKey,
         val songName: String,
         val configs: AiTranslationConfigs,
         val song: Song,
         val originalLines: List<String>,
-        val generation: Int,
+        @Volatile var onProgress: ((AiTranslationProgress) -> Unit)? = null,
         val deferred: CompletableDeferred<List<TranslationItem>?> = CompletableDeferred(),
         var coroutineJob: Job? = null,
         @Volatile

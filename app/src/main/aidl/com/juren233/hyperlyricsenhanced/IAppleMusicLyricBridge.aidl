@@ -17,4 +17,6 @@ oneway interface IAppleMusicLyricBridge {
         String contentType,
         String source
     );
+    // Preserve an originating playback visit across async source work and Binder delivery.
+    void onSongChangedForVisit(in byte[] compressedSong, long visitId);
 }

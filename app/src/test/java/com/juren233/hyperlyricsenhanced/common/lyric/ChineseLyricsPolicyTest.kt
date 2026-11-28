@@ -9,6 +9,14 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ChineseLyricsPolicyTest {
+    @Test fun chineseDominantSongMayStillTranslateExplicitJapaneseKanaRows() {
+        val lines = List(9) { "感谢你曾来过" } + "君の名は"
+        assertTrue(ChineseLyricsPolicy.isFullyChineseTexts(lines))
+        assertTrue(ChineseLyricsPolicy.permitsOnlineTranslation("君の名は", true))
+        assertFalse(ChineseLyricsPolicy.permitsOnlineTranslation("感谢你曾来过", true))
+        assertFalse(ChineseLyricsPolicy.permitsOnlineTranslation("Program by Someone", true))
+    }
+
 
     @Test
     fun `fully chinese lyrics are detected`() {

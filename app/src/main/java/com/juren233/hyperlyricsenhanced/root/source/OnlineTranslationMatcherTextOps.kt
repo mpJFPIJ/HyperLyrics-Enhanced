@@ -72,20 +72,25 @@ internal fun OnlineTranslationMatcher.extractBracketedSegments(text: String): Pa
 internal fun OnlineTranslationMatcher.similarity(first: String, second: String): Double {
     if (first == second) return 1.0
     if (first.isEmpty() || second.isEmpty()) return 0.0
-    val longerLength = max(first.length, second.length)
-    if ((first.contains(second) || second.contains(first)) && min(first.length, second.length) >= 4) {
-        return min(first.length, second.length).toDouble() / longerLength
+    val firstLength = first.codePointCount(0, first.length)
+    val secondLength = second.codePointCount(0, second.length)
+    val longerLength = max(firstLength, secondLength)
+    if ((first.contains(second) || second.contains(first)) && min(firstLength, secondLength) >= 4) {
+        return min(firstLength, secondLength).toDouble() / longerLength
     }
     return 1.0 - levenshteinDistance(first, second).toDouble() / longerLength
 }
 
 internal fun OnlineTranslationMatcher.levenshteinDistance(first: String, second: String): Int {
-    var previous = IntArray(second.length + 1) { it }
-    var current = IntArray(second.length + 1)
-    for (firstIndex in first.indices) {
+    // One supplementary Han character is one lyric character, not two UTF-16 edits.
+    val firstPoints = first.codePoints().toArray()
+    val secondPoints = second.codePoints().toArray()
+    var previous = IntArray(secondPoints.size + 1) { it }
+    var current = IntArray(secondPoints.size + 1)
+    for (firstIndex in firstPoints.indices) {
         current[0] = firstIndex + 1
-        for (secondIndex in second.indices) {
-            val substitutionCost = if (first[firstIndex] == second[secondIndex]) 0 else 1
+        for (secondIndex in secondPoints.indices) {
+            val substitutionCost = if (firstPoints[firstIndex] == secondPoints[secondIndex]) 0 else 1
             current[secondIndex + 1] = minOf(
                 current[secondIndex] + 1,
                 previous[secondIndex + 1] + 1,
@@ -96,7 +101,7 @@ internal fun OnlineTranslationMatcher.levenshteinDistance(first: String, second:
         previous = current
         current = swap
     }
-    return previous[second.length]
+    return previous[secondPoints.size]
 }
 
 internal data class Candidate(

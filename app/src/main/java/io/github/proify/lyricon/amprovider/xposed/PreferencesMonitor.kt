@@ -16,6 +16,13 @@ object PreferencesMonitor {
     private lateinit var context: Context
     private lateinit var hookResolver: AppleMusicHookResolver
     private val pronunciationSnapshot = AtomicReference<Boolean?>()
+    // A real Apple toggle setter has priority over an opt-in three-line layout.
+    // Unset means that the native menu has not been changed this process.
+    private val translationToggleEvent = AtomicReference<Boolean?>()
+    private val pronunciationToggleEvent = AtomicReference<Boolean?>()
+
+    fun latestTranslationToggleEvent(): Boolean? = translationToggleEvent.get()
+    fun latestPronunciationToggleEvent(): Boolean? = pronunciationToggleEvent.get()
     var listener: Listener? = null
 
     internal fun initialize(context: Context, hookResolver: AppleMusicHookResolver) {
@@ -26,11 +33,13 @@ object PreferencesMonitor {
     }
 
     fun notifyTranslationSelectedChanged(selected: Boolean) {
+        translationToggleEvent.set(selected)
         listener?.onTranslationSelectedChanged(selected)
     }
 
     fun notifyPronunciationSelectedChanged(selected: Boolean) {
         pronunciationSnapshot.set(selected)
+        pronunciationToggleEvent.set(selected)
         listener?.onPronunciationSelectedChanged(selected)
     }
 

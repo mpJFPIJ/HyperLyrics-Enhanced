@@ -58,6 +58,8 @@ internal class AppleMissingLyricsHooks(
         get() = runtime.mainHandler
 
     val store = AppleMissingLyricsStore()
+    /** Also guards the disk-backed store from cleared or asynchronously decoded old payloads. */
+    internal val supplementReceiptTrack = AppleSupplementReceiptTrack()
 
     internal val nativeParser by lazy { AppleMissingLyricsNativeParser(runtime) }
 

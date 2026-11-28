@@ -15,7 +15,72 @@ import com.juren233.hyperlyricsenhanced.lyric.model.Song
 import io.github.proify.lyricon.amprovider.xposed.model.AppleSong
 import kotlinx.serialization.ExperimentalSerializationApi
 import java.io.File
+import java.io.FileOutputStream
+import java.io.IOException
+import java.io.OutputStream
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
+import java.security.MessageDigest
 import java.util.Locale
+
+/** Reuse established flat cache names when safe; never interpret an incoming
+ * song ID as a relative/absolute filesystem path or an overlong filename. */
+internal object AppleSongCacheFilePolicy {
+    private val hashedNamePrefix = Regex("id_[0-9a-f]{64}")
+
+    fun fileName(id: String): String {
+        val direct = "$id.json.gz"
+        val safe = id.isNotBlank() && id != "." && id != ".." &&
+            !hashedNamePrefix.matches(id) &&
+            id.none { it == '/' || it == '\\' || Character.isISOControl(it) } &&
+            direct.toByteArray(Charsets.UTF_8).size <= 240
+        if (safe) return direct
+        val bytes = MessageDigest.getInstance("SHA-256").digest(id.toByteArray(Charsets.UTF_8))
+        return "id_" + bytes.joinToString("") { byte ->
+            val value = byte.toInt() and 0xff
+            HEX[value ushr 4].toString() + HEX[value and 0x0f]
+        } + ".json.gz"
+    }
+
+    private const val HEX = "0123456789abcdef"
+}
+
+/** Publish a fully written cache file in one filesystem operation. A failed
+ * compression/write/move must leave the prior cache record intact. */
+internal object AppleSongCacheAtomicFile {
+    fun replace(target: File, contents: ByteArray) {
+        replaceWith(target) { it.write(contents) }
+    }
+
+    fun replaceWith(target: File, writeContents: (OutputStream) -> Unit) {
+        val parent = target.absoluteFile.parentFile
+            ?: throw IOException("Song cache target has no parent directory")
+        if (!parent.isDirectory && !parent.mkdirs()) {
+            throw IOException("Could not initialize song cache directory")
+        }
+        // Staging beside the destination keeps the rename on one filesystem.
+        // Random names avoid writers in separate processes sharing a temp file.
+        val staged = File.createTempFile(".song-cache-", ".pending", parent)
+        try {
+            FileOutputStream(staged).use { stream ->
+                writeContents(stream)
+            }
+            // This reconstructible cache is sometimes saved on the player
+            // thread; forced flash fsync on every update would add UI latency.
+            // The closed staged file is published only after all bytes arrive.
+            // Do not fall back to a non-atomic copy/truncation on a provider
+            // that cannot guarantee an atomic replacement.
+            Files.move(
+                staged.toPath(),
+                target.toPath(),
+                StandardCopyOption.ATOMIC_MOVE,
+                StandardCopyOption.REPLACE_EXISTING,
+            )
+        } finally {
+            staged.delete()
+        }
+    }
+}
 
 object DiskSongManager {
     /**
@@ -67,9 +132,10 @@ object DiskSongManager {
                 generationCounter.incrementAndGet()
             }
             val written = runCatching {
-                getFile(id)
-                    .also { it.parentFile?.mkdirs() }
-                    .writeBytes(string.toByteArray(Charsets.UTF_8).deflate())
+                AppleSongCacheAtomicFile.replace(
+                    getFile(id),
+                    string.toByteArray(Charsets.UTF_8).deflate(),
+                )
             }.isSuccess
             synchronized(decodedSongs) {
                 generationCounter.incrementAndGet()
@@ -121,11 +187,14 @@ object DiskSongManager {
     fun saveMissingLyrics(song: Song): Boolean {
         val id = song.id?.takeIf(String::isNotBlank) ?: return false
         val string = json.encodeToString(song)
-        return runCatching {
-            getMissingLyricsFile(id)
-                .also { it.parentFile?.mkdirs() }
-                .writeBytes(string.toByteArray(Charsets.UTF_8).deflate())
-        }.isSuccess
+        return synchronized(writeLock) {
+            runCatching {
+                AppleSongCacheAtomicFile.replace(
+                    getMissingLyricsFile(id),
+                    string.toByteArray(Charsets.UTF_8).deflate(),
+                )
+            }.isSuccess
+        }
     }
 
     @OptIn(ExperimentalSerializationApi::class)
@@ -174,14 +243,16 @@ object DiskSongManager {
         return decoded
     }
 
-    fun deleteMissingLyrics(id: String): Boolean = runCatching {
-        val file = getMissingLyricsFile(id)
-        !file.exists() || file.delete()
-    }.getOrDefault(false)
+    fun deleteMissingLyrics(id: String): Boolean = synchronized(writeLock) {
+        runCatching {
+            val file = getMissingLyricsFile(id)
+            !file.exists() || file.delete()
+        }.getOrDefault(false)
+    }
 
     //fun hasCache(id: String): Boolean = getFile(id).exists()
-    private fun getFile(id: String): File = File(baseDir, "$id.json.gz")
+    private fun getFile(id: String): File = File(baseDir, AppleSongCacheFilePolicy.fileName(id))
 
     private fun getMissingLyricsFile(id: String): File =
-        File(missingLyricsBaseDir, "$id.json.gz")
+        File(missingLyricsBaseDir, AppleSongCacheFilePolicy.fileName(id))
 }

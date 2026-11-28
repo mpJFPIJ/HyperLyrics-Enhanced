@@ -7,17 +7,23 @@ package io.github.proify.lyricon.amprovider.xposed
 
 /** Positive native availability only; pending/empty results remain owned by the takeover gate. */
 internal class AppleNativeLyricsKnowledge(private val limit: Int) {
-    private val adamIds = mutableSetOf<String>()
-    private val contentIds = mutableSetOf<String>()
+    private val adamIds = LinkedHashSet<String>()
+    private val contentIds = LinkedHashSet<String>()
+
+    private fun rememberRecent(keys: MutableSet<String>, key: String) {
+        keys.remove(key)
+        keys.add(key)
+        while (keys.size > limit.coerceAtLeast(0)) {
+            val oldest = keys.iterator()
+            oldest.next()
+            oldest.remove()
+        }
+    }
 
     @Synchronized
     fun remember(adamId: String, contentId: String?) {
-        if (adamIds.size >= limit || contentIds.size >= limit) {
-            adamIds.clear()
-            contentIds.clear()
-        }
-        adamIds.add(adamId)
-        contentId?.let(contentIds::add)
+        rememberRecent(adamIds, adamId)
+        contentId?.let { rememberRecent(contentIds, it) }
     }
 
     @Synchronized
@@ -50,15 +56,23 @@ internal class AppleLyricsSourceSelection {
  */
 internal class AppleLyricsNativeAlternatives(private val limit: Int) {
     private val pointers = mutableMapOf<String, Any>()
-    private val timing = mutableMapOf<String, AppleNativeLyricsTimingStats>()
+    private val timing = LinkedHashMap<String, AppleNativeLyricsTimingStats>()
 
     @Synchronized fun pointer(songId: String): Any? = pointers[songId]
     @Synchronized fun rememberPointer(songId: String, pointer: Any) { pointers[songId] = pointer }
     @Synchronized fun timing(songId: String): AppleNativeLyricsTimingStats? = timing[songId]
     @Synchronized fun rememberTiming(songId: String, contentId: String, stats: AppleNativeLyricsTimingStats) {
-        if (timing.size >= limit) timing.clear()
-        timing[songId] = stats
-        timing[contentId] = stats
+        fun rememberRecent(key: String) {
+            timing.remove(key)
+            timing[key] = stats
+            while (timing.size > limit.coerceAtLeast(0)) {
+                val iterator = timing.keys.iterator()
+                iterator.next()
+                iterator.remove()
+            }
+        }
+        rememberRecent(songId)
+        rememberRecent(contentId)
     }
     @Synchronized fun retainTrack(songId: String) {
         pointers.keys.removeAll { it != songId }

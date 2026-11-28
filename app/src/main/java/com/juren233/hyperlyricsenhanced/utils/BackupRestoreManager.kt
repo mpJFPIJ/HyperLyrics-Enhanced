@@ -28,7 +28,9 @@ object BackupRestoreManager {
         val prefs = context.getSharedPreferences(UIConstants.PREF_NAME, Context.MODE_PRIVATE)
         val config = JSONObject()
         prefs.all.forEach { (key, value) ->
-            if (key == RootConstants.KEY_HOOK_AI_TRANS_API_KEY) return@forEach
+            if (key == RootConstants.KEY_HOOK_AI_TRANS_API_KEY ||
+                key == RootConstants.KEY_HOOK_AI_TRANS_API_KEYS
+            ) return@forEach
             when (value) {
                 is Boolean -> config.put(key, value)
                 is Int -> config.put(key, value)
@@ -60,7 +62,8 @@ object BackupRestoreManager {
                     val key = keys.next()
                     val value = config.get(key)
                     if (key == "key_send_normal_notification" || key == "key_send_focus_notification" || key == "key_persistent_foreground"
-                        || key == RootConstants.KEY_HOOK_AI_TRANS_API_KEY) continue
+                        || key == RootConstants.KEY_HOOK_AI_TRANS_API_KEY
+                        || key == RootConstants.KEY_HOOK_AI_TRANS_API_KEYS) continue
                     if (key == ServiceConstants.KEY_NOTIFICATION_WHITELIST ||
                         key == RootConstants.KEY_HOOK_ISLAND_ALBUM_COVER_STYLE_APP_WHITELIST
                     ) {

@@ -2,6 +2,7 @@
 
 import com.juren233.hyperlyricsenhanced.root.utils.HookLogger
 import com.juren233.hyperlyricsenhanced.lyric.model.Song
+import com.juren233.hyperlyricsenhanced.common.lyric.RomanizationPolicy
 
 /** Applies validated translation items back to lyric lines. */
 internal object AITranslationApplicator {
@@ -11,19 +12,45 @@ internal object AITranslationApplicator {
         forceOverride: Boolean = false
     ): Song {
         var appliedCount = 0
+        val chineseDominant = AIPronunciationPolicy.isChineseDominant(song)
         val translationsByIndex = transItems.associateBy { it.index }
         val newLyrics = song.lyrics?.mapIndexed { index, line ->
             val transText = translationsByIndex[index]?.trans?.trim()
 
-            if (!transText.isNullOrBlank()
-                && (forceOverride || line.translation.isNullOrBlank())
-                && transText.lowercase() != line.text?.trim()?.lowercase()
+            val shouldReplaceTranslation = !transText.isNullOrBlank() &&
+                (forceOverride || line.translation.isNullOrBlank()) &&
+                transText.lowercase() != line.text?.trim()?.lowercase()
+            // Preserve an original reading in the source model, but display
+            // newly requested Korean phonetics instead of Latin romaji.
+            // Invalid AI output never replaces a valid existing pronunciation.
+            val hangulPronunciation = if (AIPronunciationPolicy.eligibleForeignLine(
+                    line.text.orEmpty(), chineseDominant,
+                )) RomanizationPolicy.sanitizeHangulSupplement(
+                    line.text, translationsByIndex[index]?.roma,
+                ) else null
+            val preferredPronunciation = hangulPronunciation
+                ?: line.roma?.takeIf(String::isNotBlank)
+            val provenance = if (hangulPronunciation != null)
+                "AI_GENERATED_UNVERIFIED" else line.pronunciationStatus
+            val readingChanged = preferredPronunciation != null &&
+                preferredPronunciation != line.roma
+            if (shouldReplaceTranslation ||
+                readingChanged ||
+                (hangulPronunciation != null && line.pronunciationStatus != provenance)
             ) {
-                appliedCount++
-                line.copy(translation = transText, translationWords = null)
-            } else {
-                line
-            }
+                if (shouldReplaceTranslation) appliedCount++
+                line.copy(
+                    translation = if (shouldReplaceTranslation) transText else line.translation,
+                    translationWords = if (shouldReplaceTranslation) null else line.translationWords,
+                    roma = preferredPronunciation,
+                    // A corrected reading invalidates any prior per-word and
+                    // source-span projection. Otherwise an older karaoke map
+                    // survives alongside the newly generated Hangul text.
+                    pronunciationWords = if (readingChanged) null else line.pronunciationWords,
+                    pronunciationSpans = if (readingChanged) null else line.pronunciationSpans,
+                    pronunciationStatus = provenance,
+                )
+            } else line
         }
         HookLogger.d(
             "AITranslationApplicator",

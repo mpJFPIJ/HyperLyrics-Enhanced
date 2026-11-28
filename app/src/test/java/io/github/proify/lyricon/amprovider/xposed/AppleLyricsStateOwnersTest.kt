@@ -20,7 +20,7 @@ class AppleLyricsStateOwnersTest {
         lyrics = listOf(RichLyricLine(begin = 0, end = 1000, text = "Hello", translation = translation)),
     )
 
-    @Test fun `knowledge keeps content and adam aliases and bounded clearing`() {
+    @Test fun `knowledge keeps content and adam aliases with bounded oldest eviction`() {
         val knowledge = AppleNativeLyricsKnowledge(2)
         knowledge.remember("1", "a")
         assertTrue(knowledge.contains("a", null, null))
@@ -30,7 +30,30 @@ class AppleLyricsStateOwnersTest {
         knowledge.remember("2", "b")
         knowledge.remember("3", "c")
         assertFalse(knowledge.contains("a", "1", null))
+        assertTrue(knowledge.contains("b", "2", null))
         assertTrue(knowledge.contains("c", null, null))
+        knowledge.remember("2", "b")
+        knowledge.remember("4", "d")
+        assertTrue(knowledge.contains("b", "2", null))
+        assertFalse(knowledge.contains("c", "3", null))
+        assertTrue(knowledge.contains("d", "4", null))
+    }
+
+    @Test fun `native timing aliases evict the oldest only and refresh reobserved owners`() {
+        val alternatives = AppleLyricsNativeAlternatives(4)
+        val a = AppleNativeLyricsTimingStats(lineCount = 1, wordTimedLineCount = 1)
+        val b = AppleNativeLyricsTimingStats(lineCount = 2, wordTimedLineCount = 2)
+        val c = AppleNativeLyricsTimingStats(lineCount = 3, wordTimedLineCount = 3)
+        alternatives.rememberTiming("song-a", "content-a", a)
+        alternatives.rememberTiming("song-b", "content-b", b)
+        alternatives.rememberTiming("song-b", "content-b", b)
+        alternatives.rememberTiming("song-c", "content-c", c)
+        assertNull(alternatives.timing("song-a"))
+        assertNull(alternatives.timing("content-a"))
+        assertEquals(b, alternatives.timing("song-b"))
+        assertEquals(b, alternatives.timing("content-b"))
+        assertEquals(c, alternatives.timing("song-c"))
+        assertEquals(c, alternatives.timing("content-c"))
     }
 
     @Test fun `manual selection survives same track but not a b a`() {

@@ -31,13 +31,14 @@ class AppleLyricsPresentationUpdateTest {
         assertEquals(1L, first.update.revision)
     }
 
-    @Test fun `source metadata change advances receipt without requesting whole page rebind`() {
+    @Test fun `source metadata change updates provider without invalidating unchanged visual rows`() {
         val store = AppleNativeOnlineTranslationStore()
         val first = store.receive(song())
         val second = store.receive(song(source = "NE"))
         assertTrue(second.updated)
         assertFalse(second.displayContentChanged)
-        assertEquals(requireNotNull(first.update.revision) + 1, second.update.revision)
+        assertEquals(first.update.revision, second.update.revision)
+        assertTrue(store.isCurrentRevision("a", requireNotNull(first.update.revision)))
         assertEquals("NE", store.translationSource("a"))
     }
 

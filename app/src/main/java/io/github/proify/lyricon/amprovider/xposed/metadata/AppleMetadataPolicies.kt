@@ -7,6 +7,7 @@
 package io.github.proify.lyricon.amprovider.xposed
 
 import android.app.Notification
+import io.github.proify.lyricon.amprovider.xposed.internal.WeakIdentityMap
 
 internal fun inAppPlaybackItemAccess(
     contract: InAppPlaybackItemContract,
@@ -528,15 +529,12 @@ internal fun appleNativeSupplementTracks(
 }
 
 internal fun shouldCompleteAppleLyricsProgrammaticRecenter(
-    suspendedForScroll: Boolean,
     scrollState: Int,
     pendingTargetPosition: Int?,
     focusPositions: Set<Int>,
-): Boolean =
-    suspendedForScroll &&
-        scrollState == 0 &&
-        pendingTargetPosition != null &&
-        pendingTargetPosition in focusPositions
+    visiblePositions: Set<Int>,
+): Boolean = scrollState == 0 && pendingTargetPosition != null &&
+    pendingTargetPosition in focusPositions && pendingTargetPosition in visiblePositions
 
 internal fun appleLyricsBlurFocusPositions(
     activePositions: Set<Int>,
@@ -551,12 +549,189 @@ internal fun appleLyricsBlurFocusPositions(
     return activePositions + trailingWritersCredits
 }
 
+/** A host may report both outgoing and incoming karaoke rows as active.
+ * Keep the outgoing visual focus until it actually leaves the native set. */
+internal object AppleLyricsBlurTransitionPolicy {
+    fun singleActiveFocus(nativeActive: Set<Int>, previousFocus: Int?): Int? =
+        previousFocus?.takeIf(nativeActive::contains) ?: nativeActive.minOrNull()
+
+    /** A valid native song clock wins over a lingering outgoing active row.
+     * Without fresh clock proof, retain only a previously observed focus.
+     * A new/revised presentation with multiple active rows and no previous
+     * focus is ambiguous: clear our blur instead of dimming an arbitrary row. */
+    fun clockAwareFocus(
+        nativeActive: Set<Int>,
+        playbackAdapterPosition: Int?,
+        previousFocus: Int?,
+    ): Int? = playbackAdapterPosition?.takeIf(nativeActive::contains)
+        ?: previousFocus?.takeIf(nativeActive::contains)
+        ?: nativeActive.singleOrNull()
+
+    /** A failed adapter reflection is not proof that the last trusted focus
+     * left the native active set. The caller may clear this frame's custom
+     * blur, but should retain the prior focus for the next real observation. */
+    fun nextFocusedPosition(
+        observedNativeActive: Set<Int>?,
+        resolvedFocus: Int?,
+        previousFocus: Int?,
+    ): Int? = if (observedNativeActive == null) previousFocus else resolvedFocus
+}
+
+/** Adapter row positions are NOT logical lyric indexes: Apple inserts
+ * instrumental/header/credits rows. Only a line observed in the native
+ * holder's own binding stack is a safe position↔clock mapping. */
+internal object AppleLyricsNativeWindowBindingPolicy {
+    fun presentationUnchanged(
+        observedSongId: String?, observedRevision: Long,
+        currentSongId: String?, currentRevision: Long,
+    ): Boolean = !observedSongId.isNullOrBlank() &&
+        observedSongId == currentSongId && observedRevision == currentRevision
+
+    /** Reading a *native line* clock is independent of whether Korean meaning
+     * was requested, returned usable text, or is hidden by the user. */
+    fun canObserveClock(
+        context: AppleLyricsBindingDiagnosticContext?, presentedSongId: String?,
+        presentedRevision: Long,
+    ): Boolean = !presentedSongId.isNullOrBlank() &&
+        context?.songId == presentedSongId && context?.adapterInstance != null &&
+        context?.presentationRevision == presentedRevision &&
+            context?.position?.let { it >= 0 } == true
+}
+
+internal class AppleLyricsTimedAdapterWindowIndex {
+    private companion object { const val MAX_BOUND_WINDOWS_PER_ADAPTER = 512 }
+    private data class Window(val beginMs: Long, val endMs: Long)
+    private var songId: String? = null
+    private var revision = -1L
+    // Native row numbers are local to each Apple RecyclerView adapter. Never
+    // let another adapter's row 6 borrow a different source line's time.
+    private val byAdapter = WeakIdentityMap<Any, MutableMap<Int, Window>>()
+
+    @Synchronized
+    fun remember(
+        currentSongId: String?,
+        currentRevision: Long,
+        adapterOwner: Any?,
+        adapterPosition: Int,
+        beginMs: Long,
+        endMs: Long,
+    ) {
+        if (currentSongId.isNullOrBlank() || adapterPosition < 0 || beginMs < 0L ||
+            endMs <= beginMs
+        ) return
+        // Only a real holder-bound adapter row can replace the time axis.
+        // Probes outside a bind must not clear every live adapter's windows.
+        adapterOwner ?: return
+        if (songId != currentSongId || revision != currentRevision) {
+            songId = currentSongId
+            revision = currentRevision
+            byAdapter.clear()
+        }
+        val windows = byAdapter[adapterOwner] ?: LinkedHashMap()
+        // A 514th bound lyric must not erase all 513 earlier, still-valid
+        // native clock proofs. Discard only the oldest actually bound row,
+        // and treat a holder rebind as fresh evidence for that same row.
+        windows.remove(adapterPosition)
+        while (windows.size >= MAX_BOUND_WINDOWS_PER_ADAPTER) {
+            val entries = windows.keys.iterator()
+            entries.next()
+            entries.remove()
+        }
+        windows[adapterPosition] = Window(beginMs, endMs)
+        byAdapter[adapterOwner] = windows
+    }
+
+    @Synchronized
+    fun matchesKnownWindow(
+        currentSongId: String?, currentRevision: Long, adapterOwner: Any?,
+        adapterPosition: Int, playbackPositionMs: Long?,
+    ): Boolean? {
+        if (songId != currentSongId || revision != currentRevision ||
+            playbackPositionMs == null
+        ) return null
+        val windows = adapterOwner?.let { byAdapter[it] } ?: return null
+        val window = windows[adapterPosition] ?: return null
+        return playbackPositionMs >= window.beginMs && playbackPositionMs < window.endMs
+    }
+
+    @Synchronized
+    fun focus(
+        currentSongId: String?,
+        currentRevision: Long,
+        adapterOwner: Any?,
+        nativeActive: Set<Int>,
+        playbackPositionMs: Long?,
+    ): Int? {
+        if (currentSongId != songId || currentRevision != revision ||
+            playbackPositionMs == null
+        ) return null
+        val windows = adapterOwner?.let { byAdapter[it] } ?: return null
+        var focusedPosition: Int? = null
+        var latestBeginMs = Long.MIN_VALUE
+        var ambiguous = false
+        nativeActive.forEach { position ->
+            val window = windows[position] ?: return@forEach
+            if (playbackPositionMs < window.beginMs || playbackPositionMs >= window.endMs)
+                return@forEach
+            when {
+                window.beginMs > latestBeginMs -> {
+                    latestBeginMs = window.beginMs
+                    focusedPosition = position
+                    ambiguous = false
+                }
+                window.beginMs == latestBeginMs -> {
+                    // Adapter position is a row ID, not a tiebreaking clock.
+                    // Never recenter to an arbitrary sibling with the same
+                    // native start or claim it owns a blank meaning veto.
+                    ambiguous = true
+                }
+            }
+        }
+        return focusedPosition.takeUnless { ambiguous }
+    }
+}
+
+internal object AppleLyricsBlurOwnershipPolicy {
+    fun shouldSkipZeroRadiusRequest(
+        radiusPx: Int,
+        previouslyBlurred: Boolean,
+        hasAppliedMode: Boolean,
+    ): Boolean = radiusPx <= 0 && !previouslyBlurred && !hasAppliedMode
+
+    fun shouldClearNativeEffect(
+        knownBlurred: Boolean,
+        hasAppliedMode: Boolean,
+        trackedBlurred: Boolean,
+    ): Boolean = knownBlurred || hasAppliedMode || trackedBlurred
+}
+
+/** Recovery is permitted only after the native follow has failed to settle;
+ * never override a lyric list being scrolled or browsed by the listener. */
+internal object AppleLyricsFollowRecoveryPolicy {
+    fun shouldRecover(
+        active: Set<Int>,
+        visible: Set<Int>,
+        scrollState: Int,
+        suspendedForBrowse: Boolean,
+        playing: Boolean,
+        nowMs: Long,
+        lastRecoveryAtMs: Long,
+        /** Single active native row is authoritative unless its clock disproves
+         * it; overlapping rows require an explicitly verified clock focus. */
+        focusTarget: Int? = active.singleOrNull(),
+    ): Boolean = playing && !suspendedForBrowse && scrollState == 0 &&
+        active.isNotEmpty() && visible.isNotEmpty() &&
+        focusTarget != null && focusTarget in active && focusTarget !in visible &&
+        (lastRecoveryAtMs == 0L || nowMs - lastRecoveryAtMs >= 4_000L)
+}
+
 internal fun shouldDeferAppleLyricsOutgoingBlur(
     isPendingOutgoing: Boolean,
     rowBottomY: Float?,
     currentZoneTopY: Float?,
+    currentFocusResolved: Boolean = false,
 ): Boolean =
-    isPendingOutgoing &&
+    isPendingOutgoing && !currentFocusResolved &&
         (rowBottomY == null || currentZoneTopY == null || rowBottomY > currentZoneTopY)
 
 internal fun resolvePlaybackPositionSource(
@@ -619,13 +794,20 @@ internal fun isAppleLyricsRequestPath(pathSegments: List<String>): Boolean =
     pathSegments.getOrNull(3) == "songs" &&
         pathSegments.lastOrNull()?.contains("lyrics") == true
 
-internal fun expandAppleLyricsPronunciationLanguages(original: List<String>): List<String> =
+internal fun expandAppleLyricsPronunciationLanguages(
+    original: List<String>,
+    hangulFirst: Boolean = false,
+): List<String> =
     (
+        // Apple's request uses an ordered language array. When the user asks
+        // for Hangul-first, advertise the official Japanese Hangul scripts
+        // before the host's original Latin candidates, without dropping them.
+        (if (hangulFirst) listOf("ja-Hang", "ja-Kore") else emptyList()) +
         original + listOf(
             "ja-Latn",
             "ko-Latn",
             "zh-Latn",
-        )
+        ) + (if (hangulFirst) emptyList() else listOf("ja-Hang", "ja-Kore"))
     )
         .map(String::trim)
         .filter(String::isNotEmpty)

@@ -19,6 +19,18 @@ import java.util.Locale
  */
 object ChineseLyricsPolicy {
 
+    /** A Chinese-dominant song may contain genuine Japanese lyrics. Source
+     * metadata/credits and Han-only rows remain protected, while explicit kana
+     * on an individual native row permits its matching online translation. */
+    fun permitsOnlineTranslation(text: String?, chineseDominant: Boolean): Boolean =
+        !chineseDominant || text.orEmpty().codePoints().anyMatch { codePoint ->
+            when (Character.UnicodeScript.of(codePoint)) {
+                Character.UnicodeScript.HIRAGANA,
+                Character.UnicodeScript.KATAKANA -> true
+                else -> false
+            }
+        }
+
     private val INTERJECTIONS = setOf(
         "oh", "ah", "aha", "ay", "ey", "eh", "heh", "hah", "uh", "um", "hm", "mm", "mhm",
         "ya", "yo", "ye", "yah", "yay", "yuh", "ayo", "wu", "woo", "wuh", "whoo", "whoa",

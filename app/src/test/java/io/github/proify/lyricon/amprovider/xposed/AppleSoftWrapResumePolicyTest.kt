@@ -1,5 +1,9 @@
 package io.github.proify.lyricon.amprovider.xposed
 
+import android.graphics.text.LineBreakConfig
+import android.graphics.text.LineBreaker
+import android.text.Layout
+import android.view.View
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -175,6 +179,74 @@ class AppleSoftWrapResumePolicyTest {
             readingAttached = true, sourceAttached = true, holderAttached = true,
             layoutPending = false, ownerCurrent = false,
         ) == AppleSoftWrapResumeDecision.REBIND)
+    }
+
+
+    @Test fun internalSoftWrapUsesTheSameKoreanFallbackAndBreakContractAsVisibleReadingView() {
+        assertEquals("ko-KR", AppleSoftWrapReadingLayoutPolicy.READING_LOCALE_TAG)
+        assertTrue(AppleSoftWrapReadingLayoutPolicy.INCLUDE_FONT_PADDING)
+        assertTrue(AppleSoftWrapReadingLayoutPolicy.USE_FALLBACK_LINE_SPACING)
+        assertEquals(
+            LineBreaker.BREAK_STRATEGY_HIGH_QUALITY,
+            AppleSoftWrapReadingLayoutPolicy.BREAK_STRATEGY,
+        )
+        assertEquals(
+            Layout.HYPHENATION_FREQUENCY_NONE,
+            AppleSoftWrapReadingLayoutPolicy.HYPHENATION_FREQUENCY,
+        )
+        assertEquals(
+            LineBreakConfig.LINE_BREAK_WORD_STYLE_PHRASE,
+            AppleSoftWrapReadingLayoutPolicy.LINE_BREAK_WORD_STYLE,
+        )
+    }
+
+    @Test fun readingStartsFromTheMeasuredNativeLineBottomAfterRemovingOnlyItsReservedGap() {
+        assertEquals(
+            120,
+            AppleSoftWrapReadingLayoutPolicy.readingTop(
+                sourceLineBottomWithReservedGap = 300,
+                reservedGapPx = 190,
+                topMarginPx = 10,
+            ),
+        )
+        assertEquals(
+            45,
+            AppleSoftWrapReadingLayoutPolicy.readingTop(
+                sourceLineBottomWithReservedGap = 100,
+                reservedGapPx = 60,
+                topMarginPx = 5,
+            ),
+        )
+    }
+
+    @Test fun changedNativeFontFallbackAndLineBreakSettingsRequireSoftWrapRebind() {
+        val changes = listOf(
+            original.copy(textLocaleTags = "ja-JP"),
+            original.copy(fontFeatureSettings = "kern"),
+            original.copy(fontVariationSettings = "'wght' 550"),
+            original.copy(includeFontPadding = false),
+            original.copy(elegantTextHeight = true),
+            original.copy(breakStrategy = LineBreaker.BREAK_STRATEGY_HIGH_QUALITY),
+            original.copy(hyphenationFrequency = Layout.HYPHENATION_FREQUENCY_NORMAL),
+            original.copy(justificationMode = original.justificationMode + 1),
+            original.copy(textDirection = View.TEXT_DIRECTION_FIRST_STRONG_LTR),
+            original.copy(lineBreakStyle = original.lineBreakStyle + 1),
+            original.copy(lineBreakWordStyle = LineBreakConfig.LINE_BREAK_WORD_STYLE_PHRASE),
+        )
+        changes.forEach { changed ->
+            assertEquals(
+                AppleSoftWrapResumeDecision.REBIND,
+                AppleSoftWrapResumePolicy.decision(
+                    saved = original,
+                    current = changed,
+                    readingAttached = true,
+                    sourceAttached = true,
+                    holderAttached = true,
+                    layoutPending = false,
+                    ownerCurrent = true,
+                ),
+            )
+        }
     }
 
     @Test fun sameWrapOffsetsButChangedTypefacePaddingOrGlyphWidthInvalidatesPainter() {

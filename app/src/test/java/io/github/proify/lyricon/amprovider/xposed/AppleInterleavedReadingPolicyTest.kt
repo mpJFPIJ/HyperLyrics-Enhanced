@@ -1129,13 +1129,20 @@ class AppleInterleavedReadingPolicyTest {
         ))
     }
 
-    @Test fun `incomplete or mismatched reading anchors cannot reorder source cells`() {
+    @Test fun `one isolated missing anchor stays on its measured row but mismatches cannot reorder cells`() {
         val cells = listOf(
             AppleVisualSourceCell("瞳孔", 0, 42),
             AppleVisualSourceCell("バチ開いて溺れ死にそう", 55, 98),
         )
-        assertNull(AppleInterleavedReadingPolicy.plan(source, pronunciation, cells,
-            spans.dropLast(1)))
+        // The sole missing 死にそう anchor is now recoverable: its Kanji and
+        // independently readable Kana remain within the same measured row.
+        // This is a whole-row sound, never proof of invented word clocks.
+        val recovered = requireNotNull(AppleInterleavedReadingPolicy.plan(
+            source, pronunciation, cells, spans.dropLast(1),
+        ))
+        assertEquals(listOf(0, 1), recovered.map { it.insertAfterSourceCell })
+        assertEquals(listOf("도코", "바치 히라이테 오보레 시니소"),
+            recovered.map { it.text })
         assertNull(AppleInterleavedReadingPolicy.plan(source, pronunciation, cells,
             spans.dropLast(1) + ApplePronunciationSourceToken(9, 13, "시니소", "違う")))
         assertNull(AppleInterleavedReadingPolicy.plan(source, pronunciation,

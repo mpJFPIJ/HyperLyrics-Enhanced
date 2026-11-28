@@ -12,6 +12,33 @@
 
 ## Maintainer checkpoint — 2026-11-28 (source only)
 
+### CI #309 test RED: two source-policy cases (awaiting rerun)
+
+The next coordinated CI run [#309](https://github.com/mpJFPIJ/HyperLyrics-Enhanced/actions/runs/46102719125)
+compiled the app and ran 3,586 JVM tests, with **2 failed / 5 skipped**.
+The raw JUnit XML reports identify two separate issues:
+
+1. A prior row-placement assertion expected `null` when the last
+   `死にそう` anchor was omitted. That expectation predates the explicitly
+   implemented one-Han-gap rule: with exact preceding anchors and complete
+   independent Kana proof, the missing sound is entirely owned by the
+   second measured Flexbox row. This is safely permitted *only as whole-row
+   phonetics*, not a fabricated per-word clock. The assertion now checks the
+   exact measured row order and texts; altered raw source identity and
+   mismatched anchors must still return `null`.
+2. `AppleTranslationFocusPolicy.select` vetoed a unique time-matched Korean
+   meaning when Apple's stale multi-active set also listed a future row
+   that already had its own candidate. The intended conservative veto is
+   for an active **source row without any Korean meaning candidate**; a
+   candidate excluded solely because its real timestamp is still in the
+   future must not invalidate the present candidate. The source guard now
+   checks whether the other adapter row is absent from *all* meaning
+   candidates, retaining the existing blank-meaning ambiguity tests.
+
+Both original assertions/observations are reproducible **RED** in the
+published run. The corrections have not yet been executed against Gradle,
+lint or a device; no APK was produced in #309.
+
 ### Final CI #308 compile-gate RED and source correction (awaiting rerun)
 
 The first actual integrated GitHub Actions run after the source-only period,

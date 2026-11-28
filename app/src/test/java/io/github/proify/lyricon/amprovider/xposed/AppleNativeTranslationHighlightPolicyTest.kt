@@ -202,6 +202,9 @@ class AppleNativeTranslationHighlightPolicyTest {
         )
         assertEquals(0, AppleTranslationFocusPolicy.select(rows, setOf(4, 5), 1_950L))
         assertEquals(1, AppleTranslationFocusPolicy.select(rows, setOf(4, 5), 2_250L))
+        // A truly untranslated native sibling is different from a future
+        // candidate that already has a valid, separately timed meaning.
+        assertNull(AppleTranslationFocusPolicy.select(rows.take(1), setOf(4, 5), 1_950L))
         assertNull(AppleTranslationFocusPolicy.select(rows, setOf(4, 5), null))
         assertEquals(0, AppleTranslationFocusPolicy.select(rows, null, 1_950L))
         assertNull(AppleTranslationFocusPolicy.select(rows, null, null))

@@ -98,7 +98,11 @@ internal object AppleTranslationFocusPolicy {
                 nativeActive.any { activePosition ->
                     timed.any { rows[it].adapterPosition == activePosition }
                 } && nativeActive.any { activePosition ->
-                    timed.none { rows[it].adapterPosition == activePosition }
+                    // A *missing meaning candidate*, not merely a future
+                    // (currently untimed) candidate, is the unsafe sibling.
+                    // Seek/scroll can leave that future row in Apple's active
+                    // set before its real word clock begins.
+                    rows.none { it.adapterPosition == activePosition }
                 }
             ) return null
             val corroborated = timed.filter { index ->

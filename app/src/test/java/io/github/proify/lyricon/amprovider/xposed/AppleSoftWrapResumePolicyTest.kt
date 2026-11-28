@@ -225,6 +225,7 @@ class AppleSoftWrapResumePolicyTest {
             original.copy(fontFeatureSettings = "kern"),
             original.copy(fontVariationSettings = "'wght' 550"),
             original.copy(includeFontPadding = false),
+            original.copy(fallbackLineSpacing = false),
             original.copy(elegantTextHeight = true),
             original.copy(breakStrategy = LineBreaker.BREAK_STRATEGY_HIGH_QUALITY),
             original.copy(hyphenationFrequency = Layout.HYPHENATION_FREQUENCY_NORMAL),

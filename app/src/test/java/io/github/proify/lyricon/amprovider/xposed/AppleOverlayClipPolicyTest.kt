@@ -32,6 +32,28 @@ class AppleOverlayClipPolicyTest {
         assertEquals(13, lost.bottomPx)
     }
 
+    @Test fun `inherited clipping is reported separately even when manual clipping adds nothing`() {
+        val inherited = AppleOverlayClipPolicy.clippedInkLoss(
+            inkTop = -8,
+            inkBottom = 173,
+            clipTop = 0,
+            clipBottom = 160,
+        )
+        assertEquals(8, inherited.topPx)
+        assertEquals(13, inherited.bottomPx)
+
+        val manual = AppleOverlayClipPolicy.addedInkLoss(
+            inkTop = -8,
+            inkBottom = 173,
+            inheritedClipTop = 0,
+            inheritedClipBottom = 160,
+            appliedClipTop = 0,
+            appliedClipBottom = 160,
+        )
+        assertEquals(0, manual.topPx)
+        assertEquals(0, manual.bottomPx)
+    }
+
     @Test fun `already inherited clipping is not falsely attributed to manual clip`() {
         val inherited = AppleOverlayClipPolicy.addedInkLoss(
             inkTop = -8, inkBottom = 173,

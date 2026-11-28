@@ -245,7 +245,7 @@ internal class AppleNativeSoftWrapReadingOverlay(
             fontVariationSettings = source.fontVariationSettings,
             includeFontPadding = source.includeFontPadding,
             fallbackLineSpacing = source.isFallbackLineSpacing,
-            elegantTextHeight = source.elegantTextHeight,
+            elegantTextHeight = source.isElegantTextHeight,
             breakStrategy = source.breakStrategy,
             hyphenationFrequency = source.hyphenationFrequency,
             justificationMode = source.justificationMode,

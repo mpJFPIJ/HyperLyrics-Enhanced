@@ -1658,6 +1658,9 @@ internal class AppleLineWidePronunciationRow {
                 // The native flexbox measures the layout; the holder overlay
                 // repaints the same glyphs without its horizontal gradient mask.
                 includeFontPadding = AppleSoftWrapReadingLayoutPolicy.INCLUDE_FONT_PADDING
+                setFallbackLineSpacing(
+                    AppleSoftWrapReadingLayoutPolicy.USE_FALLBACK_LINE_SPACING,
+                )
                 setSingleLine(false)
                 maxLines = Int.MAX_VALUE
                 ellipsize = null

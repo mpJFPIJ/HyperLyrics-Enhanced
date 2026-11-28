@@ -84,6 +84,20 @@ internal class AppleOverlayPaintOwnership {
 /** The holder's clip is not necessarily the first clip applied by Apple.
  * Report only ink lost *additionally* when our own hard clip is applied. */
 internal object AppleOverlayClipPolicy {
+    fun clippedInkLoss(
+        inkTop: Int,
+        inkBottom: Int,
+        clipTop: Int,
+        clipBottom: Int,
+    ): AppleOverlayAddedInkLoss {
+        val height = inkBottom - inkTop
+        if (height <= 0) return AppleOverlayAddedInkLoss(0, 0)
+        return AppleOverlayAddedInkLoss(
+            topPx = (clipTop - inkTop).coerceIn(0, height),
+            bottomPx = (inkBottom - clipBottom).coerceIn(0, height),
+        )
+    }
+
     fun addedInkLoss(
         inkTop: Int,
         inkBottom: Int,
@@ -92,15 +106,15 @@ internal object AppleOverlayClipPolicy {
         appliedClipTop: Int,
         appliedClipBottom: Int,
     ): AppleOverlayAddedInkLoss {
-        val height = inkBottom - inkTop
-        if (height <= 0) return AppleOverlayAddedInkLoss(0, 0)
-        val inheritedTop = (inheritedClipTop - inkTop).coerceIn(0, height)
-        val appliedTop = (appliedClipTop - inkTop).coerceIn(0, height)
-        val inheritedBottom = (inkBottom - inheritedClipBottom).coerceIn(0, height)
-        val appliedBottom = (inkBottom - appliedClipBottom).coerceIn(0, height)
+        val inherited = clippedInkLoss(
+            inkTop, inkBottom, inheritedClipTop, inheritedClipBottom,
+        )
+        val applied = clippedInkLoss(
+            inkTop, inkBottom, appliedClipTop, appliedClipBottom,
+        )
         return AppleOverlayAddedInkLoss(
-            topPx = (appliedTop - inheritedTop).coerceAtLeast(0),
-            bottomPx = (appliedBottom - inheritedBottom).coerceAtLeast(0),
+            topPx = (applied.topPx - inherited.topPx).coerceAtLeast(0),
+            bottomPx = (applied.bottomPx - inherited.bottomPx).coerceAtLeast(0),
         )
     }
 }
@@ -182,17 +196,21 @@ internal class AppleHangulReadingForeground(
             if (inheritedClipVisible && layout.lineCount > 0) {
                 if (canvas.getClipBounds(appliedClip)) {
                     sampledClip = true
-                    val metrics = reading.paint.fontMetricsInt
-                    val inkTop = AppleOverlayMappedTextOrigin.top(
+                    // Layout line bounds include fallback-font metrics and
+                    // TextView font padding; base TextPaint metrics alone can
+                    // under-report a Korean fallback glyph's vertical extent.
+                    val layoutTop = AppleOverlayMappedTextOrigin.top(
                         localRect.top, reading.totalPaddingTop,
-                    ) +
-                        layout.getLineBaseline(0) + metrics.top
-                    val inkBottom = AppleOverlayMappedTextOrigin.top(
+                    ) + layout.getLineTop(0)
+                    val layoutBottom = AppleOverlayMappedTextOrigin.top(
                         localRect.top, reading.totalPaddingTop,
-                    ) +
-                        layout.getLineBaseline(layout.lineCount - 1) + metrics.bottom
+                    ) + layout.getLineBottom(layout.lineCount - 1)
+                    val inheritedLoss = AppleOverlayClipPolicy.clippedInkLoss(
+                        layoutTop, layoutBottom,
+                        inheritedClip.top, inheritedClip.bottom,
+                    )
                     val added = AppleOverlayClipPolicy.addedInkLoss(
-                        inkTop, inkBottom,
+                        layoutTop, layoutBottom,
                         inheritedClip.top, inheritedClip.bottom,
                         appliedClip.top, appliedClip.bottom,
                     )
@@ -210,12 +228,14 @@ internal class AppleHangulReadingForeground(
                     // Keep lyric content and canvas objects out of the log.
                     // A posted bounded sample avoids traversing the holder's
                     // view tree from the middle of Canvas.draw().
-                    val summary = "hostH=${holderRoot.height} " +
+                    val summary = "extent=line_box hostH=${holderRoot.height} " +
                         "canvasBeforeTop=${inheritedClip.top} " +
                         "canvasBeforeBottom=${inheritedClip.bottom} " +
                         "canvasAfterTop=${appliedClip.top} " +
                         "canvasAfterBottom=${appliedClip.bottom} " +
-                        "inkTop=$inkTop inkBottom=$inkBottom " +
+                        "layoutTop=$layoutTop layoutBottom=$layoutBottom " +
+                        "inheritedLostTop=${inheritedLoss.topPx} " +
+                        "inheritedLostBottom=${inheritedLoss.bottomPx} " +
                         "manualLostTop=${added.topPx} " +
                         "manualLostBottom=${added.bottomPx} " +
                         "transformedAncestors=$transformedAncestors"

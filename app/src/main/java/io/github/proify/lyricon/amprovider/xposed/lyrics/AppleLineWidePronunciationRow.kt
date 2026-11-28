@@ -1648,20 +1648,27 @@ internal class AppleLineWidePronunciationRow {
                 // Any syllable with no verified native timing stays visibly dim.
                 setTextColor(Color.rgb(110, 110, 110))
                 typeface = sourceStyle.typeface
+                // These are Korean pronunciation rows even when the host
+                // source lyric is Japanese or the Apple Music UI is not Korean.
+                textLocales = android.os.LocaleList.forLanguageTags(
+                    AppleSoftWrapReadingLayoutPolicy.READING_LOCALE_TAG,
+                )
+                textDirection = View.TEXT_DIRECTION_FIRST_STRONG_LTR
                 gravity = Gravity.START
                 // The native flexbox measures the layout; the holder overlay
                 // repaints the same glyphs without its horizontal gradient mask.
-                includeFontPadding = true
+                includeFontPadding = AppleSoftWrapReadingLayoutPolicy.INCLUDE_FONT_PADDING
                 setSingleLine(false)
                 maxLines = Int.MAX_VALUE
                 ellipsize = null
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    breakStrategy = LineBreaker.BREAK_STRATEGY_HIGH_QUALITY
-                    hyphenationFrequency = Layout.HYPHENATION_FREQUENCY_NONE
+                    breakStrategy = AppleSoftWrapReadingLayoutPolicy.BREAK_STRATEGY
+                    hyphenationFrequency =
+                        AppleSoftWrapReadingLayoutPolicy.HYPHENATION_FREQUENCY
                 }
                 if (Build.VERSION.SDK_INT >= 33) {
                     setLineBreakWordStyle(
-                        android.graphics.text.LineBreakConfig.LINE_BREAK_WORD_STYLE_PHRASE,
+                        AppleSoftWrapReadingLayoutPolicy.LINE_BREAK_WORD_STYLE,
                     )
                 }
                 setTimedText(row.text, AppleInterleavedReadingTimingPolicy.project(

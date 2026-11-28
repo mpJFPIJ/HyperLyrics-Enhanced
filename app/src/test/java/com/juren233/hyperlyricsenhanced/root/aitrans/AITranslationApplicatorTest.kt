@@ -4,10 +4,50 @@ import com.juren233.hyperlyricsenhanced.lyric.model.RichLyricLine
 import com.juren233.hyperlyricsenhanced.lyric.model.LyricPronunciationSpan
 import com.juren233.hyperlyricsenhanced.lyric.model.LyricWordPronunciation
 import com.juren233.hyperlyricsenhanced.lyric.model.Song
+import com.juren233.hyperlyricsenhanced.lyric.model.lyricMetadataOf
+import com.juren233.hyperlyricsenhanced.common.lyric.LyricMetadataKeys
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AITranslationApplicatorTest {
+
+    @Test fun chineseDominantSongRejectsUnverifiedJapaneseReadingsOnChineseRows() {
+        val original = Song(lyrics = List(9) { index ->
+            RichLyricLine(text = "感谢你曾来过 $index")
+        } + RichLyricLine(text = "君の名は"))
+        val readings = original.lyrics.orEmpty().mapIndexed { index, _ ->
+            TranslationItem(index, roma = if (index == 9) "키미노 나와" else "칸샤니")
+        }
+        val result = AITranslationApplicator.apply(original, readings)
+        assertTrue(result.lyrics.orEmpty().take(9).all { it.roma == null })
+        assertEquals("키미노 나와", result.lyrics?.last()?.roma)
+    }
+
+    @Test fun appleJapaneseLanguageTagAllowsKanjiOnlyPronunciation() {
+        val original = Song(
+            metadata = lyricMetadataOf(
+                LyricMetadataKeys.APPLE_PRONUNCIATION_LANGUAGES to "ja-Kore",
+            ),
+            lyrics = listOf(RichLyricLine(text = "世界")),
+        )
+        val result = AITranslationApplicator.apply(original, listOf(
+            TranslationItem(0, roma = "세카이"),
+        ))
+        assertEquals("세카이", result.lyrics?.single()?.roma)
+    }
+
+    @Test fun appliesMixedJapaneseKoreanPhoneticsOnlyWhenKoreanOriginalIsPreserved() {
+        val song = Song(lyrics = listOf(RichLyricLine(text = "君の名は 사랑해")))
+        val accepted = AITranslationApplicator.apply(song, listOf(
+            TranslationItem(0, "너의 이름은 사랑해", "키미노 나와 사랑해"),
+        ))
+        assertEquals("키미노 나와 사랑해", accepted.lyrics?.single()?.roma)
+        val rejected = AITranslationApplicator.apply(song, listOf(
+            TranslationItem(0, "너의 이름은 사랑해", "키미노 나와"),
+        ))
+        assertEquals(null, rejected.lyrics?.single()?.roma)
+    }
 
     @Test fun replacingAiPronunciationInvalidatesOldWordAndSourceAlignment() {
         val line = RichLyricLine(
@@ -28,7 +68,7 @@ class AITranslationApplicatorTest {
     }
 
     @Test fun aiPhoneticsHaveProvenanceIndependentOfTranslation() {
-        val song = Song(lyrics = listOf(RichLyricLine(text = "未知語")))
+        val song = Song(lyrics = listOf(RichLyricLine(text = "未知語だ")))
         val translated = AITranslationApplicator.apply(
             song, listOf(TranslationItem(0, "알 수 없는 말", "미치고")),
         )

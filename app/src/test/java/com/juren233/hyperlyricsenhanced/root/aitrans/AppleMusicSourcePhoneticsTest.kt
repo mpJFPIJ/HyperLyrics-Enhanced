@@ -9,6 +9,23 @@ import org.junit.Test
 
 class AppleMusicSourcePhoneticsTest {
 
+    @Test fun unknownHiraganaParticleMustNotOverwriteAProvidedContextualReading() {
+        val source = "きみへ"
+        val incomplete = LocalJapanesePronunciation.generateLine(source) {
+            LineReadingResult(null, emptyList(), LineReadingStatus.MISSING_UNSUPPORTED)
+        }
+        assertEquals(LineReadingStatus.MISSING_UNSUPPORTED, incomplete.status)
+        val provided = RichLyricLine(
+            text = source, roma = "키미에", translation = "너에게",
+            words = listOf(LyricWord(text = "きみ"), LyricWord(text = "へ")),
+        )
+        val result = AppleMusicSourcePhonetics.attach(provided, source, incomplete)
+        assertEquals("키미에", result.roma)
+        assertEquals("AI_FALLBACK_UNVERIFIED", result.pronunciationStatus)
+        assertNull(result.pronunciationWords)
+        assertEquals("너에게", result.translation)
+    }
+
     @Test fun mixedJapaneseKanaCanUseExactNativeWordsWithoutFakingKanjiBoundaries() {
         val source = "駄目あい"
         val result = AppleMusicSourcePhonetics.attach(
@@ -78,6 +95,16 @@ class AppleMusicSourcePhoneticsTest {
         val result = AppleMusicSourcePhonetics.attach(line, text, missing)
         assertEquals(line.roma, result.roma)
         assertEquals("AI_FALLBACK_UNVERIFIED", result.pronunciationStatus)
+    }
+
+    @Test fun supplementaryHanMixedWithEnglishIsNotMisclassifiedAsEnglishOnly() {
+        val source = "𠮟 love"
+        val line = RichLyricLine(text = source, roma = "시츠 러브")
+        val missing = LineReadingResult(null, emptyList(), LineReadingStatus.MISSING_UNSUPPORTED)
+        val result = AppleMusicSourcePhonetics.attach(line, source, missing)
+        assertNull(result.roma)
+        assertEquals("MISSING_UNSUPPORTED", result.pronunciationStatus)
+        assertNull(result.pronunciationWords)
     }
 
     @Test fun inheritedReadingMustNotHideNewlyVerifiedLocalPronunciation() {
@@ -192,6 +219,24 @@ class AppleMusicSourcePhoneticsTest {
         assertEquals("가 와루", result.roma)
         assertEquals("AI_FALLBACK_UNVERIFIED", result.pronunciationStatus)
         assertEquals("나쁜", result.translation)
+    }
+
+    @Test fun halfwidthKanaWithUnknownKanjiRetainsOnlyUnverifiedAiSoundAndRealSourceAnchors() {
+        val source = "ｶﾞ悪"
+        val line = RichLyricLine(
+            text = source, roma = "가 와루", translation = "나빠",
+            words = listOf(LyricWord(text = "ｶﾞ"), LyricWord(text = "悪")),
+        )
+        val partial = SourceReadingAssembler.assemble(source, listOf(
+            RawReadingToken(0, 2, "ガ"), RawReadingToken(2, 3, "*"),
+        ))
+        assertEquals(LineReadingStatus.MISSING_UNSUPPORTED, partial.status)
+        val result = AppleMusicSourcePhonetics.attach(line, source, partial)
+        assertEquals("가 와루", result.roma)
+        assertEquals("PARTIAL_SOURCE_ANCHORED", result.pronunciationStatus)
+        assertEquals(listOf(0 to 2), result.pronunciationSpans?.map { it.start to it.end })
+        assertNull(result.pronunciationWords)
+        assertEquals("나빠", result.translation)
     }
 
     @Test fun aVerifiedAiSpacingIsPreservedEvenIfTheOfflineLineHasNoSpaces() {

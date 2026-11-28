@@ -34,7 +34,7 @@ internal object AiCachedSongCatalog {
         val input = buildString {
             append("title=").appendLine(title.orEmpty())
             append("artist=").appendLine(artist.orEmpty())
-            lines.forEachIndexed { index, line -> append(index).append(':').appendLine(line) }
+            appendLyricRows(lines)
         }
         val hash = MessageDigest.getInstance("SHA-256")
             .digest(input.toByteArray(Charsets.UTF_8))

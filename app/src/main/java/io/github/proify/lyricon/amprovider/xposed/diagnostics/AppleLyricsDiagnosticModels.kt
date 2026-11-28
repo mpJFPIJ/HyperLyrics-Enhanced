@@ -26,6 +26,8 @@ internal data class AppleLyricsBindingDiagnosticContext(
     /** Real adapter object, not its potentially colliding identityHashCode.
      * Held only within the short-lived native bind context. */
     val adapterInstance: Any? = null,
+    /** Translation/source revision captured on entry to this native holder bind. */
+    val presentationRevision: Long = -1L,
 )
 
 /** Two- and three-parameter native bind methods often call each other. */

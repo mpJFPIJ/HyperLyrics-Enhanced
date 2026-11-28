@@ -48,6 +48,7 @@ internal object ApplePausedPlaybackClockPolicy {
         timelineAdvancing: Boolean,
         explicitSeekToZero: Boolean,
         lastValidAgeMs: Long? = null,
+        fallbackFromAcceptedSeek: Boolean = false,
     ): Long? {
         val fresh = currentMs?.takeIf { it >= 0L }
         val last = lastValidMs?.takeIf { it >= 0L }
@@ -58,9 +59,12 @@ internal object ApplePausedPlaybackClockPolicy {
             if (!timelineAdvancing) return last
             // Live lyrics must not remain permanently painted at the last
             // sampled syllable if the Exo position getter stops responding.
-            // Bridge only a brief measurement outage; longer outages require
-            // the real player clock to recover rather than fabricate timing.
-            val age = lastValidAgeMs ?: return last
+            // An accepted seek target is NOT a measured/clamped Exo clock.
+            // Never advance from that target while the getter is unreadable.
+            if (fallbackFromAcceptedSeek) return null
+            // Only a real measured sample can bridge a brief getter outage.
+            // Without its age there is no bounded interpolation interval.
+            val age = lastValidAgeMs ?: return null
             if (age !in 0L..1_000L) return null
             return last?.plus(age)
         }

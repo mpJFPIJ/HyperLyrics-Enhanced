@@ -27,7 +27,7 @@ internal data class RawReadingToken(
 
 /** Pure function, so malformed token offsets and unsupported readings can be regression-tested. */
 internal object SourceReadingAssembler {
-    private val phraseSeparators = "、。，．.!?！？・/()[]「」『』"
+    private val phraseSeparators = "、。，．.!?！？・/()[]「」『』｡､｢｣･"
     private fun isSeparator(char: Char): Boolean = char.isWhitespace() || char in phraseSeparators
     private val english = mapOf(
         "i" to "아이", "you" to "유", "me" to "미", "my" to "마이",
@@ -37,6 +37,63 @@ internal object SourceReadingAssembler {
         "forever" to "포에버", "night" to "나이트", "day" to "데이",
         "heart" to "하트", "world" to "월드", "dream" to "드림",
     )
+
+    /** Sudachi offsets are UTF-16, but a Han glyph may occupy two Char units.
+     * Neither a surrogate half nor an orphan Japanese voicing mark may begin
+     * a token: the latter changes the sound of the preceding Kana base. */
+    private fun isCodePointBoundary(text: String, offset: Int): Boolean =
+        offset in 0..text.length && !(offset > 0 && offset < text.length &&
+            Character.isHighSurrogate(text[offset - 1]) &&
+            Character.isLowSurrogate(text[offset])) &&
+            !(offset > 0 && offset < text.length &&
+                JapaneseToHangul.isJapaneseVoicingMark(Character.codePointAt(text, offset)))
+
+    private inline fun String.anyCodePoint(predicate: (Int) -> Boolean): Boolean {
+        var offset = 0
+        while (offset < length) {
+            val cp = Character.codePointAt(this, offset)
+            if (predicate(cp)) return true
+            offset += Character.charCount(cp)
+        }
+        return false
+    }
+
+    /** Marks are source-significant even when Unicode classifies them as
+     * combining punctuation; they may not disappear into an uncovered gap. */
+    private fun String.hasSourceContent(): Boolean = anyCodePoint(JapaneseToHangul::isLyricSourceContent)
+
+    private fun String.hasSpokenBase(): Boolean = JapaneseToHangul.containsSpokenSourceBase(this)
+
+    private fun String.letterKey(): String = buildString {
+        var offset = 0
+        while (offset < this@letterKey.length) {
+            val cp = Character.codePointAt(this@letterKey, offset)
+            if (JapaneseToHangul.isLyricSourceContent(cp)) appendCodePoint(cp)
+            offset += Character.charCount(cp)
+        }
+    }
+
+    private fun isHan(cp: Int): Boolean =
+        Character.UnicodeScript.of(cp) == Character.UnicodeScript.HAN
+
+    private fun String.hasHan(): Boolean = anyCodePoint(::isHan)
+
+    private fun String.hasJapanese(): Boolean = anyCodePoint { cp ->
+        cp in 0x3040..0x30ff || cp in 0xff66..0xff9f || cp == 0x3005 || isHan(cp)
+    }
+
+    private fun String.hasUncoveredLetters(coverage: BooleanArray): Boolean {
+        var offset = 0
+        while (offset < length) {
+            val cp = Character.codePointAt(this, offset)
+            val end = offset + Character.charCount(cp)
+            if (JapaneseToHangul.isLyricSourceContent(cp) &&
+                (offset until end).any { it >= coverage.size || !coverage[it] }
+            ) return true
+            offset = end
+        }
+        return false
+    }
 
     /** Native text can omit whitespace/punctuation, but must never omit,
      * reorder or duplicate any source letter. All ranges use UTF-16 offsets. */
@@ -49,15 +106,17 @@ internal object SourceReadingAssembler {
             if (word.isEmpty()) continue
             val index = source.indexOf(word, cursor)
             if (index < cursor || index < 0 ||
-                source.substring(cursor, index).any(Char::isLetterOrDigit)
+                !isCodePointBoundary(source, index) ||
+                !isCodePointBoundary(source, index + word.length) ||
+                source.substring(cursor, index).hasSourceContent()
             ) return null
             cursor = index + word.length
             ranges += index until cursor
-            if (word.any(Char::isLetterOrDigit)) {
+            if (word.hasSpokenBase()) {
                 verifiedWords++
             }
         }
-        if (verifiedWords < 2 || source.substring(cursor).any(Char::isLetterOrDigit)) return null
+        if (verifiedWords < 2 || source.substring(cursor).hasSourceContent()) return null
         return ranges
     }
 
@@ -66,7 +125,7 @@ internal object SourceReadingAssembler {
         val ranges = nativeWordRanges(source, nativeWords) ?: return null
         val boundaries = mutableSetOf<Int>()
         for (range in ranges) {
-            if (source.substring(range.first, range.last + 1).none(Char::isLetterOrDigit)) continue
+            if (!source.substring(range.first, range.last + 1).hasSpokenBase()) continue
             boundaries += range.first
             boundaries += range.last + 1
         }
@@ -94,16 +153,15 @@ internal object SourceReadingAssembler {
         for (span in fullLine.spans) {
             val parts = ranges.filter { range ->
                 range.first >= span.sourceStart && range.last + 1 <= span.sourceEnd &&
-                    source.substring(range.first, range.last + 1).any(Char::isLetterOrDigit)
+                    source.substring(range.first, range.last + 1).hasSpokenBase()
             }
             val completeCells = parts.size in 2..8 && parts.size <= remainingProbes &&
                 parts.first().first == span.sourceStart &&
                 parts.last().last + 1 == span.sourceEnd &&
                 parts.joinToString("") { range ->
-                    source.substring(range.first, range.last + 1)
-                        .filter(Char::isLetterOrDigit)
-                } == span.sourceText.filter(Char::isLetterOrDigit)
-            if (!completeCells || span.sourceText.none { it in '\u3400'..'\u9fff' }) {
+                    source.substring(range.first, range.last + 1).letterKey()
+                } == span.sourceText.letterKey()
+            if (!completeCells || !span.sourceText.hasHan()) {
                 refined += span
                 continue
             }
@@ -119,6 +177,8 @@ internal object SourceReadingAssembler {
                     val verified = result.spans.all { token ->
                         val valid = token.sourceStart >= lastEnd && token.sourceEnd > token.sourceStart &&
                             token.sourceEnd <= surface.length &&
+                            isCodePointBoundary(surface, token.sourceStart) &&
+                            isCodePointBoundary(surface, token.sourceEnd) &&
                             surface.substring(token.sourceStart, token.sourceEnd) == token.sourceText &&
                             token.hangul.any { it in '가'..'힣' }
                         if (valid) {
@@ -126,7 +186,7 @@ internal object SourceReadingAssembler {
                             lastEnd = token.sourceEnd
                         }
                         valid
-                    } && surface.indices.none { surface[it].isLetterOrDigit() && !coverage[it] }
+                    } && !surface.hasUncoveredLetters(coverage)
                     if (!verified) null else result.spans.map { token ->
                         token.copy(
                             sourceStart = range.first + token.sourceStart,
@@ -162,8 +222,8 @@ internal object SourceReadingAssembler {
     ): LineReadingResult {
         if (fullLine.status != LineReadingStatus.COMPLETE ||
             fullLine.spans.none { span ->
-                span.sourceEnd - span.sourceStart > 1 &&
-                    span.sourceText.any { it in '\u3400'..'\u9fff' }
+                span.sourceText.codePointCount(0, span.sourceText.length) > 1 &&
+                    span.sourceText.hasHan()
             }
         ) return fullLine
         val characterCells = mutableListOf<String>()
@@ -259,19 +319,21 @@ internal object SourceReadingAssembler {
         var pendingSpace = false
         for (token in tokens) {
             if (token.sourceStart < previousEnd || token.sourceStart < 0 ||
-                token.sourceEnd <= token.sourceStart || token.sourceEnd > source.length
+                token.sourceEnd <= token.sourceStart || token.sourceEnd > source.length ||
+                !isCodePointBoundary(source, token.sourceStart) ||
+                !isCodePointBoundary(source, token.sourceEnd)
             ) return unsupported(spans)
             val gap = source.substring(previousEnd, token.sourceStart)
-            if (gap.any(Char::isLetterOrDigit)) return unsupported(spans)
+            if (gap.hasSourceContent()) return unsupported(spans)
             if (gap.any(::isSeparator)) pendingSpace = true
             val surface = source.substring(token.sourceStart, token.sourceEnd)
-            if (surface.all { it == 'ー' }) {
+            if (surface.all { it == 'ー' || it == 'ｰ' }) {
                 // Sudachi can tokenize the katakana length mark on its own.
                 // A length mark has no separate Hangul syllable; it extends
                 // the preceding contiguous Japanese source-reading span.
                 val preceding = spans.lastOrNull()
                     ?.takeIf {
-                        it.sourceEnd == token.sourceStart && it.sourceText.any(::isJapanese)
+                        it.sourceEnd == token.sourceStart && it.sourceText.hasJapanese()
                     }
                     ?: return unsupported(spans)
                 spans[spans.lastIndex] = preceding.copy(
@@ -289,7 +351,13 @@ internal object SourceReadingAssembler {
                 previousEnd = token.sourceEnd
                 continue
             }
-            val hasJapanese = surface.any(::isJapanese)
+            // A combining/spacing/halfwidth dakuten is source content, not
+            // an independently pronounceable Japanese character. Even a
+            // dictionary-provided reading cannot make an orphan mark sound.
+            if (surface.hasSourceContent() && !surface.hasSpokenBase()) {
+                return unsupported(spans)
+            }
+            val hasJapanese = surface.hasJapanese()
             val sound = when {
                 hasJapanese -> {
                     val kana = when {
@@ -297,7 +365,7 @@ internal object SourceReadingAssembler {
                         token.isParticle && surface == "へ" -> "エ"
                         token.isParticle && surface == "を" -> "オ"
                         token.readingForm.isNotBlank() && token.readingForm != "*" -> token.readingForm
-                        surface.all { it in '\u3040'..'\u30ff' } -> surface
+                        surface.all { it in '\u3040'..'\u30ff' || it in '\uFF66'..'\uFF9F' } -> surface
                         else -> return unsupported(spans)
                     }
                     val hangul = JapaneseToHangul.fromKana(kana) ?: return unsupported(spans)
@@ -309,7 +377,7 @@ internal object SourceReadingAssembler {
                     spans += SourceReadingSpan(token.sourceStart, token.sourceEnd, surface, surface, hangul)
                     hangul
                 }
-                surface.any(Char::isLetterOrDigit) -> return unsupported(spans)
+                surface.hasSourceContent() -> return unsupported(spans)
                 else -> null
             }
             if (sound != null) {
@@ -323,7 +391,7 @@ internal object SourceReadingAssembler {
             }
             previousEnd = token.sourceEnd
         }
-        if (source.substring(previousEnd).any(Char::isLetterOrDigit)) return unsupported(spans)
+        if (source.substring(previousEnd).hasSourceContent()) return unsupported(spans)
         val value = result.toString().trim().takeIf(String::isNotEmpty)
         return if (value == null) LineReadingResult(null, emptyList(), LineReadingStatus.EMPTY)
         else LineReadingResult(value, spans, LineReadingStatus.COMPLETE)
@@ -331,7 +399,4 @@ internal object SourceReadingAssembler {
 
     private fun unsupported(spans: List<SourceReadingSpan>) =
         LineReadingResult(null, spans, LineReadingStatus.MISSING_UNSUPPORTED)
-
-    private fun isJapanese(char: Char): Boolean = char in '\u3040'..'\u30ff' ||
-        char in '\u3400'..'\u9fff' || char == '\u3005'
 }

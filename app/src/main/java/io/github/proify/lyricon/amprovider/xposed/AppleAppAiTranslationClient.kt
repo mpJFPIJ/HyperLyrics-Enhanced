@@ -10,6 +10,38 @@ import android.os.Looper
 import com.juren233.hyperlyricsenhanced.IAppleMusicAiTranslator
 import com.juren233.hyperlyricsenhanced.IAppleMusicTranslationReceiver
 
+/** A process death may cancel an in-flight Binder request without returning
+ * any result. Replay only the same still-current attempt, and let each new
+ * attempt revoke a late callback from its disconnected predecessor. */
+internal object AppleStandaloneAiRequestPolicy {
+    data class ConnectionRecovery(
+        val releasePreviousBinding: Boolean,
+        val requestNewBinding: Boolean,
+    )
+
+    fun connectionRecoveryAfterIpcFailure(
+        binding: Boolean, pendingRetry: Boolean, bridgeActive: Boolean,
+        consecutiveFailures: Int,
+    ): ConnectionRecovery = ConnectionRecovery(
+        releasePreviousBinding = binding,
+        requestNewBinding = pendingRetry && !bridgeActive && consecutiveFailures == 1,
+    )
+
+    fun shouldReplay(
+        requestGeneration: Long, currentGeneration: Long,
+        requestAttempt: Long, deliveredAttempt: Long,
+        bridgeActive: Boolean,
+    ): Boolean = !bridgeActive && requestGeneration == currentGeneration &&
+        requestAttempt != deliveredAttempt
+
+    fun mayAcceptResponse(
+        requestGeneration: Long, currentGeneration: Long,
+        requestAttempt: Long, activeAttempt: Long,
+        bridgeActive: Boolean,
+    ): Boolean = !bridgeActive && requestGeneration == currentGeneration &&
+        requestAttempt == activeAttempt
+}
+
 /**
  * Apple Music-only fallback for NPatch / other single-process module hosts.
  * Calls the separately installed Enhanced app so credentials remain private.
@@ -33,6 +65,13 @@ internal class AppleAppAiTranslationClient(
     private var binding = false
     private var pending: ByteArray? = null
     private var previous: ByteArray? = null
+    private data class InFlight(val payload: ByteArray, val generation: Long, val attempt: Long)
+    /** Main-thread owned; callbacks publish only the delivered attempt via volatile. */
+    private var inFlight: InFlight? = null
+    /** Prevent a repeatedly failing one-way service from causing a main-thread bind loop. */
+    private var consecutiveIpcFailures = 0
+    @Volatile private var activeAttempt = 0L
+    @Volatile private var deliveredAttempt = -1L
 
     // Deleting a song must not cause the still-playing song to be translated
     // again on the next metadata refresh. A new track re-enables translation.
@@ -49,11 +88,13 @@ internal class AppleAppAiTranslationClient(
         }
 
         override fun onServiceDisconnected(name: ComponentName) {
+            recoverInterruptedRequest()
             binder = null
             ProviderLogger.info("standalone_ai stage=service_disconnected")
         }
 
         override fun onBindingDied(name: ComponentName) {
+            recoverInterruptedRequest()
             binder = null
             if (binding) {
                 runCatching { appContext.unbindService(this) }
@@ -63,12 +104,34 @@ internal class AppleAppAiTranslationClient(
         }
 
         override fun onNullBinding(name: ComponentName) {
+            recoverInterruptedRequest()
             binder = null
             if (binding) {
                 runCatching { appContext.unbindService(this) }
                 binding = false
             }
+            // No automatic connection can complete this attempt. A future
+            // same-song publication is allowed to try the service again.
+            previous = null
         }
+    }
+
+    private fun recoverInterruptedRequest() {
+        val outstanding = inFlight ?: return
+        if (AppleStandaloneAiRequestPolicy.shouldReplay(
+                requestGeneration = outstanding.generation,
+                currentGeneration = generation,
+                requestAttempt = outstanding.attempt,
+                deliveredAttempt = deliveredAttempt,
+                bridgeActive = isSystemUiBridgeActive(),
+            )
+        ) {
+            pending = outstanding.payload.copyOf()
+            ProviderLogger.info(
+                "standalone_ai stage=request_requeued generation=${outstanding.generation}"
+            )
+        }
+        inFlight = null
     }
 
     /** No network work is performed on Apple Music's UI or Binder threads. */
@@ -82,6 +145,8 @@ internal class AppleAppAiTranslationClient(
             if (previous?.contentEquals(compressedSong) == true) return@post
             previous = compressedSong.copyOf()
             generation += 1
+            consecutiveIpcFailures = 0
+            inFlight = null
             AppleAiProgressOverlay.update("preparing")
             pending = compressedSong.takeIf { it.isNotEmpty() }?.copyOf()
             ProviderLogger.info(
@@ -111,6 +176,7 @@ internal class AppleAppAiTranslationClient(
         generation += 1
         val currentGeneration = generation
         pending = null
+        inFlight = null
         previous = null
         suppressedSongId = expectedSongId
         val callback = object : IAppleMusicTranslationReceiver.Stub() {
@@ -178,6 +244,8 @@ internal class AppleAppAiTranslationClient(
         val target = binder ?: return
         val songPayload = pending ?: return
         val requestGeneration = generation
+        val requestAttempt = ++activeAttempt
+        inFlight = InFlight(songPayload.copyOf(), requestGeneration, requestAttempt)
         pending = null
         ProviderLogger.info(
             "standalone_ai stage=request_dispatched bytes=${songPayload.size} generation=$requestGeneration"
@@ -185,14 +253,29 @@ internal class AppleAppAiTranslationClient(
 
         val callback = object : IAppleMusicTranslationReceiver.Stub() {
             override fun onOnlineTranslationResult(compressedSong: ByteArray) {
-                val current = requestGeneration == generation && !isSystemUiBridgeActive()
+                val current = AppleStandaloneAiRequestPolicy.mayAcceptResponse(
+                    requestGeneration, generation, requestAttempt, activeAttempt,
+                    isSystemUiBridgeActive(),
+                )
                 ProviderLogger.info(
                     "standalone_ai stage=reply_received bytes=${compressedSong.size} " +
                         "current=$current"
                 )
                 if (current) {
+                    deliveredAttempt = requestAttempt
+                    mainHandler.post {
+                        if (inFlight?.attempt == requestAttempt) inFlight = null
+                        // A disconnect can already have requeued this same
+                        // request. Its successful reply makes that replay moot.
+                        if (generation == requestGeneration &&
+                            activeAttempt == requestAttempt
+                        ) pending = null
+                    }
                     onTranslationReceived(compressedSong) {
-                        requestGeneration == generation && !isSystemUiBridgeActive()
+                        AppleStandaloneAiRequestPolicy.mayAcceptResponse(
+                            requestGeneration, generation, requestAttempt, activeAttempt,
+                            isSystemUiBridgeActive(),
+                        )
                     }
                     // The app process sends a final per-line completeness stage
                     // immediately after this callback; translation receipt alone
@@ -204,7 +287,11 @@ internal class AppleAppAiTranslationClient(
             override fun onAiTranslationProgress(
                 stage: String?, batch: Int, totalBatches: Int, fragments: Int,
             ) {
-                if (requestGeneration == generation && !isSystemUiBridgeActive()) {
+                if (AppleStandaloneAiRequestPolicy.mayAcceptResponse(
+                        requestGeneration, generation, requestAttempt, activeAttempt,
+                        isSystemUiBridgeActive(),
+                    )
+                ) {
                     AppleAiProgressOverlay.update(stage ?: return, batch, totalBatches, fragments)
                 }
             }
@@ -230,11 +317,32 @@ internal class AppleAppAiTranslationClient(
         }
         runCatching {
             target.translate(songPayload, callback)
+        }.onSuccess {
+            consecutiveIpcFailures = 0
         }.onFailure {
+            consecutiveIpcFailures++
             binder = null
-            // The service may have died after connection; allow a later song
-            // publication to retry instead of silently losing the request.
+            // A synchronous Binder exception does not guarantee Android will
+            // deliver onServiceDisconnected(). Keep this payload for one new
+            // connection instead of leaving binder=null with binding=true.
+            if (inFlight?.attempt == requestAttempt) {
+                pending = songPayload.copyOf()
+                inFlight = null
+            }
             previous = null
+            val recovery = AppleStandaloneAiRequestPolicy.connectionRecoveryAfterIpcFailure(
+                binding = binding, pendingRetry = pending != null,
+                bridgeActive = isSystemUiBridgeActive(),
+                consecutiveFailures = consecutiveIpcFailures,
+            )
+            if (recovery.releasePreviousBinding) {
+                runCatching { appContext.unbindService(serviceConnection) }
+            }
+            binding = false
+            if (recovery.requestNewBinding) bindIfNeeded()
+            else if (pending != null) ProviderLogger.info(
+                "standalone_ai stage=ipc_reconnect_paused failures=$consecutiveIpcFailures"
+            )
             AppleAiProgressOverlay.update("failed")
             ProviderLogger.error(
                 "standalone_ai stage=ipc_failed type=${it.javaClass.simpleName}"

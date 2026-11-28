@@ -11,6 +11,97 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 
 class OnlineTranslationMatcherTest {
+    @Test fun strippingOnlineTranslationsKeepsJapaneseRowInChineseDominantSource() {
+        val original = List(9) { index ->
+            LrcLine(index * 1_000L, "感谢你曾来过", translation = "감사해")
+        } + LrcLine(9_000L, "君の名は", translation = "너의 이름은")
+        val stripped = stripFullyChineseTranslations(original)
+        assertEquals(9, stripped.take(9).count { it.translation == null })
+        assertEquals("너의 이름은", stripped.last().translation)
+    }
+
+    @Test
+    fun `chinese dominant song still translates its explicit Japanese lyric row`() {
+        val chineseLines = (0..8).map { index ->
+            RichLyricLine(
+                begin = (index + 1) * 1_000L,
+                end = (index + 2) * 1_000L,
+                text = "感谢你曾来过第${index}行",
+            )
+        }
+        val base = Song(lyrics = chineseLines + RichLyricLine(
+            begin = 10_000L,
+            end = 11_000L,
+            text = "君の名は",
+        ))
+        val result = OnlineTranslationMatcher.apply(base, listOf(
+            LrcLine(10_000L, "君の名は", translation = "너의 이름은"),
+        ))
+        assertEquals("너의 이름은", result.song.lyrics?.last()?.translation)
+        assertEquals(1, result.matchedCount)
+        assertEquals(9, result.song.lyrics.orEmpty().take(9).count { it.translation == null })
+    }
+
+
+    @Test
+    fun `skips online translation duplicate when apple only needs pronunciation`() {
+        val base = Song(lyrics = listOf(RichLyricLine(
+            begin = 1_000,
+            end = 2_000,
+            text = "君の名は",
+            translation = "너의 이름은",
+        )))
+        val result = OnlineTranslationMatcher.apply(base, listOf(
+            LrcLine(1_000, "君の名は", translation = "새 번역"),
+            LrcLine(1_000, "君の名は", romanization = "키미노 나와"),
+        ))
+        assertEquals("너의 이름은", result.song.lyrics?.single()?.translation)
+        assertEquals("키미노 나와", result.song.lyrics?.single()?.roma)
+        assertEquals(1, result.matchedCount)
+    }
+
+    @Test
+    fun `matches supplementary Han instead of dropping the entire lyric`() {
+        val base = Song(lyrics = listOf(RichLyricLine(
+            begin = 1_000,
+            end = 2_000,
+            text = "𠮟",
+        )))
+        val result = OnlineTranslationMatcher.apply(base, listOf(
+            LrcLine(1_000, "𠮟", romanization = "시카루"),
+        ))
+        assertEquals("시카루", result.song.lyrics?.single()?.roma)
+        assertEquals(1, result.matchedCount)
+    }
+
+    @Test
+    fun `different supplementary Han words do not appear similar because of surrogate pairs`() {
+        val base = Song(lyrics = listOf(RichLyricLine(
+            begin = 1_000,
+            end = 2_000,
+            text = "𠀀𠀁",
+        )))
+        val result = OnlineTranslationMatcher.apply(base, listOf(
+            LrcLine(1_000, "𠀀𠀂", romanization = "다른 가사 발음"),
+        ))
+        assertNull(result.song.lyrics?.single()?.roma)
+        assertEquals(0, result.matchedCount)
+    }
+
+    @Test
+    fun `chinese original skips forbidden translation candidate and accepts reading`() {
+        val base = Song(lyrics = listOf(RichLyricLine(
+            begin = 1_000,
+            end = 2_000,
+            text = "感谢你曾来过",
+        )))
+        val result = OnlineTranslationMatcher.apply(base, listOf(
+            LrcLine(1_000, "感谢你曾来过", translation = "너에게 감사해"),
+            LrcLine(1_000, "感谢你曾来过", romanization = "간셰니청라이궈"),
+        ))
+        assertNull(result.song.lyrics?.single()?.translation)
+        assertEquals("간셰니청라이궈", result.song.lyrics?.single()?.roma)
+    }
 
     @Test
     fun `fully chinese song ignores online translations but keeps pronunciation`() {

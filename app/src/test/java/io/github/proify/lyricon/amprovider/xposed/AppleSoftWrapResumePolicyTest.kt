@@ -1,5 +1,6 @@
 package io.github.proify.lyricon.amprovider.xposed
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -13,6 +14,80 @@ class AppleSoftWrapResumePolicyTest {
         lineSpacingExtra = 0f,
         lineSpacingMultiplier = 1f,
     )
+
+    @Test fun nativePainterRejectsRecycledTextBeforeTheNextHighlightPulse() {
+        val sameBreaks = listOf(0 to 2, 2 to 4)
+        fun matches(text: CharSequence, lines: List<Pair<Int, Int>>): Boolean =
+            AppleSoftWrapResumePolicy.sameSourceAndLines(
+                savedText = original.text,
+                currentText = text,
+                savedLineBounds = original.lineBounds,
+                currentLineCount = lines.size,
+                getLineStart = { lines[it].first },
+                getLineEnd = { lines[it].second },
+            )
+
+        assertTrue(matches("かなかな", sameBreaks))
+        // Same length and same two physical lines: lineCount alone used to
+        // let the previous lyric's Hangul overlay survive the native rebind.
+        assertFalse(matches("よるよる", sameBreaks))
+        assertFalse(matches("かなかな", listOf(0 to 1, 1 to 4)))
+        assertFalse(matches("かなかな", listOf(0 to 4)))
+    }
+
+    @Test fun installedPainterFastPathChecksLiveGeometryWithoutAllocatingANewSnapshot() {
+        var checks = 0
+        fun fast(
+            installed: Boolean = true, attached: Boolean = true,
+            ownerCurrent: Boolean = true, layoutPending: Boolean = false,
+            text: String = "かなかな", lines: List<Pair<Int, Int>> = original.lineBounds,
+        ): Boolean = AppleSoftWrapResumePolicy.fastInstalled(
+            installed = installed,
+            readingAttached = attached,
+            sourceAttached = attached,
+            holderAttached = attached,
+            layoutPending = layoutPending,
+            ownerCurrent = ownerCurrent,
+        ) {
+            checks++
+            AppleSoftWrapResumePolicy.sameSourceAndLines(
+                savedText = original.text, currentText = text,
+                savedLineBounds = original.lineBounds,
+                currentLineCount = lines.size,
+                getLineStart = { lines[it].first },
+                getLineEnd = { lines[it].second },
+            )
+        }
+
+        assertTrue(fast())
+        assertFalse(fast(text = "よるよる"))
+        assertFalse(fast(lines = listOf(0 to 3, 3 to 4)))
+        assertEquals(3, checks)
+        assertFalse(fast(installed = false))
+        assertFalse(fast(attached = false))
+        assertFalse(fast(ownerCurrent = false))
+        assertFalse(fast(layoutPending = true))
+        // No geometry or text allocation is even requested for a detached,
+        // settling or revoked painter; the normal resume policy handles it.
+        assertEquals(3, checks)
+    }
+
+    @Test fun settlingSoftWrapAndRevokedHolderDecideBeforeReadingSourceGeometry() {
+        fun preflight(
+            attached: Boolean = true, pending: Boolean = false,
+            currentOwner: Boolean = true,
+        ) = AppleSoftWrapResumePolicy.preflight(
+            readingAttached = attached,
+            sourceAttached = attached,
+            holderAttached = attached,
+            layoutPending = pending,
+            ownerCurrent = currentOwner,
+        )
+        assertEquals(AppleSoftWrapResumeDecision.WAIT, preflight(pending = true))
+        assertEquals(AppleSoftWrapResumeDecision.WAIT, preflight(attached = false))
+        assertEquals(AppleSoftWrapResumeDecision.REBIND, preflight(currentOwner = false))
+        assertEquals(null, preflight())
+    }
 
     @Test fun detachedAndReattachedHolderCanRestoreTheSameTwoMeasuredJapaneseLines() {
         assertTrue(AppleSoftWrapResumePolicy.canResume(

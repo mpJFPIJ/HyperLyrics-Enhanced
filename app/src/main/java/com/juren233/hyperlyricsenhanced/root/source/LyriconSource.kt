@@ -587,7 +587,8 @@ class LyriconSource : LyricSource {
         return song.lyrics?.any {
             !it.text.isNullOrBlank() &&
                 (
-                    (!fullyChinese && !OnlineTranslationContentPolicy.isMeaningful(it.translation)) ||
+                    (ChineseLyricsPolicy.permitsOnlineTranslation(it.text, fullyChinese) &&
+                        !OnlineTranslationContentPolicy.isMeaningful(it.translation)) ||
                         (completeOnlinePronunciation && it.roma.isNullOrBlank())
                     )
         } == true

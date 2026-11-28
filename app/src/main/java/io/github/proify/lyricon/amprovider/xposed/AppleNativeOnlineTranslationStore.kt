@@ -37,6 +37,8 @@ internal class AppleNativeOnlineTranslationStore {
     )
 
     private data class Content(
+        /** Unnormalized source: verified spans index this exact UTF-16 sequence. */
+        val sourceText: String?,
         val translation: String?,
         val generatedTranslation: String?,
         val pronunciation: String?,
@@ -53,6 +55,9 @@ internal class AppleNativeOnlineTranslationStore {
     private data class Overlay(
         val songId: String,
         val exactContent: Map<LineKey, Content>,
+        /** Conflicting records at the same raw source/clock remain negative
+         * evidence; a later nearby match must not hide the ambiguity. */
+        val conflictingLineKeys: Set<LineKey>,
         val translationsByTiming: Map<TimingKey, List<Entry>>,
         val hasTranslation: Boolean,
         val hasGeneratedTranslation: Boolean,
@@ -162,14 +167,31 @@ internal class AppleNativeOnlineTranslationStore {
                 ?: existing ?: content.pronunciation
             val keptPrevious = displayReading == existing &&
                 !RomanizationPolicy.isHangulPronunciation(content.pronunciation)
+            val identicalOffsetSource = exactPreviousContent != null &&
+                exactPreviousContent.sourceText == content.sourceText
+            val keepOldOffsets = keptPrevious && identicalOffsetSource
+            // A later AI meaning refresh can return the *same* verified Hangul
+            // with no source offsets. Do not demote an exact source row
+            // from native-word reading to line-wide solely because the second
+            // receipt omitted optional proof. Never transfer anchors from a
+            // timing-only/normalized-identity match or across changed sounds.
+            val keepExactAnchors = identicalOffsetSource &&
+                content.pronunciationSpans.isNullOrEmpty() &&
+                !exactPreviousContent?.pronunciationSpans.isNullOrEmpty() &&
+                RomanizationPolicy.sameHangulSounds(
+                    content.pronunciation, exactPreviousContent?.pronunciation,
+                )
             content.copy(
                 pronunciation = displayReading,
-                wordPronunciations = if (keptPrevious) exactPreviousContent?.wordPronunciations
-                    else content.wordPronunciations,
-                pronunciationSpans = if (keptPrevious) exactPreviousContent?.pronunciationSpans
-                    else content.pronunciationSpans,
-                pronunciationStatus = if (keptPrevious) exactPreviousContent?.pronunciationStatus
-                    else content.pronunciationStatus,
+                // The old words and status belong to the same proven spans;
+                // do not mix them with unanchored words in the later receipt.
+                wordPronunciations = if (keepOldOffsets || keepExactAnchors)
+                    exactPreviousContent?.wordPronunciations else content.wordPronunciations,
+                pronunciationSpans = if (keepOldOffsets || keepExactAnchors)
+                    exactPreviousContent?.pronunciationSpans else content.pronunciationSpans,
+                pronunciationStatus = if (keepOldOffsets || keepExactAnchors)
+                    exactPreviousContent?.pronunciationStatus ?: content.pronunciationStatus
+                else content.pronunciationStatus,
             )
         }
         val hasPronunciation = merged.values.any { it.pronunciation != null }
@@ -202,6 +224,7 @@ internal class AppleNativeOnlineTranslationStore {
                 else -> translation
             }
             val content = Content(
+                sourceText = line.text,
                 translation = translation,
                 generatedTranslation = generated,
                 pronunciation = RomanizationPolicy.sanitizeSupplement(line.text, line.roma),
@@ -218,9 +241,18 @@ internal class AppleNativeOnlineTranslationStore {
             LineKey(timing, normalizeText(line.text)) to content
         }
         if (entries.isEmpty()) return null
+        val grouped = entries.groupBy(
+            keySelector = { it.first },
+            valueTransform = { it.second },
+        )
+        val conflictingKeys = grouped.filterValues { values ->
+            values.drop(1).any { it != values.first() }
+        }.keys
         return Overlay(
             songId = songId,
-            exactContent = entries.toMap(),
+            exactContent = grouped.filterKeys { it !in conflictingKeys }
+                .mapValues { (_, values) -> values.first() },
+            conflictingLineKeys = conflictingKeys,
             translationsByTiming = entries.groupBy(
                 keySelector = { it.first.timing },
                 valueTransform = { Entry(it.first.text, it.second) },
@@ -316,19 +348,28 @@ internal class AppleNativeOnlineTranslationStore {
         val source = text?.takeIf(String::isNotBlank) ?: return null
         val chosen = selectedPronunciation
             ?.takeIf(RomanizationPolicy::isHangulPronunciation) ?: return null
-        // Hangul Jamo and digits may represent sounds that would disappear
-        // from a syllables-only comparison. Only punctuation/spaces are silent.
-        fun onlyCompleteHangulSyllables(value: String): Boolean =
-            value.all { !it.isLetterOrDigit() || it in '가'..'힣' }
-        if (!onlyCompleteHangulSyllables(chosen)) return null
+        // Hangul Jamo, digits and supplementary non-Hangul characters must
+        // not disappear from a syllables-only comparison. UTF-16 Char checks
+        // alone incorrectly ignore both halves of supplementary Han.
+        fun codePointBoundary(offset: Int): Boolean =
+            offset in 0..source.length && !(offset > 0 && offset < source.length &&
+                Character.isHighSurrogate(source[offset - 1]) &&
+                Character.isLowSurrogate(source[offset])) &&
+                (offset == source.length || !appleIsJapaneseVoicingMark(
+                    Character.codePointAt(source, offset),
+                ))
+        if (!appleOnlyHangulSoundLetters(chosen)) return null
         val expectedSound = chosen.filter { it in '가'..'힣' }
         if (expectedSound.isEmpty()) return null
         for (candidate in listOfNotNull(
             content(songId, begin, end, source, aiOverlay),
             content(songId, begin, end, source, overlay),
         )) {
-            if (!RomanizationPolicy.isHangulPronunciation(candidate.pronunciation) ||
-                !onlyCompleteHangulSyllables(candidate.pronunciation.orEmpty())
+            // A normalized punctuation/whitespace match can select different
+            // raw UTF-16 source text. Never borrow its source offsets.
+            if (candidate.sourceText != source ||
+                !RomanizationPolicy.isHangulPronunciation(candidate.pronunciation) ||
+                !appleOnlyHangulSoundLetters(candidate.pronunciation.orEmpty())
             ) continue
             val candidateSound = candidate.pronunciation.orEmpty().filter { it in '가'..'힣' }
             if (candidateSound != expectedSound) continue
@@ -342,13 +383,16 @@ internal class AppleNativeOnlineTranslationStore {
             for (span in spans) {
                 if (span.start < cursor || span.start < 0 ||
                     span.end <= span.start || span.end > source.length ||
+                    !codePointBoundary(span.start) || !codePointBoundary(span.end) ||
                     source.substring(span.start, span.end) != span.source
                 ) {
                     valid = false
                     break
                 }
                 val syllables = span.hangul.filter { it in '가'..'힣' }
-                if (syllables.isEmpty() || !onlyCompleteHangulSyllables(span.hangul)) {
+                if (syllables.isEmpty() || !appleOnlyHangulSoundLetters(span.hangul) ||
+                    !appleHasSpokenSourceBase(span.source)
+                ) {
                     valid = false
                     break
                 }
@@ -357,10 +401,23 @@ internal class AppleNativeOnlineTranslationStore {
                 for (index in span.start until span.end) covered[index] = true
                 cursor = span.end
             }
-            if (!valid || sound.toString() != expectedSound || source.indices.any {
-                    source[it].isLetterOrDigit() && !covered[it]
+            // Char.isLetterOrDigit does not recognize a supplementary Han's
+            // surrogate halves. Both UTF-16 units must belong to a verified
+            // token before this can be a complete source-to-sound map.
+            var uncoveredSource = false
+            var offset = 0
+            while (offset < source.length) {
+                val cp = Character.codePointAt(source, offset)
+                val end = offset + Character.charCount(cp)
+                if (appleIsLyricSourceCodePoint(cp) &&
+                    (offset until end).any { !covered[it] }
+                ) {
+                    uncoveredSource = true
+                    break
                 }
-            ) continue
+                offset = end
+            }
+            if (!valid || sound.toString() != expectedSound || uncoveredSource) continue
             var sounded = 0
             val hasFalseSpace = chosen.indices.any { index ->
                 val char = chosen[index]
@@ -369,6 +426,96 @@ internal class AppleNativeOnlineTranslationStore {
                     sounded !in tokenEnds
             }
             if (!hasFalseSpace) return spans
+        }
+        return null
+    }
+
+    /** A complete-row proof must not be inferred from partial dictionary spans.
+     * Nevertheless, when another provider selects the exact same Hangul sound,
+     * the already verified *partial* anchors can still be offered to the
+     * native-word projector. That projector independently refuses a sound gap
+     * crossing two native clocks. This method grants no complete-row proof. */
+    fun soundMatchedPartialPronunciationSpans(
+        songId: String?,
+        begin: Long,
+        end: Long,
+        text: String?,
+        selectedPronunciation: String?,
+    ): List<LyricPronunciationSpan>? {
+        val source = text?.takeIf(String::isNotBlank) ?: return null
+        val selected = selectedPronunciation
+            ?.takeIf(RomanizationPolicy::isHangulPronunciation) ?: return null
+        if (!appleOnlyHangulSoundLetters(selected)) return null
+        val chosenSound = selected.filter { it in '가'..'힣' }
+        if (chosenSound.isEmpty()) return null
+        fun codePointBoundary(offset: Int): Boolean =
+            offset in 0..source.length && !(offset > 0 && offset < source.length &&
+                Character.isHighSurrogate(source[offset - 1]) &&
+                Character.isLowSurrogate(source[offset])) &&
+                (offset == source.length || !appleIsJapaneseVoicingMark(
+                    Character.codePointAt(source, offset),
+                ))
+
+        for (candidate in listOfNotNull(
+            content(songId, begin, end, source, aiOverlay),
+            content(songId, begin, end, source, overlay),
+        )) {
+            // The existing normalized/timing lookup may choose a differently
+            // spaced original. Its UTF-16 offsets are NOT transferable.
+            if (candidate.sourceText != source ||
+                !RomanizationPolicy.isHangulPronunciation(candidate.pronunciation) ||
+                !appleOnlyHangulSoundLetters(candidate.pronunciation.orEmpty()) ||
+                candidate.pronunciation.orEmpty().filter { it in '가'..'힣' } != chosenSound
+            ) continue
+            val spans = candidate.pronunciationSpans.orEmpty()
+            if (spans.isEmpty()) continue
+            val covered = BooleanArray(source.length)
+            var sourceCursor = 0
+            var soundCursor = 0
+            var valid = true
+            for (span in spans) {
+                if (span.start < sourceCursor || span.end <= span.start ||
+                    !codePointBoundary(span.start) || !codePointBoundary(span.end) ||
+                    source.substring(span.start, span.end) != span.source ||
+                    !appleHasSpokenSourceBase(span.source) ||
+                    !appleOnlyHangulSoundLetters(span.hangul)
+                ) {
+                    valid = false
+                    break
+                }
+                val tokenSound = span.hangul.filter { it in '가'..'힣' }
+                val soundStart = chosenSound.indexOf(tokenSound, soundCursor)
+                if (tokenSound.isEmpty() || soundStart < 0 ||
+                    (span.start == 0 && soundStart != 0) ||
+                    (span.end == source.length && soundStart + tokenSound.length != chosenSound.length) ||
+                    (soundStart > soundCursor &&
+                        chosenSound.indexOf(tokenSound, soundStart + 1) >= 0)
+                ) {
+                    valid = false
+                    break
+                }
+                for (index in span.start until span.end) covered[index] = true
+                sourceCursor = span.end
+                soundCursor = soundStart + tokenSound.length
+            }
+            if (!valid) continue
+            // Complete maps belong exclusively to soundMatchedPronunciationSpans,
+            // whose stricter spacing proof cannot be bypassed by this path.
+            var offset = 0
+            var hasUncoveredSource = false
+            var unownedVoicingMark = false
+            while (offset < source.length) {
+                val cp = Character.codePointAt(source, offset)
+                val next = offset + Character.charCount(cp)
+                if (Character.isLetterOrDigit(cp) &&
+                    (offset until next).any { !covered[it] }
+                ) hasUncoveredSource = true
+                if (appleIsJapaneseVoicingMark(cp) && !covered[offset])
+                    unownedVoicingMark = true
+                offset = next
+            }
+            if (unownedVoicingMark) continue
+            if (hasUncoveredSource) return spans
         }
         return null
     }
@@ -438,7 +585,9 @@ internal class AppleNativeOnlineTranslationStore {
         if (songId.isNullOrBlank() || current.songId != songId) return null
 
         val timing = TimingKey(begin, end)
-        current.exactContent[LineKey(timing, normalizeText(text))]?.let { return it }
+        val exactKey = LineKey(timing, normalizeText(text))
+        if (exactKey in current.conflictingLineKeys) return null
+        current.exactContent[exactKey]?.let { return it }
         // A shared timestamp is not proof that two lines have the same text.
         // Apple sometimes exposes different line subdivisions at one clock;
         // attaching the other line's meaning here put Korean sentences under
@@ -454,27 +603,38 @@ internal class AppleNativeOnlineTranslationStore {
         // Never use a global text-only match: repeated choruses could receive
         // the wrong occurrence's Korean reading.
         if (begin < 0 || end <= begin) return null
-        val candidates = current.exactContent.asSequence().mapNotNull { (key, value) ->
-            if (normalizedSourceIdentity(key.text) != identity) return@mapNotNull null
+        fun distance(key: LineKey): Long? {
+            if (normalizedSourceIdentity(key.text) != identity) return null
             val beginDiff = kotlin.math.abs(key.timing.begin - begin)
             val endDiff = kotlin.math.abs(key.timing.end - end)
-            if (beginDiff > 800L || endDiff > 800L) return@mapNotNull null
-            (beginDiff + endDiff) to value
-        }.sortedBy { it.first }.toList()
+            if (beginDiff > 800L || endDiff > 800L) return null
+            return beginDiff + endDiff
+        }
+        val exactCandidates: Sequence<Pair<Long, Content?>> =
+            current.exactContent.asSequence().mapNotNull { (key, value) ->
+                distance(key)?.let { it to value }
+            }
+        val conflictingCandidates: Sequence<Pair<Long, Content?>> =
+            current.conflictingLineKeys.asSequence().mapNotNull { key ->
+                distance(key)?.let { it to null }
+            }
+        val candidates = (exactCandidates + conflictingCandidates)
+            .sortedBy { it.first }.toList()
         val closest = candidates.firstOrNull() ?: return null
-        val next = candidates.getOrNull(1)
+        if (closest.second == null) return null
         // Equal-content refrains can share one reading. Otherwise require
-        // a clearly closer time anchor or refuse an ambiguous attachment.
-        if (next != null && next.second != closest.second &&
-            closest.first * 2L >= next.first
-        ) return null
+        // a clearly closer time anchor than EVERY conflicting candidate.
+        // Two agreeing duplicates cannot conceal a third nearby meaning.
+        for (index in 1 until candidates.size) {
+            val (score, content) = candidates[index]
+            if (content != closest.second && closest.first * 2L >= score) return null
+        }
         return closest.second
     }
 
     companion object {
         private fun normalizedSourceIdentity(text: String?): String =
-            normalizeText(text).lowercase(java.util.Locale.ROOT)
-                .filter(Char::isLetterOrDigit)
+            appleLyricSourceKey(normalizeText(text).lowercase(java.util.Locale.ROOT))
 
         val WHITESPACE = Regex("\\s+")
 

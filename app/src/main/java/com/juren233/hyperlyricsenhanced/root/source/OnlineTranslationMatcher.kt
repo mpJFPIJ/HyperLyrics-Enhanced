@@ -133,10 +133,10 @@ internal object OnlineTranslationMatcher {
     }
 
     fun apply(song: Song, onlineLines: List<LrcLine>): Result {
-        // 全中文歌词不接受在线翻译：在线源即使命中（翻译列常为伴唱标注等伪翻译），
-        // 也只允许补充发音。fillMissing/composeContent 只会从候选结果拷贝翻译，
-        // 因此在这里拦住即可覆盖计分、来源选择与重匹配全部路径。
-        val allowTranslation = !ChineseLyricsPolicy.isFullyChinese(song)
+        // A Chinese-dominant song may still contain an actual Japanese lyric row.
+        // Never copy a spurious online translation into its Chinese lines, but
+        // allow explicit kana-bearing rows to receive their matched translation.
+        val chineseDominant = ChineseLyricsPolicy.isFullyChinese(song)
         val candidates = onlineLines
             .asSequence()
             .sortedBy(LrcLine::startTimeMs)
@@ -172,7 +172,10 @@ internal object OnlineTranslationMatcher {
                 nativeIndex++
                 continue
             }
-            val plan = findBestPlan(nativeLyrics, nativeIndex, candidates, candidateStart)
+            val plan = findBestPlan(
+                nativeLyrics, nativeIndex, candidates, candidateStart,
+                chineseDominant = chineseDominant,
+            )
             if (plan == null) {
                 nativeIndex++
                 continue
@@ -183,18 +186,15 @@ internal object OnlineTranslationMatcher {
                 plan.candidateIndex,
                 plan.candidateIndex + plan.candidateSpan
             )
-            val translations = if (allowTranslation) {
-                distributeTranslations(nativeGroup, candidateGroup)
-            } else {
-                null
-            }
+            val translations = distributeTranslations(nativeGroup, candidateGroup)
             val romanizations = distributeRomanizations(nativeGroup, candidateGroup)
             nativeGroup.indices.forEach { offset ->
                 val targetIndex = nativeIndex + offset
                 val targetLine = matchedLyrics[targetIndex]
                 val translation = translations?.getOrNull(offset)
                     ?.takeIf {
-                        !OnlineTranslationContentPolicy.isMeaningful(targetLine.translation) &&
+                        ChineseLyricsPolicy.permitsOnlineTranslation(targetLine.text, chineseDominant) &&
+                            !OnlineTranslationContentPolicy.isMeaningful(targetLine.translation) &&
                             OnlineTranslationContentPolicy.isMeaningful(it.main)
                     }
                 val romanization = romanizations.getOrNull(offset)
@@ -544,6 +544,7 @@ internal object OnlineTranslationMatcher {
         candidates: List<Candidate>,
         candidateStart: Int,
         untimedNative: Boolean = false,
+        chineseDominant: Boolean = false,
     ): MatchPlan? {
         var bestPlan: MatchPlan? = null
         val maxNativeSpan = min(MAX_GROUP_SPAN, nativeLyrics.size - nativeIndex)
@@ -605,13 +606,17 @@ internal object OnlineTranslationMatcher {
                         continue
                     }
                     if (!untimedNative) {
-                        val hasTranslation = distributeTranslations(nativeGroup, candidateGroup).any {
-                            OnlineTranslationContentPolicy.isMeaningful(it?.main)
+                        val translations = distributeTranslations(nativeGroup, candidateGroup)
+                        val romanizations = distributeRomanizations(nativeGroup, candidateGroup)
+                        val hasTranslation = nativeGroup.indices.any { offset ->
+                            ChineseLyricsPolicy.permitsOnlineTranslation(nativeGroup[offset].text, chineseDominant) &&
+                                !OnlineTranslationContentPolicy.isMeaningful(nativeGroup[offset].translation) &&
+                                OnlineTranslationContentPolicy.isMeaningful(translations.getOrNull(offset)?.main)
                         }
-                        val hasRomanization = distributeRomanizations(
-                            nativeGroup,
-                            candidateGroup
-                        ).any { !it.isNullOrBlank() }
+                        val hasRomanization = nativeGroup.indices.any { offset ->
+                            nativeGroup[offset].roma.isNullOrBlank() &&
+                                !romanizations.getOrNull(offset).isNullOrBlank()
+                        }
                         if (!hasTranslation && !hasRomanization) {
                             continue
                         }
@@ -925,8 +930,8 @@ internal object OnlineTranslationMatcher {
     }
 
     private fun normalize(text: String): String = buildString(text.length) {
-        text.lowercase().forEach { char ->
-            if (char.isLetterOrDigit()) append(char)
+        text.lowercase().codePoints().forEach { codePoint ->
+            if (Character.isLetterOrDigit(codePoint)) appendCodePoint(codePoint)
         }
     }
 

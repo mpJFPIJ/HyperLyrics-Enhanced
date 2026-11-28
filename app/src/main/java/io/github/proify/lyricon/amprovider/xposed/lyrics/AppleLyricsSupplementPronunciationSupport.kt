@@ -65,9 +65,43 @@ internal fun AppleLyricsSupplementHooks.hookAppleLyricTextGetter(clazz: Class<*>
             lyricsRuntimeMember(
                 AppleMusicRuntimeMember.LYRICS_NATIVE_TRANSLATION_TEXT_METHOD
             ) -> {
-                if (!requestedAppleLyricsRowVisibility().translation) {
+                val translationVisible = requestedAppleLyricsRowVisibility().translation
+                val timedContext = diagnostics.currentBindingContext()
+                // Reflection into Apple's begin/end methods may reenter a
+                // metadata publication. Record only the *same* presentation
+                // snapshot that passed the original holder ownership gate.
+                val observedSongId = currentAppleLyricsSongId
+                val observedRevision = nativeOnlineTranslationStore.revision()
+                val canObserveClock = AppleLyricsNativeWindowBindingPolicy.canObserveClock(
+                    timedContext, observedSongId, observedRevision,
+                )
+                if (!translationVisible && !canObserveClock) {
                     return@installResultOverrideHook ""
                 }
+                // The native line's time exists even when the translated
+                // text is blank or its row is hidden. Preserve Apple's own
+                // adapter-bound clock for native follow and scroll restore.
+                val lineBegin = runCatching {
+                    (lyricsNativeCall(chain.thisObject,
+                        AppleMusicRuntimeMember.LYRICS_NATIVE_BEGIN_METHOD) as? Number)?.toLong()
+                }.getOrNull()
+                val lineEnd = runCatching {
+                    (lyricsNativeCall(chain.thisObject,
+                        AppleMusicRuntimeMember.LYRICS_NATIVE_END_METHOD) as? Number)?.toLong()
+                }.getOrNull()
+                if (canObserveClock && lineBegin != null && lineEnd != null &&
+                    lineEnd > lineBegin &&
+                    AppleLyricsNativeWindowBindingPolicy.presentationUnchanged(
+                        observedSongId, observedRevision,
+                        currentAppleLyricsSongId, nativeOnlineTranslationStore.revision(),
+                    )
+                ) {
+                    blurHooks.rememberVerifiedNativeWindow(
+                        observedSongId, observedRevision, timedContext?.adapterInstance,
+                        timedContext?.position, lineBegin, lineEnd,
+                    )
+                }
+                if (!translationVisible) return@installResultOverrideHook ""
                 // For Korean-target songs, existing official/third-party Chinese
                 // content must not win over a later AI Hangul translation.
                 val userTranslation = userCorrectionForNativeLine(chain.thisObject)?.translation
@@ -88,19 +122,9 @@ internal fun AppleLyricsSupplementHooks.hookAppleLyricTextGetter(clazz: Class<*>
                 // Capture the native line clock in the same holder's render
                 // stack. The translation may wrap into multiple TextViews:
                 // all its fragments must share ONE active-line highlight.
-                val timedContext = diagnostics.currentBindingContext()
-                val lineBegin = runCatching {
-                    (lyricsNativeCall(chain.thisObject,
-                        AppleMusicRuntimeMember.LYRICS_NATIVE_BEGIN_METHOD) as? Number)?.toLong()
-                }.getOrNull()
-                val lineEnd = runCatching {
-                    (lyricsNativeCall(chain.thisObject,
-                        AppleMusicRuntimeMember.LYRICS_NATIVE_END_METHOD) as? Number)?.toLong()
-                }.getOrNull()
                 if (lineBegin != null &&
                     lineEnd != null && lineEnd > lineBegin && result.isNotBlank()
                 ) {
-                    val revision = nativeOnlineTranslationStore.revision()
                     val rawSource = nativeOriginalLineText(chain.thisObject)
                     val hasNativeContextConsumer = timedContext?.holder != null ||
                         (timedContext?.adapterInstance != null &&
@@ -144,13 +168,6 @@ internal fun AppleLyricsSupplementHooks.hookAppleLyricTextGetter(clazz: Class<*>
                         adapterPosition = timedContext?.position,
                         adapterOwner = timedContext?.adapterInstance,
                         displayedSourceText = displayedNativeSource,
-                    )
-                    // This exact native getter executes inside its holder bind,
-                    // so this is a verified adapter-row↔native-line time axis.
-                    // A logical lyrics index is not interchangeable with it.
-                    blurHooks.rememberVerifiedNativeWindow(
-                        currentAppleLyricsSongId, revision, timedContext?.position,
-                        lineBegin, lineEnd,
                     )
                 }
                 if (BuildConfig.DEBUG) {
@@ -412,6 +429,7 @@ internal class AppleNativePronunciationLayoutRecheck(
                     translationEnabled = translationEnabled,
                     pronunciationEnabled = pronunciationEnabled,
                     adapterInstance = adapterRef?.get(),
+                    presentationRevision = context.presentationRevision,
                 )
                 // A layout recheck must not bind a second translation highlighter.
                 hooks.bindLineWidePronunciation(freshContext, stillCurrent, retry = 3)
@@ -479,6 +497,7 @@ internal fun AppleLyricsSupplementHooks.bindLineWidePronunciation(
         currentSourcePriority = pronunciationSourcePriority(),
         trustedHolder = trustedHolder,
         playbackPositionMs = { appleLyricsCurrentPlaybackPositionMs() },
+        timelineAdvancing = { playbackHooks.isTimelineAdvancing() },
         isCurrentBinding = bindingIsCurrent,
         onNeedsRebind = {
             if (root != null && root.isAttachedToWindow && bindingIsCurrent()) {
@@ -493,15 +512,16 @@ internal fun AppleLyricsSupplementHooks.bindLineWidePronunciation(
     // Japanese text. Keep its native position and timing, scale text only.
     lineWidePronunciationRow.fitNativeHangulSize(root)
     if (retry == 0) {
+        val meaningEnabled = AppleNativeTranslationHighlightPolicy.eligibleKoreanMeaning(
+            translationVisible = requestedAppleLyricsRowVisibility().translation,
+            koreanTargetSelected = koreanTranslationTargetSelected(),
+        )
         translationLineHighlight.bind(
             holder = context.holder,
             root = root,
             currentSongId = songId,
             revision = revision,
-            enabled = AppleNativeTranslationHighlightPolicy.eligibleKoreanMeaning(
-                translationVisible = requestedAppleLyricsRowVisibility().translation,
-                koreanTargetSelected = koreanTranslationTargetSelected(),
-            ),
+            enabled = meaningEnabled,
             playbackPositionMs = { appleLyricsCurrentPlaybackPositionMs() },
             observedSourceCells = observedCells,
             observeSourceCells = {
@@ -513,21 +533,31 @@ internal fun AppleLyricsSupplementHooks.bindLineWidePronunciation(
                 currentAppleLyricsSongId == songId &&
                     nativeOnlineTranslationStore.revision() == revision
             },
+            liveMeaningEligible = {
+                AppleNativeTranslationHighlightPolicy.mayRunQueuedMeaningBind(
+                    originallyEnabled = meaningEnabled,
+                    translationVisibleNow = requestedAppleLyricsRowVisibility().translation,
+                    koreanTargetSelectedNow = koreanTranslationTargetSelected(),
+                )
+            },
         )
     }
     // The holder may bind before the flexbox has its measured line breaks.
     // Even when the first single-block reading was shown, re-check native
     // geometry after layout so wrapped Japanese receives per-row Hangul.
     val canInterleave = payload?.let { candidate ->
-        candidate.phoneticSpans.isNotEmpty() ||
-            AppleInterleavedReadingPolicy.canDeriveKanaRows(
-                candidate.sourceText, candidate.pronunciation,
-            )
+        AppleInterleavedReadingPolicy.hasPotentialRowProjection(
+            candidate.sourceText, candidate.pronunciation, candidate.phoneticSpans,
+        )
     } == true
     val needsLayoutRecheck = shown && canInterleave && retry < 2
-    // The flexbox or the payload can first appear during a delayed bind; the
-    // generation-scoped observer deduplicates repeated subscriptions.
-    if (root != null && canInterleave) {
+    // A non-projectable full-block ReadingView also copies the native source
+    // Typeface. Watch its actual source layout so a same-size font switch can
+    // trigger the binding's new source-font ownership check even without an
+    // adapter rebind. The generation-scoped observer deduplicates callbacks.
+    if (root != null && AppleLineWidePronunciationRowPolicy.shouldObserveSourceLayout(
+            readingShown = shown, canInterleave = canInterleave,
+    )) {
         lineWideLayoutRecheck.observe(root, context, songId, revision)
     }
     // A width change first removes our old full-width children so the native
@@ -822,6 +852,8 @@ private fun AppleLyricsSupplementHooks.hookApplePronunciationWordsGetter(
                 val sourceSpans = if (begin != null && end != null) {
                     nativeOnlineTranslationStore.soundMatchedPronunciationSpans(
                         currentAppleLyricsSongId, begin, end, originalText, pronunciation,
+                    ) ?: nativeOnlineTranslationStore.soundMatchedPartialPronunciationSpans(
+                        currentAppleLyricsSongId, begin, end, originalText, pronunciation,
                     ) ?: if (isAiReading) nativeOnlineTranslationStore.aiHangulPronunciationSpans(
                         currentAppleLyricsSongId, begin, end, originalText,
                     ) else null
@@ -952,6 +984,7 @@ private fun AppleLyricsSupplementHooks.hookApplePronunciationWordsGetter(
 internal fun AppleLyricsSupplementHooks.logApplePronunciationDiagnostics(songNative: Any, lines: List<Any>) {
     if (!BuildConfig.DEBUG) return
     val songId = nativeSongId(songNative) ?: return
+    val ownerRevision = nativeOnlineTranslationStore.revision()
 
     val languages = runCatching {
         nativeVectorItems(
@@ -997,6 +1030,7 @@ internal fun AppleLyricsSupplementHooks.logApplePronunciationDiagnostics(songNat
     val onlineTextLines = lines.count { onlinePronunciationForNativeLine(it) != null }
     val stateSignature = listOf(
         songId,
+        ownerRevision,
         languages.joinToString(","),
         nativeTextLines,
         nativeWordLines,
@@ -1005,14 +1039,14 @@ internal fun AppleLyricsSupplementHooks.logApplePronunciationDiagnostics(songNat
     ).joinToString("|")
     if (!pronunciationDiagnostics.markSongSnapshotLogged(stateSignature)) return
     ProviderLogger.diagnostic(
-        "Apple pronunciation: id=$songId, languages=$languages, " +
+        "Apple pronunciation: id=$songId, revision=$ownerRevision, languages=$languages, " +
             "nativeTextLines=$nativeTextLines, nativeWordLines=$nativeWordLines, " +
             "onlineTextLines=$onlineTextLines, mainWordLines=$mainWordLines"
     )
     reportApplePronunciationRuntimeDiagnostic(
         stage = "song_snapshot",
         songId = songId,
-        details = "languages=$languages, nativeTextLines=$nativeTextLines, " +
+        details = "revision=$ownerRevision, languages=$languages, nativeTextLines=$nativeTextLines, " +
             "nativeWordLines=$nativeWordLines, onlineTextLines=$onlineTextLines, " +
             "mainWordLines=$mainWordLines, " +
             "pronunciationSelected=${PreferencesMonitor.isPronunciationSelected()}, " +

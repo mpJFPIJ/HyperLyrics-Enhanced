@@ -2,12 +2,33 @@ package com.juren233.hyperlyricsenhanced.root.aitrans
 
 import com.juren233.hyperlyricsenhanced.lyric.model.Song
 import com.juren233.hyperlyricsenhanced.lyric.style.AiTranslationConfigs
+import com.juren233.hyperlyricsenhanced.common.extensions.md5
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AITranslationKeyTest {
+    @Test fun lineBreaksInsideLyricsCannotImpersonateAdditionalSongRows() {
+        val song = Song(name = "mixed track", artist = "performer")
+        val configs = AiTranslationConfigs(targetLanguage = "한국어")
+        val combined = listOf("ありがとう\n1:사랑해")
+        val split = listOf("ありがとう", "사랑해")
+        assertNotEquals(AITranslationKey.calculate(configs, song, combined),
+            AITranslationKey.calculate(configs, song, split))
+        assertNotEquals(AITranslationKey.pronunciation(song, combined),
+            AITranslationKey.pronunciation(song, split))
+    }
+
+    @Test fun ordinaryLyricRowsKeepTheirOriginalOfflineCacheIdentity() {
+        val song = Song(name = "IRIS OUT", artist = "Kenshi Yonezu")
+        val legacyPlainText = "sudachi-v2-kana-fallback-kanji-language-v4\n" +
+            "title=IRIS OUT\n" +
+            "artist=Kenshi Yonezu\n" +
+            "0:駄目\n"
+        assertEquals(legacyPlainText.md5(), AITranslationKey.pronunciation(song, listOf("駄目")))
+    }
+
     @Test fun clearingCurrentSongRemovesBothOldAndNewOfflineReadingRevisions() {
         val song = Song(name = "IRIS OUT", artist = "Kenshi Yonezu")
         val lines = listOf("駄目", "脳みそ")

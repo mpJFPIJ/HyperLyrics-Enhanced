@@ -11,7 +11,7 @@ internal object LocalJapanesePronunciation {
         analyzer: (String) -> LineReadingResult = SudachiReadingEngine::analyzeLine,
     ): LineReadingResult {
         if (text.isBlank()) return LineReadingResult(null, emptyList(), LineReadingStatus.EMPTY)
-        if (text.any(::isJapanese)) {
+        if (containsJapaneseSource(text)) {
             val result = analyzer(text)
             if (result.status == LineReadingStatus.COMPLETE) return result
             return kanaOnlyFallback(text) ?: result
@@ -24,14 +24,34 @@ internal object LocalJapanesePronunciation {
 
     /** Pure kana remains readable even if the Sudachi dictionary is unavailable. */
     private fun kanaOnlyFallback(source: String): LineReadingResult? {
-        val segments = Regex("[\\u3040-\\u30FF\\u30FC]+")
+        val segments = Regex("[\\u3040-\\u30FF\\uFF66-\\uFF9F]+")
             .findAll(source).toList()
         if (segments.isEmpty()) return null
+        // Without morphology は and へ may be pronounced ワ/エ as particles,
+        // not ハ/ヘ as ordinary kana. A guessed COMPLETE result would
+        // overwrite a correct provider reading and acquire native clocks.
+        // Only the explicitly known greeting has independently proven ワ.
+        if (segments.any { match ->
+                match.value != "こんにちは" &&
+                    match.value.any { it == 'は' || it == 'へ' }
+            }
+        ) return null
         val covered = BooleanArray(source.length)
         segments.forEach { match ->
             for (index in match.range) covered[index] = true
         }
-        if (source.indices.any { !covered[it] && source[it].isLetterOrDigit() }) return null
+        // A supplementary Han character occupies two UTF-16 Char values;
+        // neither surrogate half is a Char letter. Never declare a kana-only
+        // reading complete after silently dropping that source code point.
+        var offset = 0
+        while (offset < source.length) {
+            val codePoint = Character.codePointAt(source, offset)
+            val end = offset + Character.charCount(codePoint)
+            if (Character.isLetterOrDigit(codePoint) &&
+                (offset until end).any { !covered[it] }
+            ) return null
+            offset = end
+        }
         val tokens = segments.map { match ->
             RawReadingToken(
                 match.range.first, match.range.last + 1,
@@ -46,7 +66,37 @@ internal object LocalJapanesePronunciation {
         generateLine(line).text?.let { TranslationItem(index = index, roma = it) }
     }
 
-    private val scriptRuns = Regex("[\\u3040-\\u30ff\\u3400-\\u9fff\\u3005]+|[A-Za-z]+")
+    private data class SourceRun(val text: String, val japanese: Boolean)
+
+    /** Regex BMP character classes silently skip supplementary Han. Split
+     * on complete code points so a Japanese glyph is never dropped while
+     * transcribing the English words in the same source lyric. */
+    private fun sourceRuns(text: String): List<SourceRun>? {
+        val result = mutableListOf<SourceRun>()
+        var start = 0
+        var kind = 0 // 0=separator, 1=Japanese, 2=ASCII English
+        var offset = 0
+        while (offset < text.length) {
+            val codePoint = Character.codePointAt(text, offset)
+            val nextKind = when {
+                isJapaneseCodePoint(codePoint) -> 1
+                codePoint in 'a'.code..'z'.code ||
+                    codePoint in 'A'.code..'Z'.code -> 2
+                else -> 0
+            }
+            // Unsupported letters and digits are not safe to omit from an
+            // otherwise complete Japanese+English pronunciation.
+            if (nextKind == 0 && Character.isLetterOrDigit(codePoint)) return null
+            if (nextKind != kind) {
+                if (kind != 0) result += SourceRun(text.substring(start, offset), kind == 1)
+                start = offset
+                kind = nextKind
+            }
+            offset += Character.charCount(codePoint)
+        }
+        if (kind != 0) result += SourceRun(text.substring(start), kind == 1)
+        return result.takeIf { it.isNotEmpty() }
+    }
     private val englishWords = mapOf(
         "i" to "아이", "you" to "유", "me" to "미", "my" to "마이",
         "we" to "위", "your" to "유어", "love" to "러브", "baby" to "베이비",
@@ -61,7 +111,7 @@ internal object LocalJapanesePronunciation {
             val text = original.trim()
             if (text.isBlank()) return@mapIndexedNotNull null
             val reading = when {
-                text.any(::isJapanese) -> if (text.any { it in 'A'..'Z' || it in 'a'..'z' }) {
+                containsJapaneseSource(text) -> if (text.any { it in 'A'..'Z' || it in 'a'..'z' }) {
                     mixedJapaneseEnglishReading(text, japaneseReading)
                 } else {
                     japaneseReading(text)?.let(JapaneseToHangul::fromKana)
@@ -101,11 +151,10 @@ internal object LocalJapanesePronunciation {
         text: String,
         japaneseReading: (String) -> String?,
     ): String? {
-        val segments = scriptRuns.findAll(text).toList()
-        if (segments.isEmpty() || text.any { it in '\uac00'..'\ud7a3' }) return null
+        val segments = sourceRuns(text) ?: return null
         return segments.map { segment ->
-            val word = segment.value
-            if (word.any(::isJapanese)) {
+            val word = segment.text
+            if (segment.japanese) {
                 japaneseReading(word)?.let(JapaneseToHangul::fromKana) ?: return null
             } else {
                 englishWords[word.lowercase()] ?: return null
@@ -121,6 +170,18 @@ internal object LocalJapanesePronunciation {
         return mapped.joinToString(" ")
     }
 
-    private fun isJapanese(char: Char): Boolean = char in '\u3040'..'\u30ff' ||
-        char in '\u3400'..'\u9fff'
+    private fun isJapaneseCodePoint(codePoint: Int): Boolean =
+        codePoint in 0x3040..0x30FF || codePoint in 0xFF66..0xFF9F ||
+            codePoint == 0x3005 ||
+            Character.UnicodeScript.of(codePoint) == Character.UnicodeScript.HAN
+
+    private fun containsJapaneseSource(text: String): Boolean {
+        var offset = 0
+        while (offset < text.length) {
+            val codePoint = Character.codePointAt(text, offset)
+            if (isJapaneseCodePoint(codePoint)) return true
+            offset += Character.charCount(codePoint)
+        }
+        return false
+    }
 }

@@ -15,6 +15,37 @@ internal sealed interface WordAlignmentResult {
 
 /** Never invents a karaoke syllable boundary: it must already exist in the source. */
 internal object AppleWordReadingAlignment {
+    private fun isCodePointBoundary(source: String, offset: Int): Boolean =
+        offset in 0..source.length && !(offset > 0 && offset < source.length &&
+            Character.isHighSurrogate(source[offset - 1]) &&
+            Character.isLowSurrogate(source[offset])) &&
+            (offset == source.length || !JapaneseToHangul.isJapaneseVoicingMark(
+                Character.codePointAt(source, offset),
+            ))
+
+    private fun containsLetters(source: String): Boolean {
+        var offset = 0
+        while (offset < source.length) {
+            val cp = Character.codePointAt(source, offset)
+            if (JapaneseToHangul.isSpokenSourceBase(cp)) return true
+            offset += Character.charCount(cp)
+        }
+        return false
+    }
+
+    private fun hasUncoveredLetters(source: String, covered: BooleanArray): Boolean {
+        var offset = 0
+        while (offset < source.length) {
+            val cp = Character.codePointAt(source, offset)
+            val end = offset + Character.charCount(cp)
+            if (JapaneseToHangul.isLyricSourceContent(cp) &&
+                (offset until end).any { !covered[it] }
+            ) return true
+            offset = end
+        }
+        return false
+    }
+
     private fun isUnspokenDelimiter(char: Char): Boolean {
         if (char.isWhitespace()) return true
         return when (Character.getType(char)) {
@@ -37,6 +68,8 @@ internal object AppleWordReadingAlignment {
     ): WordAlignmentResult {
         if (appleWords.isEmpty()) return WordAlignmentResult.LineWide(AlignmentFailure.NO_WORDS)
         if (spans.isEmpty()) return WordAlignmentResult.LineWide(AlignmentFailure.INVALID_SPANS)
+        if (expectedHangul != null && !JapaneseToHangul.onlyHangulSoundLetters(expectedHangul))
+            return WordAlignmentResult.LineWide(AlignmentFailure.SOUND_MISMATCH)
 
         val ranges = mutableListOf<IntRange>()
         var cursor = 0
@@ -54,6 +87,9 @@ internal object AppleWordReadingAlignment {
             if (!original.startsWith(value, cursor)) {
                 return WordAlignmentResult.LineWide(AlignmentFailure.SOURCE_MISMATCH)
             }
+            if (!isCodePointBoundary(original, cursor) ||
+                !isCodePointBoundary(original, cursor + value.length)
+            ) return WordAlignmentResult.LineWide(AlignmentFailure.SOURCE_MISMATCH)
             ranges += cursor until (cursor + value.length)
             cursor += value.length
         }
@@ -67,12 +103,14 @@ internal object AppleWordReadingAlignment {
         for (span in spans) {
             if (span.sourceStart < previousEnd || span.sourceEnd <= span.sourceStart ||
                 span.sourceEnd > original.length ||
+                !isCodePointBoundary(original, span.sourceStart) ||
+                !isCodePointBoundary(original, span.sourceEnd) ||
                 original.substring(span.sourceStart, span.sourceEnd) != span.sourceText ||
                 span.hangul.isBlank() ||
                 span.hangul.any { it !in '가'..'힣' && !it.isWhitespace() } ||
                 // Punctuation may occupy a native lyric cell, but it cannot
                 // own phonetic syllables or inherit a sung-word clock.
-                span.sourceText.none(Char::isLetterOrDigit)
+                !containsLetters(span.sourceText)
             ) return WordAlignmentResult.LineWide(AlignmentFailure.INVALID_SPANS)
             val wordIndex = ranges.indexOfFirst { span.sourceStart in it }
             val endWordIndex = ranges.indexOfFirst { span.sourceEnd - 1 in it }
@@ -112,7 +150,7 @@ internal object AppleWordReadingAlignment {
         spans.forEach { span ->
             for (i in span.sourceStart until span.sourceEnd) covered[i] = true
         }
-        if (original.indices.any { original[it].isLetterOrDigit() && !covered[it] }) {
+        if (hasUncoveredLetters(original, covered)) {
             return WordAlignmentResult.LineWide(AlignmentFailure.INVALID_SPANS)
         }
         val joined = sounds.joinToString("") { it.toString() }.filter { it in '가'..'힣' }

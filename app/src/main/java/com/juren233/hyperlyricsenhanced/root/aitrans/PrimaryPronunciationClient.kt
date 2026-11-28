@@ -76,7 +76,9 @@ trans는 항상 빈 문자열이며 roma에는 발음만 한글로 적는다.
                 ?: AiApiKeyPool.parse(null, configs.apiKey),
         )
         if (keys.isEmpty()) return@withContext current
-        val missing = AIPronunciationPolicy.missingReadingIndices(original.lyrics, current)
+        val missing = AIPronunciationPolicy.missingReadingIndices(
+            original.lyrics, current, AIPronunciationPolicy.isChineseDominant(song),
+        )
         if (missing.isEmpty()) return@withContext current
         val isCohere = CohereNativeChatPolicy.applies(configs)
         val base = configs.baseUrl.orEmpty().trim().trimEnd('/')
@@ -165,7 +167,9 @@ trans는 항상 빈 문자열이며 roma에는 발음만 한글로 적는다.
                 "AppleMusicAiService",
                 "stage=primary_phonetics_recovery received=${accepted.size}/${batch.size}",
             )
-            merged = KoreanLyricOutputPolicy.mergePhonetics(merged, accepted)
+            merged = KoreanLyricOutputPolicy.mergePhonetics(
+                merged, accepted, payload.lyrics.associate { it.index to it.text },
+            )
         }
         merged
     }

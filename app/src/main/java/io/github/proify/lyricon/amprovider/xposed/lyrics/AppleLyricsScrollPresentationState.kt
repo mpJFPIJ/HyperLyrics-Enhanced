@@ -276,13 +276,33 @@ internal class AppleLyricsRestoreAttemptGate {
         if (last != current) {
             last = current
             unchangedSamples = 0
-            identicalDispatches = 1
+            identicalDispatches = 0
             return true
         }
         unchangedSamples++
-        if (identicalDispatches >= 2 || unchangedSamples < 4) return false
+        return identicalDispatches < 2 &&
+            (identicalDispatches == 0 || unchangedSamples >= 4)
+    }
+
+    /** Reflection can fail without invoking the native method at all. Count
+     * only actual dispatches, and never charge a reentrant newer target for
+     * an old request returning after its native layout callback. */
+    fun noteDispatchResult(
+        targetPosition: Int,
+        targetOffset: Int,
+        observedPosition: Int?,
+        observedOffset: Int?,
+        dispatched: Boolean,
+    ) {
+        if (!dispatched || last != Observation(
+                targetPosition, targetOffset, observedPosition, observedOffset,
+            )
+        ) return
+        // Failed reflection may have accumulated arbitrarily many identical
+        // pre-draw samples. Start the four-layout retry delay at the FIRST
+        // actual native dispatch, not at the first unsuccessful attempt.
+        if (identicalDispatches == 0) unchangedSamples = 0
         identicalDispatches++
-        return true
     }
 }
 

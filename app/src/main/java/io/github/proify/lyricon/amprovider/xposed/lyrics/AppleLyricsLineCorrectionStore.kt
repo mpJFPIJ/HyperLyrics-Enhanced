@@ -6,6 +6,8 @@
 package io.github.proify.lyricon.amprovider.xposed
 
 import com.juren233.hyperlyricsenhanced.common.lyric.RomanizationPolicy
+import java.nio.ByteBuffer
+import java.nio.charset.CodingErrorAction
 import java.security.MessageDigest
 import java.util.Base64
 
@@ -81,7 +83,9 @@ internal class AppleLyricsLineCorrectionStore(private val storage: Storage) {
         if (field == Field.PRONUNCIATION && sanitized != null &&
             RomanizationPolicy.sanitizeSupplement(row.sourceText, sanitized) == null
         ) return false
-        if (!load(id)) return false
+        // A second editor may have persisted another row while our same-song
+        // reading cache was alive. Save only from a fresh disk snapshot.
+        if (!load(id, refreshForWrite = true)) return false
         val before = loadedRows[row] ?: Correction()
         val after = before.with(field, sanitized)
         if (before == after) return false
@@ -114,7 +118,7 @@ internal class AppleLyricsLineCorrectionStore(private val storage: Storage) {
         if (newPronunciation != null && (newPronunciation.length > MAX_TEXT_LENGTH ||
                 RomanizationPolicy.sanitizeSupplement(row.sourceText, newPronunciation) == null)
         ) return false
-        if (!load(id)) return false
+        if (!load(id, refreshForWrite = true)) return false
         val before = loadedRows[row] ?: Correction()
         val after = before.copy(translation = newTranslation, pronunciation = newPronunciation)
         if (before == after) return true
@@ -129,8 +133,8 @@ internal class AppleLyricsLineCorrectionStore(private val storage: Storage) {
         return true
     }
 
-    private fun load(songId: String): Boolean {
-        if (loadedSongId == songId) return true
+    private fun load(songId: String, refreshForWrite: Boolean = false): Boolean {
+        if (!refreshForWrite && loadedSongId == songId) return true
         val key = storageKey(songId)
         val decoded = runCatching { decode(storage.read(key)) }
         if (decoded.isFailure) {
@@ -180,24 +184,43 @@ internal class AppleLyricsLineCorrectionStore(private val storage: Storage) {
     }
 
     private fun decode(raw: String?): Map<Row, Correction> {
-        if (raw == null || raw.length > MAX_SONG_BYTES || !raw.startsWith("v1\n")) return emptyMap()
+        if (raw == null) return emptyMap()
+        // A present but malformed file is not an empty correction set.
+        // Skipping damaged entries and later saving a new edit would silently
+        // overwrite every other recoverable user-authored line in that file.
+        require(raw.length <= MAX_SONG_BYTES && raw.startsWith("v1\n") &&
+            raw.endsWith('\n')) { "invalid correction file envelope" }
+        if (raw == "v1\n") return emptyMap()
+        val body = raw.substring(3, raw.length - 1)
+        require(body.isNotEmpty()) { "empty correction record" }
         val entries = mutableMapOf<Row, Correction>()
-        raw.lineSequence().drop(1).take(MAX_LINES_PER_SONG).forEach { encoded ->
+        var count = 0
+        body.lineSequence().forEach { encoded ->
+            require(++count <= MAX_LINES_PER_SONG) { "too many correction entries" }
             val parts = encoded.split('\t')
-            if (parts.size != 6) return@forEach
-            val begin = parts[0].toLongOrNull() ?: return@forEach
-            val end = parts[1].toLongOrNull() ?: return@forEach
-            val source = unbase64(parts[2]) ?: return@forEach
-            val row = validRow(begin, end, source) ?: return@forEach
+            require(parts.size == 6) { "invalid correction entry shape" }
+            val begin = parts[0].toLongOrNull()
+                ?: error("invalid correction start")
+            val end = parts[1].toLongOrNull()
+                ?: error("invalid correction end")
+            fun field(encodedValue: String): String? = if (encodedValue == "-") null
+                else unbase64(encodedValue) ?: error("invalid correction text")
+            val source = field(parts[2]) ?: error("missing correction source")
+            val row = validRow(begin, end, source)
+                ?: error("invalid correction row")
+            require(row.sourceText == source) { "noncanonical correction source" }
             val correction = Correction(
-                original = unbase64(parts[3]),
-                translation = unbase64(parts[4]),
-                pronunciation = unbase64(parts[5]),
+                original = field(parts[3]),
+                translation = field(parts[4]),
+                pronunciation = field(parts[5]),
             )
-            if (!correction.isEmpty() && listOfNotNull(
-                    correction.original, correction.translation, correction.pronunciation,
-                ).all { it.length <= MAX_TEXT_LENGTH }
-            ) entries[row] = correction
+            require(!correction.isEmpty() && listOfNotNull(
+                correction.original, correction.translation, correction.pronunciation,
+            ).all { it.isNotBlank() && it == it.trim() && it.length <= MAX_TEXT_LENGTH } &&
+                row !in entries) {
+                "invalid or duplicate correction entry"
+            }
+            entries[row] = correction
         }
         return entries
     }
@@ -209,7 +232,13 @@ internal class AppleLyricsLineCorrectionStore(private val storage: Storage) {
     private fun unbase64(value: String): String? = if (value == "-") {
         null
     } else {
-        runCatching { String(Base64.getUrlDecoder().decode(value), Charsets.UTF_8) }.getOrNull()
+        runCatching {
+            Charsets.UTF_8.newDecoder()
+                .onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT)
+                .decode(ByteBuffer.wrap(Base64.getUrlDecoder().decode(value)))
+                .toString()
+        }.getOrNull()
     }
 
     private companion object {

@@ -1,9 +1,27 @@
 package com.juren233.hyperlyricsenhanced.root.aitrans
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AiLyricCompositionTest {
+    @Test fun invalidLegacyMixedLocalReadingCannotOverwriteFreshRemoteCorrection() {
+        val source = listOf("さよなら 사랑해")
+        val remote = listOf(TranslationItem(0, "안녕 사랑해", "사요나라 사랑해"))
+        val local = listOf(TranslationItem(0, roma = "사요나라"))
+        val validLocal = AiLyricComposition.validatedLocalReadings(source, local, false)
+        assertTrue(validLocal.isEmpty())
+        assertEquals("사요나라 사랑해", AiLyricComposition.merge(remote, validLocal).single().roma)
+    }
+
+    @Test fun phoneticsLocalCacheSkipsChineseRowsAndKeepsJapaneseRow() {
+        val source = listOf("感谢你曾来过", "君の名は")
+        val cache = listOf(TranslationItem(0, roma = "칸샤니"),
+            TranslationItem(1, roma = "키미노 나와"))
+        assertEquals(listOf(1), AiLyricComposition.validatedLocalReadings(
+            source, cache, chineseDominant = true,
+        ).map { it.index })
+    }
     @Test fun sourceDerivedPronunciationOverridesUnverifiedAiHallucinations() {
         val translated = listOf(
             TranslationItem(index = 0, trans = "안 돼", roma = "다메 키코 노미소"),

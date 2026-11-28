@@ -111,10 +111,31 @@ internal fun AppleLyricsBlurHooks.appleLyricsChildTopY(view: View): Float =
 internal fun AppleLyricsBlurHooks.appleLyricsChildBottomY(view: View): Float =
     view.bottom + view.translationY
 
+/** A missing reflected native state is never an observed IDLE. In particular,
+ * recovery must not move a list whose actual user-drag state is unknown. */
+internal object AppleLyricsScrollStatePolicy {
+    const val UNKNOWN = -1
+    private const val IDLE = 0
+    private const val DRAGGING = 1
+    private const val SETTLING = 2
+
+    fun fromNativeResult(raw: Any?): Int = when ((raw as? Number)?.toDouble()) {
+        IDLE.toDouble() -> IDLE
+        DRAGGING.toDouble() -> DRAGGING
+        SETTLING.toDouble() -> SETTLING
+        else -> UNKNOWN
+    }
+
+    /** Restore may work while Apple is settling, but never over an observed
+     * drag or an unreadable/invalid host scroll state. */
+    fun mayRestore(scrollState: Int): Boolean =
+        scrollState == IDLE || scrollState == SETTLING
+}
+
 internal fun AppleLyricsBlurHooks.appleLyricsRecyclerScrollState(recyclerView: Any): Int =
-    runCatching {
-        (AppleReflection.call(recyclerView, "getScrollState") as? Number)?.toInt()
-    }.getOrNull() ?: AppleLyricsBlurHooks.APPLE_LYRICS_SCROLL_STATE_IDLE
+    AppleLyricsScrollStatePolicy.fromNativeResult(runCatching {
+        AppleReflection.call(recyclerView, "getScrollState")
+    }.getOrNull())
 
 /** A failed native reflection is unknown, not an observed empty active set.
  * Translation can then safely fall back to its verified source time windows. */

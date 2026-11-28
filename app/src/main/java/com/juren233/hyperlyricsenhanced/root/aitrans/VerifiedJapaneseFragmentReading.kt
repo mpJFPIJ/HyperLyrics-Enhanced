@@ -11,11 +11,14 @@ package com.juren233.hyperlyricsenhanced.root.aitrans
 internal object VerifiedJapaneseFragmentReading {
     fun split(fragments: List<String>, fullSound: String): List<String>? {
         if (fragments.isEmpty() || fragments.any(String::isEmpty) ||
-            fullSound.isEmpty() || fullSound.any { it !in '가'..'힣' }
+            fullSound.isEmpty() || fullSound.any { it !in '가'..'힣' } ||
+            // A word/row cut at か|゙愛 is not a kana reading boundary. The
+            // Han residual must not license the preceding plain か clock.
+            fragments.any { JapaneseToHangul.isJapaneseVoicingMark(it.codePointAt(0)) }
         ) return null
 
         val literal = fragments.map { fragment ->
-            if (fragment.any { it !in '\u3040'..'\u30ff' }) null
+            if (fragment.any { !JapaneseToHangul.isLiteralKanaCodePoint(it.code) }) null
             else JapaneseToHangul.fromKana(fragment)
                 ?.filter { it in '가'..'힣' }
                 ?.takeIf(String::isNotEmpty)
@@ -25,9 +28,7 @@ internal object VerifiedJapaneseFragmentReading {
         }
 
         val unknown = literal.indices.filter { literal[it] == null }
-        if (unknown.size != 1 || fragments[unknown.single()].none {
-                it in '\u3400'..'\u9fff' || it == '々'
-            }
+        if (unknown.size != 1 || !hasJapaneseHan(fragments[unknown.single()])
         ) return null
 
         val index = unknown.single()
@@ -41,5 +42,17 @@ internal object VerifiedJapaneseFragmentReading {
         return literal.mapIndexed { cell, sound ->
             if (cell == index) residual else sound ?: return null
         }.takeIf { it.joinToString("") == fullSound }
+    }
+
+    private fun hasJapaneseHan(text: String): Boolean {
+        var offset = 0
+        while (offset < text.length) {
+            val point = Character.codePointAt(text, offset)
+            if (Character.UnicodeScript.of(point) == Character.UnicodeScript.HAN ||
+                point == '々'.code
+            ) return true
+            offset += Character.charCount(point)
+        }
+        return false
     }
 }

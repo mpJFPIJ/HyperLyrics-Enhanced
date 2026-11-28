@@ -12,12 +12,16 @@ internal object AppleLyricsActiveLineEditPolicy {
     /** Never fall back to an unrelated line during gaps, before the song or after its end. */
     fun current(lines: List<Line>, playbackPositionMs: Long): Line? {
         if (playbackPositionMs < 0L) return null
-        return lines.asSequence()
+        val candidates = lines.asSequence()
             .filter { line ->
                 line.begin >= 0L && line.end > line.begin &&
                     line.begin <= playbackPositionMs && playbackPositionMs < line.end &&
                     line.text.isNotBlank()
             }
-            .maxByOrNull { it.begin }
+            .toList()
+        val latestStart = candidates.maxOfOrNull(Line::begin) ?: return null
+        // Two native originals can own the same start. Opening the editor
+        // for one by list order could modify the wrong source occurrence.
+        return candidates.singleOrNull { it.begin == latestStart }
     }
 }

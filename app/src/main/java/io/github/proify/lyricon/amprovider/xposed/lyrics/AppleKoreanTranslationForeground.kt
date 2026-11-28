@@ -8,6 +8,7 @@ import android.graphics.drawable.Drawable
 import android.view.View
 import android.view.ViewGroup
 import android.widget.TextView
+import kotlin.math.abs
 
 /**
  * Repaints one active Korean meaning *outside* the nested Apple lyric
@@ -25,6 +26,13 @@ internal class AppleKoreanTranslationForeground(
 ) : Drawable() {
     private var opacity: Int = 255
     private var foregroundColor: Int = initialForegroundColor
+    private val inheritedClip = Rect()
+    private val appliedClip = Rect()
+    private var sampledClip = false
+    private val ownership = AppleOverlayPaintOwnership()
+
+    /** Native RecyclerView may paint before the next shared refresh tick. */
+    fun bindOwner(check: () -> Boolean) = ownership.bind(check)
 
     /** Change only the color; never remove and recreate this visible painter. */
     fun setForegroundColor(color: Int) {
@@ -34,12 +42,23 @@ internal class AppleKoreanTranslationForeground(
     }
 
     override fun draw(canvas: Canvas) {
+        if (!ownership.isCurrent()) return
+        val parent = holderRoot as? ViewGroup ?: return
+        // Measure all native meaning fragments in one draw. Sampling only
+        // the first TextView misses a clipped last wrapped translation row.
+        val sampleAll = !sampledClip && translatedViews.isNotEmpty() &&
+            translatedViews.all { it.isAttachedToWindow && it.isShown &&
+                it.width > 0 && it.height > 0 && (it.layout?.lineCount ?: 0) > 0
+            } && canvas.getClipBounds(inheritedClip)
+        var fragmentCount = 0
+        var firstInkTop = Int.MAX_VALUE
+        var lastInkBottom = Int.MIN_VALUE
+        var maxTransformedAncestors = 0
         for (text in translatedViews) {
             if (!text.isAttachedToWindow || !text.isShown) continue
             val layout = text.layout ?: continue
             if (text.width <= 0 || text.height <= 0) continue
             val local = Rect(0, 0, text.width, text.height)
-            val parent = holderRoot as? ViewGroup ?: continue
             if (!runCatching {
                     parent.offsetDescendantRectToMyCoords(text, local)
                 }.isSuccess
@@ -51,9 +70,39 @@ internal class AppleKoreanTranslationForeground(
                 // this lyric holder, as the Hangul-reading foreground does,
                 // so no ascender/descender is cut at the TextView border.
                 canvas.clipRect(0, 0, holderRoot.width, holderRoot.height)
+                if (sampleAll && canvas.getClipBounds(appliedClip)) {
+                    val metrics = text.paint.fontMetricsInt
+                    val origin = AppleOverlayMappedTextOrigin.top(
+                        local.top, text.totalPaddingTop,
+                    )
+                    firstInkTop = minOf(
+                        firstInkTop, origin + layout.getLineBaseline(0) + metrics.top,
+                    )
+                    lastInkBottom = maxOf(
+                        lastInkBottom,
+                        origin + layout.getLineBaseline(layout.lineCount - 1) + metrics.bottom,
+                    )
+                    var transformed = 0
+                    var ancestor: View? = text
+                    while (ancestor != null && ancestor !== holderRoot) {
+                        if (abs(ancestor.translationX) > 0.01f ||
+                            abs(ancestor.translationY) > 0.01f ||
+                            abs(ancestor.scaleX - 1f) > 0.01f ||
+                            abs(ancestor.scaleY - 1f) > 0.01f ||
+                            abs(ancestor.rotation) > 0.01f
+                        ) transformed++
+                        ancestor = ancestor.parent as? View
+                    }
+                    maxTransformedAncestors = maxOf(maxTransformedAncestors, transformed)
+                    fragmentCount++
+                }
                 canvas.translate(
-                    (local.left + text.compoundPaddingLeft - text.scrollX).toFloat(),
-                    (local.top + text.totalPaddingTop - text.scrollY).toFloat(),
+                    AppleOverlayMappedTextOrigin.left(
+                        local.left, text.compoundPaddingLeft,
+                    ).toFloat(),
+                    AppleOverlayMappedTextOrigin.top(
+                        local.top, text.totalPaddingTop,
+                    ).toFloat(),
                 )
                 // Layout.draw uses TextView's TextPaint; restore its state
                 // immediately so Apple's native next frame is unaffected.
@@ -73,6 +122,28 @@ internal class AppleKoreanTranslationForeground(
                 }
             } finally {
                 canvas.restoreToCount(save)
+            }
+        }
+        if (sampleAll && fragmentCount == translatedViews.size) {
+            sampledClip = true
+            val added = AppleOverlayClipPolicy.addedInkLoss(
+                firstInkTop, lastInkBottom,
+                inheritedClip.top, inheritedClip.bottom,
+                appliedClip.top, appliedClip.bottom,
+            )
+            val summary = "hostH=${holderRoot.height} " +
+                "canvasBeforeTop=${inheritedClip.top} " +
+                "canvasBeforeBottom=${inheritedClip.bottom} " +
+                "canvasAfterTop=${appliedClip.top} " +
+                "canvasAfterBottom=${appliedClip.bottom} " +
+                "inkTop=$firstInkTop inkBottom=$lastInkBottom " +
+                "manualLostTop=${added.topPx} " +
+                "manualLostBottom=${added.bottomPx} " +
+                "transformedAncestors=$maxTransformedAncestors"
+            holderRoot.post {
+                AppleLyricUiRuntimeProbe.record(
+                    "meaning_paint_clip", summary, holderRoot,
+                )
             }
         }
     }

@@ -19,6 +19,17 @@ internal class ApplePlaybackClockEventGate {
 
     fun readTicket(): Long = synchronized(lock) { generation }
 
+    /** A synchronous UI getter must obey the same seek/player generation as
+     * coroutine publications. Run only a bounded, side-effect-free selection
+     * under the gate; the potentially slow native getter runs outside it. */
+    fun <T> readIfCurrent(
+        ticket: Long,
+        stillCurrent: () -> Boolean,
+        select: () -> T,
+    ): T? = synchronized(lock) {
+        if (ticket != generation || !stillCurrent()) null else select()
+    }
+
     fun invalidate() {
         synchronized(lock) { generation++ }
     }

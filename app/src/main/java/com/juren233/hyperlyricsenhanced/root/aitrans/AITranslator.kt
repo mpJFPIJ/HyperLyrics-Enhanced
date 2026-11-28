@@ -237,7 +237,11 @@ object AITranslator {
 
     private fun locallyReadableSong(song: Song): List<TranslationItem> {
         if (!AIPronunciationPolicy.shouldEnrich(song)) return emptyList()
-        return LocalJapanesePronunciation.generate(song.lyrics.orEmpty().map { it.text.orEmpty() })
+        val lines = song.lyrics.orEmpty().map { it.text.orEmpty() }
+        val chineseDominant = AIPronunciationPolicy.isChineseDominant(song)
+        return AiLyricComposition.validatedLocalReadings(
+            lines, LocalJapanesePronunciation.generate(lines), chineseDominant,
+        )
     }
 
     private suspend fun loadLocalPronunciation(
@@ -247,17 +251,18 @@ object AITranslator {
         ticket: AiCacheWriteTicket,
     ): List<TranslationItem> {
         if (!includePronunciation) return emptyList()
+        val chineseDominant = AIPronunciationPolicy.isChineseDominant(song)
         val key = AITranslationKey.pronunciation(song, lines)
-        val cached = (cache.getFromMemory(key) ?: cache.getFromDb(key)).orEmpty()
-        val knownIndices = cached.filter { item ->
-            item.index in lines.indices &&
-                com.juren233.hyperlyricsenhanced.common.lyric.RomanizationPolicy
-                    .sanitizeHangulSupplement(lines[item.index], item.roma) != null
-        }.map(TranslationItem::index).toSet()
-        val eligibleCount = lines.count(AIPronunciationPolicy::eligibleForeignLine)
+        val cached = AiLyricComposition.validatedLocalReadings(
+            lines, (cache.getFromMemory(key) ?: cache.getFromDb(key)).orEmpty(), chineseDominant,
+        )
+        val knownIndices = cached.map(TranslationItem::index).toSet()
+        val eligibleCount = lines.count { AIPronunciationPolicy.eligibleForeignLine(it, chineseDominant) }
         if (knownIndices.size >= eligibleCount) return cached
-        val fresh = LocalJapanesePronunciation.generate(lines)
-            .filterNot { it.index in knownIndices }
+        val fresh = AiLyricComposition.validatedLocalReadings(
+            lines, LocalJapanesePronunciation.generate(lines).filterNot { it.index in knownIndices },
+            chineseDominant,
+        )
         if (fresh.isEmpty()) return cached
         val combined = AiLyricComposition.merge(cached, fresh)
         cache.saveToDb(key, combined, song, ticket)
@@ -281,29 +286,38 @@ object AITranslator {
         if (!includePronunciation ||
             AIPronunciationPolicy.missingReadingIndices(
                 originalLines.mapIndexed { index, line -> TranslationRequestItem(index, line) },
-                cached,
+                cached, AIPronunciationPolicy.isChineseDominant(song),
             ).isEmpty() ||
             (GroqApiKeyPool.configured(configs).isEmpty() && !configs.isUsable)
         ) return cached
         val now = System.nanoTime() / 1_000_000L
         cache.ensureCurrent(ticket)
         if (!repairAttempts.claim(key, ticket, now)) return cached
-        val request = TranslationRequest(originalLines.mapIndexed { index, line ->
-            TranslationRequestItem(index, line)
-        })
-        val groqPatched = if (GroqApiKeyPool.configured(configs).isNotEmpty()) {
-            GroqMultiModelClient.enrichMissingPronunciation(configs, song, request, cached)
-        } else cached
-        // A single primary-provider API key is enough for a phonetics-only
-        // recovery attempt. Cohere's translation-only model does not normally
-        // emit roma, so don't permanently strand a few unresolved lyric lines.
-        val patched = if (configs.isUsable) PrimaryPronunciationClient.recover(
-            configs, song, request, groqPatched,
-        ) else groqPatched
-        if (patched != cached) {
-            cache.saveToDb(key, patched, song, ticket)
+        var persisted = false
+        try {
+            val request = TranslationRequest(originalLines.mapIndexed { index, line ->
+                TranslationRequestItem(index, line)
+            })
+            val groqPatched = if (GroqApiKeyPool.configured(configs).isNotEmpty()) {
+                GroqMultiModelClient.enrichMissingPronunciation(configs, song, request, cached)
+            } else cached
+            // A single primary-provider API key is enough for a phonetics-only
+            // recovery attempt. Cohere's translation-only model does not normally
+            // emit roma, so don't permanently strand a few unresolved lyric lines.
+            val patched = if (configs.isUsable) PrimaryPronunciationClient.recover(
+                configs, song, request, groqPatched,
+            ) else groqPatched
+            if (patched != cached) {
+                persisted = cache.saveToDb(key, patched, song, ticket)
+            }
+            return patched
+        } finally {
+            // The retry clock starts when a request finishes, not while it is
+            // still in flight. Keep success and failure backoffs independent.
+            val finishedAt = System.nanoTime() / 1_000_000L
+            if (persisted) repairAttempts.markSucceeded(key, ticket, now, finishedAt)
+            else repairAttempts.markFailed(key, ticket, now, finishedAt)
         }
-        return patched
     }
 
     private fun mergeWithLegacyTranslations(
@@ -327,7 +341,13 @@ object AITranslator {
 
 /** A late callback cannot claim the retry window of a newer visit after deletion. */
 internal class AiPhoneticsRepairAttempts(private val retryDelayMs: Long) {
-    private data class Attempt(val generation: Int, val epoch: Long, val at: Long)
+    private data class Attempt(
+        val generation: Int,
+        val epoch: Long,
+        val at: Long,
+        val finishedAt: Long? = null,
+        val failed: Boolean = false,
+    )
     private val lastByKey = mutableMapOf<String, Attempt>()
 
     @Synchronized fun claim(key: String, ticket: AiCacheWriteTicket, now: Long): Boolean {
@@ -336,11 +356,35 @@ internal class AiPhoneticsRepairAttempts(private val retryDelayMs: Long) {
             if (ticket.generation < last.generation) return false
             if (ticket.generation == last.generation) {
                 if (ticket.epoch < last.epoch) return false
-                if (ticket.epoch == last.epoch && now - last.at < retryDelayMs) return false
+                if (ticket.epoch == last.epoch) {
+                    val finishedAt = last.finishedAt ?: return false // still running
+                    val cooldown = if (last.failed) minOf(retryDelayMs, 2L * 60_000L)
+                        else retryDelayMs
+                    if (now - finishedAt < cooldown) return false
+                }
             }
         }
         lastByKey[key] = Attempt(ticket.generation, ticket.epoch, now)
         return true
+    }
+
+    /** A delayed outcome must never complete or shorten a newer attempt. */
+    fun markFailed(key: String, ticket: AiCacheWriteTicket, attemptedAt: Long,
+                   finishedAt: Long = attemptedAt) =
+        finish(key, ticket, attemptedAt, finishedAt, failed = true)
+
+    fun markSucceeded(key: String, ticket: AiCacheWriteTicket, attemptedAt: Long,
+                      finishedAt: Long) =
+        finish(key, ticket, attemptedAt, finishedAt, failed = false)
+
+    @Synchronized private fun finish(key: String, ticket: AiCacheWriteTicket,
+                                     attemptedAt: Long, finishedAt: Long, failed: Boolean) {
+        val last = lastByKey[key] ?: return
+        if (last.generation == ticket.generation && last.epoch == ticket.epoch &&
+            last.at == attemptedAt && last.finishedAt == null
+        ) {
+            lastByKey[key] = last.copy(finishedAt = maxOf(finishedAt, attemptedAt), failed = failed)
+        }
     }
 
     @Synchronized fun forget(keys: Set<String>) {

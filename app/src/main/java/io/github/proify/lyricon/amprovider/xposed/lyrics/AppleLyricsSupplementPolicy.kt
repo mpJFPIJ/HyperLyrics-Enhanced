@@ -104,9 +104,15 @@ internal fun selectAppleLyricsRestoreAnchor(
     playbackMappedPosition: Int? = null,
 ): AppleLyricsRestoreAnchor? {
     if (itemCount <= 0) return null
-    val currentActivePosition = currentActivePositions
-        .filter { it in 0 until itemCount }
-        .maxOrNull()
+    val currentActiveCandidates = currentActivePositions
+        .filterTo(linkedSetOf()) { it in 0 until itemCount }
+    val currentActivePosition = when (currentActiveCandidates.size) {
+        0 -> null
+        1 -> currentActiveCandidates.first()
+        // Both outgoing/incoming rows can be active simultaneously. Only a
+        // native row↔playback clock proof can choose the saved visual anchor.
+        else -> playbackMappedPosition?.takeIf(currentActiveCandidates::contains)
+    }
     if (currentActivePosition != null && savedActiveOffset != null) {
         return AppleLyricsRestoreAnchor(
             position = currentActivePosition,
@@ -124,7 +130,10 @@ internal fun selectAppleLyricsRestoreAnchor(
         )
     }
     val mappedPosition = playbackMappedPosition
-        ?.takeIf { it >= 0 }
+        ?.takeIf { position ->
+            position >= 0 && (currentActiveCandidates.size <= 1 ||
+                position in currentActiveCandidates)
+        }
         ?.coerceIn(0, itemCount - 1)
     if (mappedPosition != null) {
         return AppleLyricsRestoreAnchor(

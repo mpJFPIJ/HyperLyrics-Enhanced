@@ -42,24 +42,68 @@ object RomanizationPolicy {
         ) return null
 
         var hasForeignLetter = false
+        var hasOriginalHangul = false
         var index = 0
         while (index < original.length) {
             val code = original.codePointAt(index)
             if (Character.isLetter(code)) {
-                when (Character.UnicodeScript.of(code)) {
-                    Character.UnicodeScript.LATIN,
-                    Character.UnicodeScript.HAN,
-                    Character.UnicodeScript.HIRAGANA,
-                    Character.UnicodeScript.KATAKANA -> hasForeignLetter = true
-                    // U+30FC (ー) is a Japanese long-vowel sign, classified as
-                    // UnicodeScript.COMMON despite being a letter. It may
-                    // appear inside otherwise valid Katakana lyrics.
-                    else -> if (code != 0x30FC) return null // never annotate Korean lines
+                // A fullwidth or halfwidth length/voicing mark cannot by
+                // itself establish a foreign-language lyric. Its neighboring
+                // actual Kana must pass the normal source-script gate.
+                if (code != 0x30FC && code != 0xFF70 && code !in 0xFF9E..0xFF9F) {
+                    when (Character.UnicodeScript.of(code)) {
+                        Character.UnicodeScript.LATIN,
+                        Character.UnicodeScript.HAN,
+                        Character.UnicodeScript.HIRAGANA,
+                        Character.UnicodeScript.KATAKANA -> hasForeignLetter = true
+                        Character.UnicodeScript.HANGUL -> hasOriginalHangul = true
+                        else -> {
+                            if (code in 0xFF66..0xFF9D) hasForeignLetter = true
+                            else return null // never annotate unsupported scripts
+                        }
+                    }
                 }
             }
             index += Character.charCount(code)
         }
-        return candidate.takeIf { hasForeignLetter }
+        return candidate.takeIf {
+            hasForeignLetter &&
+                (!hasOriginalHangul || preservesOriginalHangulRuns(original, shown))
+        }
+    }
+
+    /** In a mixed-language lyric the model must not drop or rewrite Korean words
+     * while producing the pronunciation of surrounding Japanese/English text. */
+    private fun preservesOriginalHangulRuns(original: String, reading: String): Boolean {
+        val runs = mutableListOf<String>()
+        val run = StringBuilder()
+        original.codePoints().forEach { codePoint ->
+            if (Character.UnicodeScript.of(codePoint) == Character.UnicodeScript.HANGUL) {
+                run.appendCodePoint(codePoint)
+            } else if (run.isNotEmpty()) {
+                runs.add(run.toString())
+                run.clear()
+            }
+        }
+        if (run.isNotEmpty()) runs.add(run.toString())
+        val readingHangul = buildString(reading.length) {
+            reading.codePoints().forEach { codePoint ->
+                if (Character.UnicodeScript.of(codePoint) == Character.UnicodeScript.HANGUL) {
+                    appendCodePoint(codePoint)
+                }
+            }
+        }
+        val originalHangulLength = runs.sumOf { it.codePointCount(0, it.length) }
+        if (readingHangul.codePointCount(0, readingHangul.length) <= originalHangulLength) {
+            return false // The foreign fragment received no phonetic supplement.
+        }
+        var cursor = 0
+        for (part in runs) {
+            val foundAt = readingHangul.indexOf(part, startIndex = cursor)
+            if (foundAt < 0) return false
+            cursor = foundAt + part.length
+        }
+        return true
     }
 
     /**
@@ -72,7 +116,8 @@ object RomanizationPolicy {
      */
     private fun repairJapaneseNasalCoda(original: String, reading: String): String? {
         if (original.length > 4_096 || reading.length > 4_096 ||
-            original.none { it == 'ん' || it == 'ン' } || reading.count { it == 'ㄴ' } != 1
+            original.none { it == 'ん' || it == 'ン' || it == 'ﾝ' } ||
+            reading.count { it == 'ㄴ' } != 1
         ) {
             return null
         }
@@ -95,7 +140,8 @@ object RomanizationPolicy {
             deleteCharAt(nasal)
         }.toString().trim()
         val allKana = original.codePoints().allMatch { codePoint ->
-            codePoint in 0x3040..0x30FF || !Character.isLetterOrDigit(codePoint)
+            JapaneseToHangul.isLiteralKanaCodePoint(codePoint) ||
+                !Character.isLetterOrDigit(codePoint)
         }
         if (!allKana) return null
         val whole = JapaneseToHangul.fromKana(original)?.filter { it in '가'..'힣' }

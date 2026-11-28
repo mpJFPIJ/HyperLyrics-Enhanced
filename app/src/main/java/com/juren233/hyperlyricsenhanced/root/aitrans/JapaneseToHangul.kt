@@ -1,7 +1,50 @@
 package com.juren233.hyperlyricsenhanced.root.aitrans
 
+import java.text.Normalizer
+
 /** Conservative kana-to-Hangul transcription. Unknown scripts are never guessed. */
 internal object JapaneseToHangul {
+    private val halfwidthKanaRun = Regex("[\\uFF61-\\uFF9F]+")
+
+    /** Shared source classification for the native-word projector and the
+     * visual/timing consumers. A voicing mark is source content, but can
+     * never independently justify a spoken Hangul token. */
+    fun isJapaneseVoicingMark(codePoint: Int): Boolean =
+        codePoint in 0x3099..0x309C || codePoint in 0xFF9E..0xFF9F
+
+    fun isLyricSourceContent(codePoint: Int): Boolean =
+        Character.isLetterOrDigit(codePoint) || isJapaneseVoicingMark(codePoint)
+
+    fun isSpokenSourceBase(codePoint: Int): Boolean =
+        Character.isLetterOrDigit(codePoint) && !isJapaneseVoicingMark(codePoint)
+
+    fun containsSpokenSourceBase(text: String): Boolean {
+        var offset = 0
+        while (offset < text.length) {
+            val cp = Character.codePointAt(text, offset)
+            if (isSpokenSourceBase(cp)) return true
+            offset += Character.charCount(cp)
+        }
+        return false
+    }
+
+    fun onlyHangulSoundLetters(text: String): Boolean {
+        var offset = 0
+        while (offset < text.length) {
+            val cp = Character.codePointAt(text, offset)
+            if (isJapaneseVoicingMark(cp) ||
+                (Character.isLetterOrDigit(cp) && cp !in '가'.code..'힣'.code)
+            ) return false
+            offset += Character.charCount(cp)
+        }
+        return true
+    }
+
+    /** Shared literal-kana source gate for native words and measured rows.
+     * Halfwidth dakuten counts as part of the source, never a standalone sound. */
+    fun isLiteralKanaCodePoint(codePoint: Int): Boolean =
+        codePoint in 0x3040..0x30ff || codePoint in 0xff66..0xff9f
+
     private val base = mapOf(
         'あ' to "아", 'い' to "이", 'う' to "우", 'え' to "에", 'お' to "오",
         'か' to "카", 'き' to "키", 'く' to "쿠", 'け' to "케", 'こ' to "코",
@@ -43,8 +86,20 @@ internal object JapaneseToHangul {
 
     fun fromKana(reading: String): String? {
         if (reading.isBlank()) return null
-        val normalized = buildString(reading.length) {
-            reading.forEach { c ->
+        // Fold only halfwidth Japanese runs. Global NFKC could also turn
+        // unsupported compatibility letters into plausible Latin readings.
+        // The original source and its UTF-16 offsets are never normalized.
+        val kana = if (reading.any { it in '\uFF61'..'\uFF9F' }) {
+            halfwidthKanaRun.replace(reading) { match ->
+                Normalizer.normalize(match.value, Normalizer.Form.NFKC)
+            }
+        } else reading
+        // Only the temporary transcription buffer is canonically composed.
+        // Source tokens/Apple native word offsets still refer to the caller's
+        // untouched UTF-16 text, including any decomposed voicing marks.
+        val composed = Normalizer.normalize(kana, Normalizer.Form.NFC)
+        val normalized = buildString(composed.length) {
+            composed.forEach { c ->
                 append(if (c in 'ァ'..'ヶ') (c.code - 0x60).toChar() else c)
             }
         }

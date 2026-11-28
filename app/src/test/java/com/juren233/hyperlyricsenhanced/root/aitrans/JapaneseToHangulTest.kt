@@ -25,4 +25,27 @@ class JapaneseToHangulTest {
     @Test fun repeatedWordsStayDistinct() {
         assertEquals("다메 다메", JapaneseToHangul.fromKana("ダメ ダメ"))
     }
+
+    @Test fun halfwidthKanaFoldsVoicingAndDigraphsWithoutChangingOtherScripts() {
+        assertEquals("하로", JapaneseToHangul.fromKana("ﾊﾛｰ"))
+        assertEquals("가", JapaneseToHangul.fromKana("ｶﾞ"))
+        assertEquals("파", JapaneseToHangul.fromKana("ﾊﾟ"))
+        assertEquals("캬", JapaneseToHangul.fromKana("ｷｬ"))
+        assertEquals("가 하로", JapaneseToHangul.fromKana("ｶﾞ･ﾊﾛｰ"))
+        assertEquals("하로", JapaneseToHangul.fromKana("ハロー"))
+        // Global NFKC would also fold unrelated compatibility letters.
+        assertNull(JapaneseToHangul.fromKana("Ａ"))
+        assertNull(JapaneseToHangul.fromKana("ｶﾞ愛"))
+    }
+
+    @Test fun decomposedVoicingIsComposedOnlyForTranscriptionNotForSourceOffsets() {
+        assertEquals("가", JapaneseToHangul.fromKana("が"))
+        assertEquals("가", JapaneseToHangul.fromKana("か\u3099"))
+        assertEquals("가", JapaneseToHangul.fromKana("カ\u3099"))
+        assertEquals("가", JapaneseToHangul.fromKana("カ\uFF9E"))
+        assertEquals("파", JapaneseToHangul.fromKana("は\u309A"))
+        assertNull(JapaneseToHangul.fromKana("\u3099か"))
+        assertNull(JapaneseToHangul.fromKana("か\u3099愛"))
+        assertNull(JapaneseToHangul.fromKana("Ａ\u3099"))
+    }
 }

@@ -50,6 +50,22 @@ internal object AppleTimedPronunciationHighlightPolicy {
         val readingEnd: Int,
     )
 
+    /** Keep complete Unicode code points while retaining UTF-16 source offsets.
+     * Char.isLetterOrDigit() silently drops supplementary Japanese Han glyphs. */
+    private fun contentOffsets(text: String): List<Int> = buildList {
+        var index = 0
+        while (index < text.length) {
+            val codePoint = text.codePointAt(index)
+            val width = Character.charCount(codePoint)
+            if (appleIsLyricSourceCodePoint(codePoint)) {
+                for (part in 0 until width) add(index + part)
+            }
+            index += width
+        }
+    }
+
+    private fun contentText(text: String): String = appleLyricSourceKey(text)
+
     // Both passes respect order. If the earliest and latest legal placements
     // disagree, a repeated word cannot be attributed to one occurrence.
     private fun uniqueOffsets(text: String, parts: List<String>): List<Int?> {
@@ -74,7 +90,7 @@ internal object AppleTimedPronunciationHighlightPolicy {
 
     private fun locateWords(source: String, words: List<AppleTimedSourceWord>): List<LocatedWord> {
         val content = words.mapIndexedNotNull { index, word ->
-            val letters = word.text.filter(Char::isLetterOrDigit)
+            val letters = contentText(word.text)
             if (letters.isEmpty()) null else index to letters
         }
         // Untimed cells still occupy source text and native view indices.
@@ -90,20 +106,38 @@ internal object AppleTimedPronunciationHighlightPolicy {
     private fun locateSounds(
         source: String, readingLetters: String, spans: List<ApplePronunciationSourceToken>,
     ): List<LocatedSound> {
+        if (!appleOnlyHangulSoundLetters(readingLetters) ||
+            spans.any { !appleOnlyHangulSoundLetters(it.hangul) }
+        ) return emptyList()
         val sourceOffsets = IntArray(source.length + 1)
-        for (i in source.indices) {
-            sourceOffsets[i + 1] = sourceOffsets[i] + if (source[i].isLetterOrDigit()) 1 else 0
+        val validBoundary = BooleanArray(source.length + 1) { true }
+        var sourceIndex = 0
+        while (sourceIndex < source.length) {
+            val codePoint = source.codePointAt(sourceIndex)
+            val width = Character.charCount(codePoint)
+            val accepted = appleIsLyricSourceCodePoint(codePoint)
+            if (width == 2) validBoundary[sourceIndex + 1] = false
+            if (appleIsJapaneseVoicingMark(codePoint)) validBoundary[sourceIndex] = false
+            for (part in 1..width) {
+                sourceOffsets[sourceIndex + part] = sourceOffsets[sourceIndex] +
+                    (if (accepted) part else 0)
+            }
+            sourceIndex += width
         }
         var previousEnd = 0
         val parts = spans.map { span ->
             if (span.sourceStart < previousEnd || span.sourceEnd <= span.sourceStart ||
                 span.sourceEnd > source.length ||
-                (span.sourceText != null &&
-                    source.substring(span.sourceStart, span.sourceEnd) != span.sourceText) ||
+                !validBoundary[span.sourceStart] || !validBoundary[span.sourceEnd] ||
+                // A source-less token carries no proof that its word clock
+                // belongs to this lyric, even when its sound happens to fit.
+                span.sourceText == null ||
+                source.substring(span.sourceStart, span.sourceEnd) != span.sourceText ||
+                !appleHasSpokenSourceBase(span.sourceText) ||
                 sourceOffsets[span.sourceStart] == sourceOffsets[span.sourceEnd]
             ) return emptyList()
             previousEnd = span.sourceEnd
-            span.hangul.filter(Char::isLetterOrDigit).ifEmpty { return emptyList() }
+            contentText(span.hangul).ifEmpty { return emptyList() }
         }
         val offsets = uniqueOffsets(readingLetters, parts)
         return spans.mapIndexedNotNull { i, span ->
@@ -117,13 +151,13 @@ internal object AppleTimedPronunciationHighlightPolicy {
         source: String, reading: String, words: List<AppleTimedSourceWord>,
     ): List<LocatedSound> {
         if (!AppleInterleavedReadingPolicy.canDeriveKanaRows(source, reading)) return emptyList()
-        val sourceLetters = source.filter(Char::isLetterOrDigit)
-        val readingLetters = reading.filter(Char::isLetterOrDigit)
+        val sourceLetters = contentText(source)
+        val readingLetters = contentText(reading)
         var sourceCursor = 0
         var readingCursor = 0
         val sounds = mutableListOf<LocatedSound>()
         for (word in words) {
-            val letters = word.text.filter(Char::isLetterOrDigit)
+            val letters = contentText(word.text)
             if (letters.isEmpty()) continue
             if (!sourceLetters.startsWith(letters, sourceCursor)) return emptyList()
             val sound = JapaneseToHangul.fromKana(word.text)?.filter(Char::isLetterOrDigit)
@@ -153,7 +187,7 @@ internal object AppleTimedPronunciationHighlightPolicy {
         nativeWords: List<AppleTimedSourceWord>,
     ): List<LocatedSound> {
         val wordsByStart = words.associateBy { it.sourceStart }
-        val sourceOffsets = source.indices.filter { source[it].isLetterOrDigit() }
+        val sourceOffsets = contentOffsets(source)
         return sounds.flatMap { sound ->
             val first = wordsByStart[sound.sourceStart]
             if (first == null || first.sourceEnd >= sound.sourceEnd) return@flatMap listOf(sound)
@@ -180,7 +214,7 @@ internal object AppleTimedPronunciationHighlightPolicy {
                 }
             ) {
                 val verified = AppleInterleavedReadingPolicy.verifiedFragmentSounds(
-                    nativeCells.map { it.text.filter(Char::isLetterOrDigit) }, expected,
+                    nativeCells.map { contentText(it.text) }, expected,
                 ) ?: return@flatMap listOf(sound)
                 var readingCursor = sound.readingStart
                 cells.zip(verified).map { (word, token) ->
@@ -243,15 +277,15 @@ internal object AppleTimedPronunciationHighlightPolicy {
         lineBeginMs: Long? = null,
         lineEndMs: Long? = null,
     ): List<AppleTimedReadingUnit> {
-        val source = sourceText.filter(Char::isLetterOrDigit)
-        val readingOffsets = pronunciation.indices.filter { pronunciation[it].isLetterOrDigit() }
+        val source = contentText(sourceText)
+        val readingOffsets = contentOffsets(pronunciation)
         if (source.isEmpty() || readingOffsets.isEmpty()) return emptyList()
         val words = locateWords(source, timedWords)
         if (words.isNotEmpty()) {
             val sounds = if (phoneticSpans.isEmpty()) {
                 literalKanaSounds(sourceText, pronunciation, timedWords)
             } else {
-                val letters = pronunciation.filter(Char::isLetterOrDigit)
+                val letters = contentText(pronunciation)
                 val anchored = locateSounds(sourceText, letters, phoneticSpans)
                 splitVerifiedKana(sourceText, letters, anchored, words, timedWords)
             }
@@ -285,14 +319,52 @@ internal object AppleTimedPronunciationHighlightPolicy {
     /** The actual speaking intervals are intentionally sparse. The scheduler
      * may slow down between native words, but the already sung reading glyphs
      * must remain painted during that rest. */
+    private inline fun uniqueVariant(
+        variants: List<List<AppleTimedReadingUnit>>,
+        matches: (List<AppleTimedReadingUnit>) -> Boolean,
+    ): Int? {
+        var found = -1
+        for (index in variants.indices) {
+            if (!matches(variants[index])) continue
+            // Repeated choruses are separate native occurrences. When both
+            // claim this playback position, their ordering in a cached list
+            // is not source-clock evidence of which one owns the glyphs.
+            if (found != -1) return null
+            found = index
+        }
+        return found.takeIf { it >= 0 }
+    }
+
     fun speakingVariant(
         positionMs: Long,
         variants: List<List<AppleTimedReadingUnit>>,
-    ): Int? = variants.indices.firstOrNull { index ->
-        val timed = variants[index]
+    ): Int? = uniqueVariant(variants) { timed ->
         // A partial verified map can contain an unknown interval between two
         // real source words. It is not evidence of continuous singing.
-        timed.any { positionMs >= it.beginMs && positionMs < it.endMs }
+        hasSpeakingUnit(positionMs, timed)
+    }
+
+    /** Sampling cadence only needs evidence that *some* native word speaks.
+     * Unlike foreground ownership it must remain true for overlapping
+     * ambiguous chorus clocks, so paint can recover promptly when they part. */
+    fun hasSpeakingUnit(positionMs: Long, units: List<AppleTimedReadingUnit>): Boolean =
+        units.any { positionMs >= it.beginMs && positionMs < it.endMs }
+
+    /** This also runs in the visible 16-ms paint pulse. `zipWithNext()`
+     * constructed a new List<Pair> for every repeated chorus on every
+     * sample, although validating successive native clocks needs no list. */
+    private fun orderedNativeClocks(timed: List<AppleTimedReadingUnit>): Boolean {
+        if (timed.isEmpty()) return false
+        var previousBegin = Long.MIN_VALUE
+        var previousEnd = Long.MIN_VALUE
+        for (unit in timed) {
+            if (unit.beginMs < 0L || unit.endMs <= unit.beginMs ||
+                unit.beginMs < previousBegin || unit.endMs < previousEnd
+            ) return false
+            previousBegin = unit.beginMs
+            previousEnd = unit.endMs
+        }
+        return true
     }
 
     /**
@@ -305,13 +377,8 @@ internal object AppleTimedPronunciationHighlightPolicy {
     fun activeVariant(
         positionMs: Long,
         variants: List<List<AppleTimedReadingUnit>>,
-    ): Int? = variants.indices.firstOrNull { index ->
-        val timed = variants[index]
-        if (timed.isEmpty() || timed.any { it.beginMs < 0 || it.endMs <= it.beginMs } ||
-            timed.zipWithNext().any { (left, right) ->
-                left.beginMs > right.beginMs || left.endMs > right.endMs
-            }
-        ) return@firstOrNull false
+    ): Int? = uniqueVariant(variants) { timed ->
+        if (!orderedNativeClocks(timed)) return@uniqueVariant false
         positionMs >= timed.first().beginMs && positionMs < timed.last().endMs
     }
 

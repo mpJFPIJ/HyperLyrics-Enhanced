@@ -362,10 +362,15 @@ internal object OpenAiTranslationClient {
                 "duration_ms=${(System.nanoTime() - songStartedAt) / 1_000_000L}",
         )
         val reviewedResults = if (capabilities.requestAiPronunciation && groqAvailable && song != null &&
-            JapanesePronunciationReviewPolicy.candidates(payload.lyrics).isNotEmpty()
+            JapanesePronunciationReviewPolicy.candidates(
+                payload.lyrics, AIPronunciationPolicy.isChineseDominant(song),
+                japaneseProvenance = AIPronunciationPolicy.hasJapaneseProvenance(song),
+            ).isNotEmpty()
         ) {
             onProgress?.invoke(AiTranslationProgress("reviewing"))
-            GroqMultiModelClient.reviewJapanesePronunciation(configs, payload, orderedResults)
+            GroqMultiModelClient.reviewJapanesePronunciation(
+                configs, payload, orderedResults, song = song,
+            )
         } else orderedResults
         if (AiTranslationRecoveryPolicy.shouldRepairAfterSuccess(
                 capabilities.requestAiPronunciation && song != null && AIPronunciationPolicy.shouldEnrich(song) &&

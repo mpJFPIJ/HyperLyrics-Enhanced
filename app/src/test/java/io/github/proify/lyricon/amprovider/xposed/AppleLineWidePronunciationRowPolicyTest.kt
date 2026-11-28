@@ -7,6 +7,85 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AppleLineWidePronunciationRowPolicyTest {
+    @Test fun soleTerminalWrappedSourceRowMustExcludeLaterNativeFlexPeers() {
+        val source = 60 to 145
+        assertTrue(AppleLineWidePronunciationRowPolicy.terminalWrapHasNoFollowingPeer(
+            source, emptyList(),
+        ))
+        assertTrue(AppleLineWidePronunciationRowPolicy.terminalWrapHasNoFollowingPeer(
+            source, listOf(153 to 190, 202 to 247),
+        ))
+        assertFalse(AppleLineWidePronunciationRowPolicy.terminalWrapHasNoFollowingPeer(
+            source, listOf(100 to 170), // a trailing translation shares the last source row
+        ))
+        assertFalse(AppleLineWidePronunciationRowPolicy.terminalWrapHasNoFollowingPeer(
+            source, listOf(0 to 200), // unknown host wrapper spans the source
+        ))
+        assertFalse(AppleLineWidePronunciationRowPolicy.terminalWrapHasNoFollowingPeer(
+            source, listOf(0 to 40), // reversed disjoint native child order
+        ))
+        assertFalse(AppleLineWidePronunciationRowPolicy.terminalWrapHasNoFollowingPeer(
+            source, listOf(153 to 153), // unmeasured trailing child
+        ))
+        assertFalse(AppleLineWidePronunciationRowPolicy.terminalWrapHasNoFollowingPeer(
+            60 to 60, emptyList(),
+        ))
+    }
+
+    @Test fun `native Japanese source font discovery includes supplementary Han`() {
+        assertTrue(AppleLineWidePronunciationRowPolicy.containsJapaneseSourceScript("𠮟"))
+        assertTrue(AppleLineWidePronunciationRowPolicy.containsJapaneseSourceScript("𠮟る"))
+        assertTrue(AppleLineWidePronunciationRowPolicy.containsJapaneseSourceScript("漢字"))
+        assertTrue(AppleLineWidePronunciationRowPolicy.containsJapaneseSourceScript("かな"))
+        assertTrue(AppleLineWidePronunciationRowPolicy.containsJapaneseSourceScript("ー"))
+        assertFalse(AppleLineWidePronunciationRowPolicy.containsJapaneseSourceScript("한글 ABC"))
+    }
+
+    @Test fun `supplementary Han cannot disappear from the native source prefix contract`() {
+        assertEquals("𠮟あ", AppleLineWidePronunciationRowPolicy.sourceKey("𠮟 あ!"))
+        assertNull(AppleLineWidePronunciationRowPolicy.verifiedInsertionIndex(
+            "𠮟あ", listOf("あ", "Korean meaning"),
+        ))
+        assertEquals(2, AppleLineWidePronunciationRowPolicy.verifiedInsertionIndex(
+            "𠮟あ", listOf("𠮟", "あ", "Korean meaning"),
+        ))
+        assertNull(AppleLineWidePronunciationRowPolicy.verifiedInsertionIndex(
+            "あ", listOf("あ", "𠮟"),
+        ))
+    }
+
+    @Test fun JapaneseVoicingMarksAreSignificantInHolderSourceIdentity() {
+        for (mark in listOf('\u3099', '\u309A', '\u309B', '\u309C')) {
+            val voiced = "か$mark"
+            assertEquals(voiced, AppleLineWidePronunciationRowPolicy.sourceKey(voiced))
+            assertFalse(AppleLineWidePronunciationRowPolicy.sourceKey(voiced) ==
+                AppleLineWidePronunciationRowPolicy.sourceKey("か"))
+            assertNull(AppleLineWidePronunciationRowPolicy.verifiedInsertionIndex(
+                "か", listOf(voiced, "한국어 뜻"),
+            ))
+            assertNull(AppleLineWidePronunciationRowPolicy.verifiedInsertionIndex(
+                voiced, listOf("か", "한국어 뜻"),
+            ))
+            assertEquals(1, AppleLineWidePronunciationRowPolicy.verifiedInsertionIndex(
+                voiced, listOf(voiced, "한국어 뜻"),
+            ))
+        }
+        // Source punctuation remains safely ignorable for native layout.
+        assertEquals("か", AppleLineWidePronunciationRowPolicy.sourceKey("「か！」"))
+        assertEquals("ｶﾞ", AppleLineWidePronunciationRowPolicy.sourceKey("ｶﾞ"))
+    }
+
+    @Test fun orphanVoicingMarkInNextNativeCellCannotBeMisreadAsTranslation() {
+        for (mark in listOf("\u3099", "\u309A", "\u309B", "\u309C", "\uFF9E", "\uFF9F")) {
+            assertNull(AppleLineWidePronunciationRowPolicy.verifiedInsertionIndex(
+                "か", listOf("か", mark, "한국어 뜻"),
+            ))
+            assertEquals(2, AppleLineWidePronunciationRowPolicy.verifiedInsertionIndex(
+                "か${mark}", listOf("か", mark, "한국어 뜻"),
+            ))
+        }
+    }
+
     @Test fun transformedNativeWordsVerifyDisplayCellsAndPreserveRawWrapOffsets() {
         val display = requireNotNull(AppleNativeReadingSourceDisplay.fromWords(
             "反覆の夢", listOf("反", "覆", "の", "夢"),
@@ -122,6 +201,123 @@ class AppleLineWidePronunciationRowPolicyTest {
         ))
     }
 
+    @Test fun `same-width native flex regrouping invalidates stale interleaved reading rows`() {
+        // The source-only layout showed two words sharing the first row.
+        // A host margin/alignment update can regroup them without changing
+        // any TextView width or font size; old reading insertion points are stale.
+        val measured = AppleNativeSourceMeasureKey(
+            flexWidth = 900, contentWidth = 900,
+            sourceCellWidths = listOf(290, 290, 290),
+            sourceTextSizes = listOf(40f, 40f, 40f),
+            sourceCellVisualRows = listOf(0, 0, 1),
+        )
+        assertTrue(AppleLineWidePronunciationRowPolicy.measurementChanged(
+            previous = listOf(measured),
+            current = measured.copy(sourceCellVisualRows = listOf(0, 1, 1)),
+            hasVerifiedProjection = true,
+        ))
+        assertFalse(AppleLineWidePronunciationRowPolicy.measurementChanged(
+            previous = listOf(measured),
+            current = measured.copy(sourceCellVisualRows = listOf(0, 0, 1)),
+            hasVerifiedProjection = true,
+        ))
+        // A not-yet-measured source cannot disprove a previously verified
+        // grouping during the native host's own layout transition.
+        assertFalse(AppleLineWidePronunciationRowPolicy.measurementChanged(
+            previous = listOf(measured),
+            current = measured.copy(sourceCellVisualRows = null),
+            hasVerifiedProjection = true,
+        ))
+        assertFalse(AppleLineWidePronunciationRowPolicy.measurementChanged(
+            previous = listOf(measured),
+            current = measured.copy(sourceCellVisualRows = listOf(0, 1, 1)),
+            hasVerifiedProjection = false,
+        ))
+    }
+
+    @Test fun `same-size native typeface replacement invalidates measured Hangul projection`() {
+        // A font/style update can preserve TextView widths and measured row
+        // membership; source font identity is still part of reading geometry.
+        val before = AppleNativeSourceMeasureKey(
+            flexWidth = 720, contentWidth = 720,
+            sourceCellWidths = listOf(300, 320),
+            sourceTextSizes = listOf(39f, 39f),
+            sourceCellVisualRows = listOf(0, 1),
+            sourceTypefaceIdentities = listOf(101, 101),
+        )
+        assertTrue(AppleLineWidePronunciationRowPolicy.measurementChanged(
+            previous = listOf(before),
+            current = before.copy(sourceTypefaceIdentities = listOf(202, 202)),
+            hasVerifiedProjection = true,
+        ))
+        assertFalse(AppleLineWidePronunciationRowPolicy.measurementChanged(
+            previous = listOf(before), current = before,
+            hasVerifiedProjection = true,
+        ))
+        // Without a proven source↔reading split the host needs no *extra*
+        // source-only row measurement; the fallback painter's font owner is
+        // checked separately on ordinary view reuse.
+        assertFalse(AppleLineWidePronunciationRowPolicy.measurementChanged(
+            previous = listOf(before),
+            current = before.copy(sourceTypefaceIdentities = listOf(202, 202)),
+            hasVerifiedProjection = false,
+        ))
+    }
+
+    @Test fun `grouped Hangul fallback identifies missing source anchors versus rejected row split`() {
+        fun gate(verified: Boolean) = AppleLineWideFallbackGatePolicy.classify(
+            geometryPending = false,
+            rawCellsValid = true,
+            nativeWordsSingleLine = true,
+            flexRows = 3,
+            sourceLettersMatch = true,
+            verifiedProjection = verified,
+        )
+        // The observed multi-row Japanese-then-grouped-Hangul layout can
+        // occur even when all the native TextViews are single-line: the
+        // source-to-Hangul phonetic mapping may simply be missing.
+        assertEquals(AppleLineWideFallbackGate.MISSING_SOURCE_ANCHORS, gate(false))
+        // Verified whole-line sound is not sufficient if a token crossing
+        // two measured visual rows has no proven sound boundary.
+        assertEquals(AppleLineWideFallbackGate.ROW_PROJECTION_REJECTED, gate(true))
+        assertEquals(7, gate(false).code)
+        assertEquals(8, gate(true).code)
+    }
+
+    @Test fun `grouped Hangul fallback reports measured geometry blockers first`() {
+        fun gate(
+            pending: Boolean = false, raw: Boolean = true,
+            single: Boolean = true, flexRows: Int? = 3, matching: Boolean = true,
+        ) = AppleLineWideFallbackGatePolicy.classify(
+            geometryPending = pending, rawCellsValid = raw,
+            nativeWordsSingleLine = single, flexRows = flexRows,
+            sourceLettersMatch = matching, verifiedProjection = true,
+        )
+        assertEquals(AppleLineWideFallbackGate.MEASUREMENT_PENDING, gate(pending = true))
+        assertEquals(AppleLineWideFallbackGate.RAW_CELL_UNKNOWN, gate(raw = false))
+        assertEquals(AppleLineWideFallbackGate.NATIVE_INTERNAL_WRAP, gate(single = false))
+        assertEquals(AppleLineWideFallbackGate.ROW_GEOMETRY_UNKNOWN, gate(flexRows = null))
+        assertEquals(AppleLineWideFallbackGate.ONE_FLEX_ROW, gate(flexRows = 1))
+        assertEquals(AppleLineWideFallbackGate.SOURCE_IDENTITY_MISMATCH,
+            gate(matching = false))
+    }
+
+    @Test fun `shown unsplittable Hangul line also watches native font changes`() {
+        // A line-wide fallback has no row-splitting proof, but its Typeface
+        // still came from Apple's source word when the reading was created.
+        assertTrue(AppleLineWidePronunciationRowPolicy.shouldObserveSourceLayout(
+            readingShown = true, canInterleave = false,
+        ))
+        // A not-yet-measured verified split needs its source observer even if
+        // the reading was deferred before first display.
+        assertTrue(AppleLineWidePronunciationRowPolicy.shouldObserveSourceLayout(
+            readingShown = false, canInterleave = true,
+        ))
+        assertFalse(AppleLineWidePronunciationRowPolicy.shouldObserveSourceLayout(
+            readingShown = false, canInterleave = false,
+        ))
+    }
+
     @Test fun `repeat variants can cover different lengths without losing the final Hangul syllable`() {
         val variants = listOf(
             listOf(AppleTimedReadingUnit(0, 2, 100, 200)),
@@ -227,6 +423,18 @@ class AppleLineWidePronunciationRowPolicyTest {
         assertFalse(pending.outerOverlayVisible)
     }
 
+    @Test fun `an active native line cannot brighten Hangul glyphs without a timing owner`() {
+        assertEquals(0.52f, AppleHangulReadingPaintPolicy.timedGlyphBrightness(
+            activeVariant = true, glyphHasTimingOwner = false,
+        ), 0.001f)
+        assertEquals(0.52f, AppleHangulReadingPaintPolicy.timedGlyphBrightness(
+            activeVariant = false, glyphHasTimingOwner = true,
+        ), 0.001f)
+        assertEquals(1f, AppleHangulReadingPaintPolicy.timedGlyphBrightness(
+            activeVariant = true, glyphHasTimingOwner = true,
+        ), 0.001f)
+    }
+
     @Test fun `unmeasured or detached reading cannot disappear behind outer overlay`() {
         for ((attached, rootWidth, readingHeight) in listOf(
             Triple(false, 720, 54), Triple(true, 0, 54), Triple(true, 720, 0),
@@ -287,6 +495,94 @@ class AppleLineWidePronunciationRowPolicyTest {
         ))
     }
 
+    @Test fun frozenNativePlaybackClockMustNotRepaintTheSameKaraokeGradientAtSixtyFps() {
+        val active = listOf(listOf(AppleTimedReadingUnit(0, 2, 1_000L, 2_200L)))
+        assertEquals(16L, AppleReadingPulsePolicy.nextDelayForReading(
+            onScreen = true, positionMs = 1_600L, variants = active,
+            timelineAdvancing = true,
+        ))
+        assertEquals(120L, AppleReadingPulsePolicy.nextDelayForReading(
+            onScreen = true, positionMs = 1_600L, variants = active,
+            timelineAdvancing = false,
+        ))
+        assertEquals(120L, AppleReadingPulsePolicy.nextDelayForReading(
+            onScreen = true, positionMs = 960L, variants = active,
+            timelineAdvancing = false,
+        ))
+        assertEquals(400L, AppleReadingPulsePolicy.nextDelayForReading(
+            onScreen = false, positionMs = 1_600L, variants = active,
+            timelineAdvancing = false,
+        ))
+        // Seek recovery can temporarily wake a paused reading sooner, but
+        // must never fabricate an advancing native karaoke timestamp.
+        assertEquals(60L, AppleReadingPulsePolicy.seekRecoveryDelayMs(
+            ordinaryDelayMs = 120L, onScreen = true,
+            nowElapsedMs = 1_100L, recoveryUntilElapsedMs = 1_300L,
+        ))
+    }
+
+    @Test fun terminalReadingMustRejectTheSameRecycledSoftWrapSourceAsEarlierFragments() {
+        assertTrue(AppleReadingTerminalPaintPolicy.mayPaint(
+            holderCurrent = true, softWrapPresent = true, softWrapSourceCurrent = true,
+        ))
+        assertFalse(AppleReadingTerminalPaintPolicy.mayPaint(
+            holderCurrent = true, softWrapPresent = true, softWrapSourceCurrent = false,
+        ))
+        assertFalse(AppleReadingTerminalPaintPolicy.mayPaint(
+            holderCurrent = false, softWrapPresent = true, softWrapSourceCurrent = true,
+        ))
+        // A legitimate line-wide reading without any native internal wrap
+        // still uses its own holder generation as its paint owner.
+        assertTrue(AppleReadingTerminalPaintPolicy.mayPaint(
+            holderCurrent = true, softWrapPresent = false, softWrapSourceCurrent = false,
+        ))
+    }
+
+    @Test fun `accepted seek briefly rechecks actual Exo clock even if its first read is stale`() {
+        assertEquals(60L, AppleReadingPulsePolicy.seekRecoveryDelayMs(
+            ordinaryDelayMs = 400L, onScreen = true,
+            nowElapsedMs = 1_100L, recoveryUntilElapsedMs = 1_650L,
+        ))
+        assertEquals(16L, AppleReadingPulsePolicy.seekRecoveryDelayMs(
+            ordinaryDelayMs = 16L, onScreen = true,
+            nowElapsedMs = 1_100L, recoveryUntilElapsedMs = 1_650L,
+        ))
+        // The extra clock polls are bounded and never run offscreen.
+        assertEquals(400L, AppleReadingPulsePolicy.seekRecoveryDelayMs(
+            ordinaryDelayMs = 400L, onScreen = false,
+            nowElapsedMs = 1_100L, recoveryUntilElapsedMs = 1_650L,
+        ))
+        assertEquals(400L, AppleReadingPulsePolicy.seekRecoveryDelayMs(
+            ordinaryDelayMs = 400L, onScreen = true,
+            nowElapsedMs = 1_650L, recoveryUntilElapsedMs = 1_650L,
+        ))
+        assertEquals(60L, AppleReadingPulsePolicy.seekRecoveryDelayMs(
+            ordinaryDelayMs = 400L, onScreen = true,
+            nowElapsedMs = 1_650L, recoveryUntilElapsedMs = 2_200L,
+        ))
+    }
+
+    @Test fun `accepted seek recovery transfers only to matching song revision before expiration`() {
+        val accepted = AppleScopedReadingSeekRecovery(
+            songId = "song-A", revision = 3L, untilElapsedMs = 1_600L,
+        )
+        assertEquals(1_600L, AppleReadingSeekRecoveryPolicy.deadlineFor(
+            accepted, songId = "song-A", revision = 3L, nowElapsedMs = 1_100L,
+        ))
+        assertEquals(0L, AppleReadingSeekRecoveryPolicy.deadlineFor(
+            accepted, songId = "song-B", revision = 3L, nowElapsedMs = 1_100L,
+        ))
+        assertEquals(0L, AppleReadingSeekRecoveryPolicy.deadlineFor(
+            accepted, songId = "song-A", revision = 4L, nowElapsedMs = 1_100L,
+        ))
+        assertEquals(0L, AppleReadingSeekRecoveryPolicy.deadlineFor(
+            accepted, songId = "song-A", revision = 3L, nowElapsedMs = 1_600L,
+        ))
+        assertEquals(0L, AppleReadingSeekRecoveryPolicy.deadlineFor(
+            null, songId = "song-A", revision = 3L, nowElapsedMs = 1_100L,
+        ))
+    }
+
     @Test fun upcomingVerifiedWordAfterAnInternalTimingGapIsNotMissed() {
         // The next line-wide variant began at 100 ms, but the next *timed
         // word* begins at 700 ms. At 550 ms there is no active reading unit.
@@ -318,6 +614,27 @@ class AppleLineWidePronunciationRowPolicyTest {
         assertEquals(1_000L, AppleReadingPulsePolicy.nextUpcomingBeginMs(0, variants))
     }
 
+    @Test fun `ambiguous repeated clocks stay on fast sample until one occurrence takes ownership`() {
+        val variants = listOf(
+            listOf(AppleTimedReadingUnit(0, 2, 1_000L, 1_600L)),
+            listOf(AppleTimedReadingUnit(0, 2, 1_300L, 1_900L)),
+        )
+        assertNull(AppleTimedPronunciationHighlightPolicy.speakingVariant(
+            1_400L, variants,
+        ))
+        // No guessed Hangul owner, but the next 16-ms Exo read must notice
+        // when the overlap ends instead of waiting up to 400 ms.
+        assertEquals(16L, AppleReadingPulsePolicy.nextDelayForReading(
+            onScreen = true, positionMs = 1_400L, variants = variants,
+        ))
+        assertEquals(16L, AppleReadingPulsePolicy.nextDelayForReading(
+            onScreen = true, positionMs = 1_700L, variants = variants,
+        ))
+        assertEquals(400L, AppleReadingPulsePolicy.nextDelayForReading(
+            onScreen = false, positionMs = 1_400L, variants = variants,
+        ))
+    }
+
     @Test fun offscreenReadingDoesNotPollPlayerClockOrScanFastTimers() {
         val variants = listOf(listOf(AppleTimedReadingUnit(0, 1, 1_000, 1_200)))
         var playbackPolls = 0
@@ -338,6 +655,88 @@ class AppleLineWidePronunciationRowPolicyTest {
         ))
         // The one sampled clock value is also the one supplied to the paint.
         assertEquals(1, playbackPolls)
+    }
+
+    @Test fun immediateReadingLayoutNeverSamplesAnUnattachedOrOffscreenClock() {
+        var samples = 0
+        val clock: () -> Long? = { samples++; 1_234L }
+        // An adapter may construct and measure a reading before adding it to
+        // the viewport. Neither setText nor onLayout owns an Exo sample then.
+        assertNull(AppleReadingPulsePolicy.immediateLayoutSample(
+            attached = false, readingOnScreen = true,
+            softWrapSourceOnScreen = true, clock = clock,
+        ))
+        assertNull(AppleReadingPulsePolicy.immediateLayoutSample(
+            attached = true, readingOnScreen = false,
+            softWrapSourceOnScreen = false, clock = clock,
+        ))
+        assertEquals(0, samples)
+        assertEquals(1_234L, AppleReadingPulsePolicy.immediateLayoutSample(
+            attached = true, readingOnScreen = true,
+            softWrapSourceOnScreen = false, clock = clock,
+        ))
+        // The last full-width reading can be below the viewport while an
+        // earlier source soft-line and its overlay remain visible.
+        assertEquals(1_234L, AppleReadingPulsePolicy.immediateLayoutSample(
+            attached = true, readingOnScreen = false,
+            softWrapSourceOnScreen = true, clock = clock,
+        ))
+        assertEquals(2, samples)
+    }
+
+    @Test fun canceledSoftWrapRebindCannotRunAfterHolderDetachAndReattach() {
+        val gate = AppleReadingRebindRequestGate()
+        val beforeDetach = requireNotNull(gate.request())
+        assertNull(gate.request()) // one queued callback per current holder
+        assertTrue(gate.isPending(beforeDetach))
+
+        // View.post can survive a transient detach. A new holder lifetime
+        // must invalidate the old callback, even when the same view reattaches.
+        gate.cancel()
+        assertFalse(gate.isPending(beforeDetach))
+        val afterReattach = requireNotNull(gate.request())
+        assertTrue(gate.isPending(afterReattach))
+        assertFalse(gate.isPending(beforeDetach))
+
+        // If the old runnable executes late, its finally block cannot
+        // discard the newer generation's pending rebind request.
+        gate.finish(beforeDetach)
+        assertTrue(gate.isPending(afterReattach))
+        gate.finish(afterReattach)
+        assertFalse(gate.isPending(afterReattach))
+        assertTrue(requireNotNull(gate.request()) > afterReattach)
+    }
+
+    @Test fun staleReadingPulseCanRearmOnAttachedHolderReuseWithoutDuplicateTimer() {
+        val gate = AppleReadingPulseQueueGate()
+        assertFalse(gate.request(attached = false))
+        assertTrue(gate.request(attached = true))
+        assertFalse(gate.request(attached = true)) // one pending pulse
+
+        // The queued callback executes while the previous bind generation is
+        // revoked, so it exits without requesting the next pulse.
+        gate.delivered()
+        assertFalse(gate.request(attached = false))
+
+        // RecyclerView reuses the *same attached* ReadingView for the new
+        // generation; onAttachedToWindow is not called a second time.
+        assertTrue(gate.request(attached = true))
+        assertFalse(gate.request(attached = true))
+
+        // An ordinary successful pulse schedules exactly one successor.
+        gate.delivered()
+        assertTrue(gate.request(attached = true))
+        assertFalse(gate.request(attached = true))
+    }
+
+    @Test fun readingPulseQueueResetsOnAcceptedSeekAndDetach() {
+        val gate = AppleReadingPulseQueueGate()
+        assertTrue(gate.request(attached = true))
+        gate.cancel() // remove pending slow idle pulse on accepted seek
+        assertTrue(gate.request(attached = true)) // immediate seek wake
+        gate.cancel() // holder detach cancels callbacks
+        assertFalse(gate.request(attached = false))
+        assertTrue(gate.request(attached = true)) // attach after recycle
     }
 
     @Test fun visibleReadingWakesForTheNextRealUnitAfterAnInternalGap() {
@@ -534,6 +933,38 @@ class AppleLineWidePronunciationRowPolicyTest {
         state.rememberLineWide(newer, holder)
         assertEquals(newer, state.lineWideForHolder(holder, "song-b", "みその中から", 2L))
         assertNull(state.lineWideForHolder(holder, "song-a", "みその中から", 1L))
+    }
+
+    @Test
+    fun `more than 256 source rows evicts only old unbound Hangul fallbacks`() {
+        val state = AppleLyricsPronunciationState()
+        fun source(index: Int) = "あ".repeat(index + 1)
+        fun remember(index: Int) = state.rememberLineWide(
+            AppleLineWidePronunciationPayload(
+                "long-song", "line-$index", source(index), "아", 8L,
+            ), null,
+        )
+
+        (0..257).forEach(::remember)
+        assertNull(state.lineWideForHolder(null, "long-song", source(0), 8L))
+        assertNull(state.lineWideForHolder(null, "long-song", source(1), 8L))
+        assertEquals("line-2", state.lineWideForHolder(
+            null, "long-song", source(2), 8L,
+        )?.lineKey)
+        assertEquals("line-257", state.lineWideForHolder(
+            null, "long-song", source(257), 8L,
+        )?.lineKey)
+
+        // An observed older source remains eligible after one newer row arrives.
+        remember(2)
+        remember(258)
+        assertNull(state.lineWideForHolder(null, "long-song", source(3), 8L))
+        assertEquals("line-2", state.lineWideForHolder(
+            null, "long-song", source(2), 8L,
+        )?.lineKey)
+        assertEquals("line-258", state.lineWideForHolder(
+            null, "long-song", source(258), 8L,
+        )?.lineKey)
     }
 
     @Test

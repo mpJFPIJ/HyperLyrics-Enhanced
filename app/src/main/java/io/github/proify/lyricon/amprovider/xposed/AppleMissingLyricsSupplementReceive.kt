@@ -211,7 +211,10 @@ internal fun AppleMissingLyricsHooks.clearSupplement(
 internal fun AppleMissingLyricsHooks.stripFullyChineseTranslations(song: Song): Song {
     if (!ChineseLyricsPolicy.isFullyChinese(song)) return song
     return song.copy(
-        lyrics = song.lyrics.orEmpty().map { line -> line.copy(translation = null) },
+        lyrics = song.lyrics.orEmpty().map { line ->
+            if (ChineseLyricsPolicy.permitsOnlineTranslation(line.text, chineseDominant = true)) line
+            else line.copy(translation = null)
+        },
     )
 }
 

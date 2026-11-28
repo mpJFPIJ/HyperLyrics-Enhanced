@@ -88,11 +88,13 @@ class AppleLyricsScrollPresentationStateTest {
     fun `repeated identical restore requests do not fight eight consecutive native layouts`() {
         val gate = AppleLyricsRestoreAttemptGate()
         assertTrue(gate.shouldDispatch(0, -110, null, 1483))
+        gate.noteDispatchResult(0, -110, null, 1483, dispatched = true)
         repeat(3) {
             assertFalse(gate.shouldDispatch(0, -110, null, 1483))
         }
         // One bounded retry remains when the first native call was ignored.
         assertTrue(gate.shouldDispatch(0, -110, null, 1483))
+        gate.noteDispatchResult(0, -110, null, 1483, dispatched = true)
         repeat(4) {
             assertFalse(gate.shouldDispatch(0, -110, null, 1483))
         }
@@ -102,11 +104,61 @@ class AppleLyricsScrollPresentationStateTest {
     fun `scroll restore permits changed target or observable native movement`() {
         val gate = AppleLyricsRestoreAttemptGate()
         assertTrue(gate.shouldDispatch(5, 120, 0, 300))
+        gate.noteDispatchResult(5, 120, 0, 300, dispatched = true)
         assertFalse(gate.shouldDispatch(5, 120, 0, 300))
         assertTrue(gate.shouldDispatch(5, 120, 1, 180))
+        gate.noteDispatchResult(5, 120, 1, 180, dispatched = true)
         assertFalse(gate.shouldDispatch(5, 120, 1, 180))
         assertTrue(gate.shouldDispatch(6, 120, 1, 180))
         assertTrue(gate.shouldDispatch(6, 90, 1, 180))
+    }
+
+    @Test
+    fun `failed restore reflection must not exhaust the two real dispatch slots`() {
+        val gate = AppleLyricsRestoreAttemptGate()
+        assertTrue(gate.shouldDispatch(17, 140, null, null))
+        gate.noteDispatchResult(17, 140, null, null, dispatched = false)
+        assertTrue(gate.shouldDispatch(17, 140, null, null))
+        gate.noteDispatchResult(17, 140, null, null, dispatched = false)
+        assertTrue(gate.shouldDispatch(17, 140, null, null))
+        gate.noteDispatchResult(17, 140, null, null, dispatched = true)
+        assertFalse(gate.shouldDispatch(17, 140, null, null))
+        // Once a native method genuinely accepted the request, only one
+        // bounded retry remains for unchanged target/viewport observations.
+        repeat(2) { assertFalse(gate.shouldDispatch(17, 140, null, null)) }
+        assertTrue(gate.shouldDispatch(17, 140, null, null))
+        gate.noteDispatchResult(17, 140, null, null, dispatched = true)
+        assertFalse(gate.shouldDispatch(17, 140, null, null))
+    }
+
+    @Test
+    fun `first successful restore waits four new layouts after many failed reflections`() {
+        val gate = AppleLyricsRestoreAttemptGate()
+        repeat(6) {
+            assertTrue(gate.shouldDispatch(17, 140, null, null))
+            gate.noteDispatchResult(17, 140, null, null, dispatched = false)
+        }
+        assertTrue(gate.shouldDispatch(17, 140, null, null))
+        gate.noteDispatchResult(17, 140, null, null, dispatched = true)
+        // Pre-dispatch failures may be arbitrarily numerous; the spacing
+        // budget for a *second actual scroll* starts at the first success.
+        repeat(3) { assertFalse(gate.shouldDispatch(17, 140, null, null)) }
+        assertTrue(gate.shouldDispatch(17, 140, null, null))
+        gate.noteDispatchResult(17, 140, null, null, dispatched = true)
+        assertFalse(gate.shouldDispatch(17, 140, null, null))
+    }
+
+    @Test
+    fun `late old restore result cannot spend a changed target dispatch budget`() {
+        val gate = AppleLyricsRestoreAttemptGate()
+        assertTrue(gate.shouldDispatch(17, 140, null, null))
+        assertTrue(gate.shouldDispatch(18, 160, null, null))
+        gate.noteDispatchResult(17, 140, null, null, dispatched = true)
+        // Reentrant host layout selected row 18. Row 17's late return is
+        // not an invocation of row 18's layout method.
+        assertTrue(gate.shouldDispatch(18, 160, null, null))
+        gate.noteDispatchResult(18, 160, null, null, dispatched = true)
+        assertFalse(gate.shouldDispatch(18, 160, null, null))
     }
 
     private class Listener : ViewTreeObserver.OnPreDrawListener {

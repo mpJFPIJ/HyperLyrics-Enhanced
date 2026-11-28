@@ -33,7 +33,9 @@ internal object AppleSourceAnchorCoverageDiagnostics {
     private fun isComplete(line: RichLyricLine): Boolean {
         val source = line.text.orEmpty()
         val pronunciation = line.roma.orEmpty()
-        if (source.none(Char::isLetterOrDigit) || pronunciation.none(Char::isLetterOrDigit))
+        if (source.codePoints().noneMatch(Character::isLetterOrDigit) ||
+            pronunciation.codePoints().noneMatch(Character::isLetterOrDigit)
+        )
             return false
         val covered = BooleanArray(source.length)
         val sound = StringBuilder()
@@ -41,6 +43,12 @@ internal object AppleSourceAnchorCoverageDiagnostics {
         for (span in line.pronunciationSpans.orEmpty()) {
             if (span.start < previousEnd || span.start < 0 ||
                 span.end <= span.start || span.end > source.length ||
+                (span.start > 0 && span.start < source.length &&
+                    Character.isHighSurrogate(source[span.start - 1]) &&
+                    Character.isLowSurrogate(source[span.start])) ||
+                (span.end > 0 && span.end < source.length &&
+                    Character.isHighSurrogate(source[span.end - 1]) &&
+                    Character.isLowSurrogate(source[span.end])) ||
                 source.substring(span.start, span.end) != span.source ||
                 span.hangul.none(Char::isLetterOrDigit)
             ) return false
@@ -48,7 +56,15 @@ internal object AppleSourceAnchorCoverageDiagnostics {
             sound.append(span.hangul.filter(Char::isLetterOrDigit))
             previousEnd = span.end
         }
-        return source.indices.none { source[it].isLetterOrDigit() && !covered[it] } &&
-            sound.toString() == pronunciation.filter(Char::isLetterOrDigit)
+        var offset = 0
+        while (offset < source.length) {
+            val codePoint = Character.codePointAt(source, offset)
+            val end = offset + Character.charCount(codePoint)
+            if (Character.isLetterOrDigit(codePoint) &&
+                (offset until end).any { !covered[it] }
+            ) return false
+            offset = end
+        }
+        return sound.toString() == pronunciation.filter(Char::isLetterOrDigit)
     }
 }

@@ -114,9 +114,7 @@ internal class AppleLyricsPronunciationState {
     ) {
         synchronized(lineWideBySource) {
             holder?.let { lineWideByHolder[it] = payload }
-            if (lineWideSongId != payload.songId || lineWideRevision != payload.revision ||
-                lineWideBySource.size >= MAX_RENDER_PLANS
-            ) {
+            if (lineWideSongId != payload.songId || lineWideRevision != payload.revision) {
                 lineWideBySource.clear()
                 displayKeyByRawSource.clear()
                 ambiguousLineWideSources.clear()
@@ -147,7 +145,19 @@ internal class AppleLyricsPronunciationState {
                     listOf(it.timedWords) + it.repeatTimings
                 }.orEmpty().filter { it.isNotEmpty() }
                 val otherTimings = earlierTimings.filter { it != payload.timedWords }.distinct()
+                // Refresh this exact source's recency when it is reobserved.
+                lineWideBySource.remove(source)
                 lineWideBySource[source] = payload.copy(repeatTimings = otherTimings)
+                // Unlike a whole-map reset, one stale fallback eviction does
+                // not erase all other valid measured-line pronunciation plans.
+                while (lineWideBySource.size > MAX_RENDER_PLANS) {
+                    val oldest = lineWideBySource.entries.iterator()
+                    val expired = oldest.next()
+                    oldest.remove()
+                    if (displayKeyByRawSource[expired.value.rawSourceKey] == expired.key) {
+                        displayKeyByRawSource.remove(expired.value.rawSourceKey)
+                    }
+                }
             }
         }
     }
@@ -254,9 +264,25 @@ internal class AppleLyricsViewTracking {
  * No production decision reads these sets; release builds must not add entries here.
  */
 internal class AppleLyricsPronunciationDiagnostics {
-    private val songSnapshotSignatures = ConcurrentHashMap.newKeySet<String>()
-    private val runtimeKeys = ConcurrentHashMap.newKeySet<String>()
-    private val bindingKeys = ConcurrentHashMap.newKeySet<String>()
+    /** Debug-only recent keys: a long music session must not permanently
+     * retain every earlier track, adapter and pronunciation attempt. */
+    private class RecentKeys {
+        private val entries = LinkedHashMap<String, Unit>(32, 0.75f, true)
+
+        @Synchronized fun add(key: String): Boolean {
+            if (entries.put(key, Unit) != null) return false
+            if (entries.size > MAX_KEYS_PER_STREAM) {
+                val oldest = entries.entries.iterator()
+                oldest.next()
+                oldest.remove()
+            }
+            return true
+        }
+    }
+
+    private val songSnapshotSignatures = RecentKeys()
+    private val runtimeKeys = RecentKeys()
+    private val bindingKeys = RecentKeys()
 
     fun markSongSnapshotLogged(signature: String): Boolean = songSnapshotSignatures.add(signature)
 
@@ -265,4 +291,13 @@ internal class AppleLyricsPronunciationDiagnostics {
 
     fun markBindingReported(songId: String, dedupeKey: String): Boolean =
         bindingKeys.add("$songId|$dedupeKey")
+
+    companion object {
+        private const val MAX_KEYS_PER_STREAM = 1024
+
+        /** A retry after track materialization or a song-model revision must
+         * be observable even if an earlier advertised language was identical. */
+        fun selectionKey(revision: Long, language: String, result: Boolean?): String =
+            "pronunciation_selection_applied:$revision:$language:${result ?: "unknown"}"
+    }
 }

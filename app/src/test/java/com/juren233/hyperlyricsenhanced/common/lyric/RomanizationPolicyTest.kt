@@ -7,6 +7,25 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RomanizationPolicyTest {
+    @Test fun mixedJapaneseKoreanSupplementRetainsEveryOriginalKoreanRun() {
+        assertEquals("키미노 나와 사랑해", RomanizationPolicy.sanitizeHangulSupplement(
+            "君の名は 사랑해", "키미노 나와 사랑해",
+        ))
+        assertNull(RomanizationPolicy.sanitizeHangulSupplement(
+            "君の名は 사랑해", "키미노 나와",
+        ))
+        assertNull(RomanizationPolicy.sanitizeHangulSupplement(
+            "君の名は 사랑해", "사랑해",
+        ))
+        assertEquals("오늘 키미노 나와 사랑해", RomanizationPolicy.sanitizeHangulSupplement(
+            "오늘 君の名は 사랑해", "오늘 키미노 나와 사랑해",
+        ))
+        assertNull(RomanizationPolicy.sanitizeHangulSupplement(
+            "오늘 君の名は 사랑해", "사랑해 키미노 나와 오늘",
+        ))
+        assertNull(RomanizationPolicy.sanitizeHangulSupplement("사랑해", "사랑해"))
+    }
+
     @Test
     fun `keeps Latin romanization for non Latin lyrics`() {
         assertEquals(
@@ -102,6 +121,18 @@ class RomanizationPolicyTest {
         assertNull(RomanizationPolicy.sanitizeHangulSupplement("한국어ー", "한국어"))
     }
 
+    @Test fun halfwidthKanaAndSoundMarksAreValidOnlyWithARealJapaneseSource() {
+        assertEquals("가하로", RomanizationPolicy.sanitizeHangulSupplement(
+            "ｶﾞﾊﾛｰ", "가하로",
+        ))
+        assertEquals("다린", RomanizationPolicy.sanitizeHangulSupplement(
+            "ﾀﾞｰﾘﾝ", "다린",
+        ))
+        assertNull(RomanizationPolicy.sanitizeHangulSupplement("ｰ", "오"))
+        assertNull(RomanizationPolicy.sanitizeHangulSupplement("ﾞ", "가"))
+        assertNull(RomanizationPolicy.sanitizeHangulSupplement("한국어ｰ", "한국어"))
+    }
+
     @Test
     fun `isolated Hangul jamo never reaches a visible Japanese pronunciation row`() {
         val broken = listOf("ㄴ", "노ㄴ미소", "노미소", "노ㅏ미소")
@@ -144,5 +175,19 @@ class RomanizationPolicyTest {
                 "야타라토신도이 코이와즈라이 바라바라 ㄴ나루 아타마토코노카라다",
             ))
         assertNull(RomanizationPolicy.sanitizeHangulSupplement("あ、かん、蚊、い", "아 카 카ㄴ 이"))
+    }
+
+    @Test fun halfwidthJapaneseNasalRequiresExactWholeKanaSoundBeforeRepair() {
+        assertEquals("칸", RomanizationPolicy.sanitizeHangulSupplement("ｶﾝ", "카 ㄴ"))
+        assertEquals("간", RomanizationPolicy.sanitizeHangulSupplement("ｶﾞﾝ", "가 ㄴ"))
+        assertEquals("칸", RomanizationPolicy.sanitizeSupplement("ｶﾝ", "카 ㄴ"))
+
+        // Never attach a stray consonant to a different source, an unsupported
+        // Kanji fragment, or a Hangul syllable which already has a final.
+        assertNull(RomanizationPolicy.sanitizeHangulSupplement("ｶ", "카 ㄴ"))
+        assertNull(RomanizationPolicy.sanitizeHangulSupplement("ﾝｶ", "ㄴ카"))
+        assertNull(RomanizationPolicy.sanitizeHangulSupplement("ｶﾝ悪", "카 ㄴ아"))
+        assertNull(RomanizationPolicy.sanitizeHangulSupplement("ｶﾝ", "칸 ㄴ"))
+        assertNull(RomanizationPolicy.sanitizeHangulSupplement("ｶﾝ", "카ㄴ 2"))
     }
 }

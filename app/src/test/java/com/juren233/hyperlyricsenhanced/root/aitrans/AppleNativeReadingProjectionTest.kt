@@ -73,6 +73,39 @@ class AppleNativeReadingProjectionTest {
         ))
     }
 
+    @Test fun halfwidthKanaUsesOnlyTheCorrespondingNativeWordClocks() {
+        val source = "ｶﾞﾊﾛｰ"
+        val words = listOf("ｶﾞ", "ﾊﾛｰ")
+        val noDictionary = AppleNativeReadingProjection.projectForNativeKaraoke(
+            source, words, emptyList(), "가하로",
+        )
+        assertEquals(listOf("가", "하로"), noDictionary?.words?.map { it.hangul })
+        assertFalse(noDictionary?.approximate ?: true)
+
+        val dictionary = AppleNativeReadingProjection.projectForNativeKaraoke(
+            source, words,
+            listOf(SourceReadingSpan(0, source.length, source, source, "가하로")),
+            "가하로",
+        )
+        assertEquals(listOf("가", "하로"), dictionary?.words?.map { it.hangul })
+        assertFalse(dictionary?.approximate ?: true)
+    }
+
+    @Test fun halfwidthVoicingAndLongMarkCannotBeGivenInventedNativeClocks() {
+        assertNull(AppleNativeReadingProjection.projectForNativeKaraoke(
+            "ｶﾞ", listOf("ｶ", "ﾞ"), emptyList(), "가",
+        ))
+        assertNull(AppleNativeReadingProjection.projectForNativeKaraoke(
+            "ｶﾞ", listOf("ｶ", "ﾞ"),
+            listOf(SourceReadingSpan(0, 2, "ｶﾞ", "ガ", "가")), "가",
+        ))
+        val longMark = AppleNativeReadingProjection.projectForNativeKaraoke(
+            "ﾀﾞｰﾘﾝ", listOf("ﾀﾞ", "ｰ", "ﾘﾝ"), emptyList(), "다린",
+        )
+        assertEquals(listOf("다", AppleNativeReadingProjection.EMPTY_PRONUNCIATION_CELL, "린"),
+            longMark?.words?.map { it.hangul })
+    }
+
     @Test fun unverifiedTopicParticleCannotStealTheFollowingKanjiReading() {
         // 鳥は羽 is read トリワハネ. A context-free は→하 guess must not
         // steal 羽's unique 하 and shift the Apple clocks to 토리와 / 하 / 네.

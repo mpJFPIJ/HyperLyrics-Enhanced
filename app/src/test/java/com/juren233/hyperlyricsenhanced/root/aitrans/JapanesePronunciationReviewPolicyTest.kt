@@ -20,6 +20,31 @@ class JapanesePronunciationReviewPolicyTest {
         ).isEmpty())
     }
 
+    @Test fun chineseDominantSongReviewsOnlyKanjiWithExplicitKana() {
+        val lyrics = listOf(
+            TranslationRequestItem(0, "感谢你曾来过"),
+            TranslationRequestItem(1, "君の名は"),
+            TranslationRequestItem(2, "世界"),
+        )
+        assertEquals(listOf(1), JapanesePronunciationReviewPolicy.candidates(
+            lyrics, chineseDominant = true,
+        ).map { it.index })
+        assertEquals(listOf(0, 1, 2), JapanesePronunciationReviewPolicy.candidates(
+            lyrics, chineseDominant = false,
+        ).map { it.index })
+    }
+
+    @Test fun japaneseLanguageProvenanceAllowsKanjiOnlyReviewPayload() {
+        val subset = listOf(TranslationRequestItem(7, "世界"))
+        assertTrue(JapanesePronunciationReviewPolicy.candidates(subset).isEmpty())
+        assertEquals(listOf(7), JapanesePronunciationReviewPolicy.candidates(
+            subset, japaneseProvenance = true,
+        ).map { it.index })
+        assertTrue(JapanesePronunciationReviewPolicy.candidates(
+            subset, chineseDominant = true, japaneseProvenance = true,
+        ).isEmpty())
+    }
+
     @Test fun acceptsConservativeReadingCorrectionsWithoutChangingMeaning() {
         val existing = listOf(
             TranslationItem(3, "안 돼", "다무"),

@@ -6,6 +6,201 @@ import org.junit.Assert.assertFalse
 import org.junit.Test
 
 class AppleTimedPronunciationHighlightPolicyTest {
+    @Test fun missingRawSourceIdentityNeverBorrowsANativeKanjiWordClock() {
+        val source = "世あ"
+        val nativeWords = listOf(
+            AppleTimedSourceWord("世", 1_000L, 1_200L),
+            AppleTimedSourceWord("あ", 1_400L, 1_600L),
+        )
+        val unknown = AppleTimedPronunciationHighlightPolicy.units(
+            source, "세아", nativeWords, phoneticSpans = listOf(
+                ApplePronunciationSourceToken(0, 1, "세"),
+                ApplePronunciationSourceToken(1, 2, "아", "あ"),
+            ),
+        )
+        assertEquals(1, unknown.size)
+        assertTrue(unknown.single().isWholeLine)
+        assertEquals(-1, unknown.single().sourceWordIndex)
+
+        val proven = AppleTimedPronunciationHighlightPolicy.units(
+            source, "세아", nativeWords, phoneticSpans = listOf(
+                ApplePronunciationSourceToken(0, 1, "세", "世"),
+                ApplePronunciationSourceToken(1, 2, "아", "あ"),
+            ),
+        )
+        assertEquals(listOf(0, 1), proven.map { it.sourceWordIndex })
+        assertTrue(proven.none { it.isWholeLine })
+    }
+
+    @Test fun supplementaryHanMustNotDisappearWhenCheckingNativeWordCoverage() {
+        // 𠮟 is one Han character but occupies two UTF-16 code units.
+        // Only "る" has a native word clock: it cannot time the whole line.
+        val result = AppleTimedPronunciationHighlightPolicy.units(
+            sourceText = "𠮟る",
+            pronunciation = "시카루",
+            timedWords = listOf(AppleTimedSourceWord("る", 200L, 450L)),
+        )
+        assertTrue(result.isEmpty())
+    }
+
+    @Test fun supplementaryHanNativeWordCanRetainItsVerifiedSoundWindow() {
+        val result = AppleTimedPronunciationHighlightPolicy.units(
+            sourceText = "𠮟る", pronunciation = "시카루",
+            timedWords = listOf(AppleTimedSourceWord("𠮟る", 200L, 600L)),
+            phoneticSpans = listOf(
+                ApplePronunciationSourceToken(0, 3, "시카루", "𠮟る"),
+            ),
+        )
+        assertEquals(listOf(AppleTimedReadingUnit(0, 3, 200L, 600L, 0)), result)
+    }
+
+    @Test fun supplementaryHanAndFollowingKanaKeepSeparateOriginalWordClocks() {
+        val result = AppleTimedPronunciationHighlightPolicy.units(
+            sourceText = "𠮟る", pronunciation = "시카루",
+            timedWords = listOf(
+                AppleTimedSourceWord("𠮟", 100L, 200L),
+                AppleTimedSourceWord("る", 300L, 450L),
+            ),
+            phoneticSpans = listOf(
+                ApplePronunciationSourceToken(0, 2, "시카", "𠮟"),
+                ApplePronunciationSourceToken(2, 3, "루", "る"),
+            ),
+        )
+        assertEquals(listOf(
+            AppleTimedReadingUnit(0, 2, 100L, 200L, 0),
+            AppleTimedReadingUnit(2, 3, 300L, 450L, 1),
+        ), result)
+    }
+
+    @Test fun voicedKanaAndFollowingWordRetainTheirUnmodifiedNativeClocks() {
+        val source = "か\u3099て"
+        val phonetics = listOf(
+            ApplePronunciationSourceToken(0, 2, "가", "か\u3099"),
+            ApplePronunciationSourceToken(2, 3, "테", "て"),
+        )
+        val units = AppleTimedPronunciationHighlightPolicy.units(
+            sourceText = source, pronunciation = "가테",
+            timedWords = listOf(
+                AppleTimedSourceWord("か\u3099", 1_000L, 1_300L),
+                AppleTimedSourceWord("て", 1_500L, 1_900L),
+            ), phoneticSpans = phonetics,
+        )
+        assertEquals(listOf(
+            AppleTimedReadingUnit(0, 1, 1_000L, 1_300L, 0),
+            AppleTimedReadingUnit(1, 2, 1_500L, 1_900L, 1),
+        ), units)
+    }
+
+    @Test fun intactDecomposedKanaNativeWordsCanUseLiteralProofWithoutArtificialOffsets() {
+        val source = "か\u3099て"
+        val timed = listOf(
+            AppleTimedSourceWord("か\u3099", 1_000L, 1_300L),
+            AppleTimedSourceWord("て", 1_500L, 1_900L),
+        )
+        assertEquals(listOf(
+            AppleTimedReadingUnit(0, 1, 1_000L, 1_300L, 0),
+            AppleTimedReadingUnit(1, 2, 1_500L, 1_900L, 1),
+        ), AppleTimedPronunciationHighlightPolicy.units(
+            sourceText = source, pronunciation = "가테", timedWords = timed,
+        ))
+        // A native boundary through the base+mark must not gain either
+        // independent voiced-kana word window.
+        val split = AppleTimedPronunciationHighlightPolicy.units(
+            sourceText = source, pronunciation = "가테", timedWords = listOf(
+                AppleTimedSourceWord("か", 1_000L, 1_300L),
+                AppleTimedSourceWord("\u3099て", 1_500L, 1_900L),
+            ),
+        )
+        assertEquals(1, split.size)
+        assertTrue(split.single().isWholeLine)
+    }
+
+    @Test fun voicedKanaCannotBorrowClockFromNativeWordMissingItsVoicingMark() {
+        val units = AppleTimedPronunciationHighlightPolicy.units(
+            sourceText = "か\u3099て", pronunciation = "가테",
+            timedWords = listOf(
+                AppleTimedSourceWord("か", 1_000L, 1_200L),
+                AppleTimedSourceWord("\u3099て", 1_500L, 1_900L),
+            ), phoneticSpans = listOf(
+                ApplePronunciationSourceToken(0, 2, "가", "か\u3099"),
+                ApplePronunciationSourceToken(2, 3, "테", "て"),
+            ),
+        )
+        assertEquals(1, units.size)
+        assertTrue(units.single().isWholeLine)
+        assertEquals(-1, units.single().sourceWordIndex)
+        assertEquals(1_000L, units.single().beginMs)
+        assertEquals(1_900L, units.single().endMs)
+    }
+
+    @Test fun fullMixedTokenCannotSplitNativeWordImmediatelyBeforeVoicingMark() {
+        // A mixed Han suffix is not an independently transcribed source for
+        // the mark: the original full token must not be re-cut at か|゙愛.
+        for (mark in listOf("\u3099", "\u309A", "\uFF9E", "\uFF9F")) {
+            val source = "か${mark}愛"
+            val units = AppleTimedPronunciationHighlightPolicy.units(
+                sourceText = source, pronunciation = "카아이",
+                timedWords = listOf(
+                    AppleTimedSourceWord("か", 1_000L, 1_300L),
+                    AppleTimedSourceWord("${mark}愛", 1_500L, 1_900L),
+                ), phoneticSpans = listOf(
+                    ApplePronunciationSourceToken(0, source.length, "카아이", source),
+                ),
+            )
+            assertEquals(1, units.size)
+            assertTrue(units.single().isWholeLine)
+            assertEquals(-1, units.single().sourceWordIndex)
+            assertEquals(1_000L, units.single().beginMs)
+            assertEquals(1_900L, units.single().endMs)
+        }
+    }
+
+    @Test fun orphanVoicingMarkInsidePunctuationCellCannotGetItsOwnWordClock() {
+        for (mark in listOf("\u3099", "\u309B", "\uFF9E", "\uFF9F")) {
+            val source = "愛!${mark}て"
+            val units = AppleTimedPronunciationHighlightPolicy.units(
+                sourceText = source, pronunciation = "아이바테",
+                timedWords = listOf(
+                    AppleTimedSourceWord("愛", 1_000L, 1_200L),
+                    AppleTimedSourceWord("!${mark}", 1_300L, 1_450L),
+                    AppleTimedSourceWord("て", 1_600L, 1_900L),
+                ), phoneticSpans = listOf(
+                    ApplePronunciationSourceToken(0, 1, "아이", "愛"),
+                    ApplePronunciationSourceToken(1, 2 + mark.length, "바", "!${mark}"),
+                    ApplePronunciationSourceToken(2 + mark.length, source.length, "테", "て"),
+                ),
+            )
+            assertTrue(units.none { !it.isWholeLine && it.sourceWordIndex == 1 })
+        }
+    }
+
+    @Test fun anAnchorEndingBeforeItsVoicingMarkCannotClaimThePlainKanaClock() {
+        val units = AppleTimedPronunciationHighlightPolicy.units(
+            sourceText = "か\u3099て", pronunciation = "카테",
+            timedWords = listOf(
+                AppleTimedSourceWord("か", 1_000L, 1_200L),
+                AppleTimedSourceWord("\u3099て", 1_500L, 1_900L),
+            ), phoneticSpans = listOf(
+                ApplePronunciationSourceToken(0, 1, "카", "か"),
+                ApplePronunciationSourceToken(2, 3, "테", "て"),
+            ),
+        )
+        assertTrue(units.none { !it.isWholeLine && it.sourceWordIndex == 0 })
+    }
+
+    @Test fun invalidJapaneseMarksOrSupplementaryHanInKoreanSoundNeverGainWordClocks() {
+        for (reading in listOf("카\u3099", "카𠮟")) {
+            val units = AppleTimedPronunciationHighlightPolicy.units(
+                sourceText = "か", pronunciation = reading,
+                timedWords = listOf(AppleTimedSourceWord("か", 1_000L, 1_700L)),
+                phoneticSpans = listOf(ApplePronunciationSourceToken(0, 1, reading, "か")),
+            )
+            assertEquals(1, units.size)
+            assertTrue(units.single().isWholeLine)
+            assertEquals(-1, units.single().sourceWordIndex)
+        }
+    }
+
     @Test fun noVerifiedSourcePhoneticsMeansOneHonestLineWindowNotGuessedSyllables() {
         val units = AppleTimedPronunciationHighlightPolicy.units(
             sourceText = "溺れ",
@@ -115,6 +310,64 @@ class AppleTimedPronunciationHighlightPolicyTest {
     }
 
     @Test
+    fun `overlapping chorus clocks cannot arbitrarily brighten the first repeat`() {
+        val first = listOf(
+            AppleTimedReadingUnit(0, 2, 1_000L, 1_400L),
+            AppleTimedReadingUnit(3, 5, 1_500L, 1_900L),
+        )
+        val repeated = listOf(
+            AppleTimedReadingUnit(0, 2, 1_300L, 1_700L),
+            AppleTimedReadingUnit(3, 5, 1_800L, 2_100L),
+        )
+        val variants = listOf(first, repeated)
+
+        assertEquals(0, AppleTimedPronunciationHighlightPolicy.activeVariant(1_200L, variants))
+        assertEquals(0, AppleTimedPronunciationHighlightPolicy.speakingVariant(1_200L, variants))
+        // The native clock overlaps both verified occurrences. List order
+        // cannot establish which one owns the current painted syllables.
+        assertEquals(null, AppleTimedPronunciationHighlightPolicy.activeVariant(1_350L, variants))
+        assertEquals(null, AppleTimedPronunciationHighlightPolicy.speakingVariant(1_350L, variants))
+        assertEquals(null, AppleTimedPronunciationHighlightPolicy.activeVariant(1_750L, variants))
+        assertEquals(0, AppleTimedPronunciationHighlightPolicy.speakingVariant(1_750L, variants))
+        assertEquals(1, AppleTimedPronunciationHighlightPolicy.activeVariant(1_950L, variants))
+    }
+
+    @Test
+    fun `identically timed chorus variants remain ambiguous even if their syllables agree`() {
+        val word = listOf(AppleTimedReadingUnit(0, 2, 3_000L, 3_600L))
+        val duplicate = listOf(word, word.toList())
+        assertEquals(null, AppleTimedPronunciationHighlightPolicy.activeVariant(3_250L, duplicate))
+        assertEquals(null, AppleTimedPronunciationHighlightPolicy.speakingVariant(3_250L, duplicate))
+        assertEquals(0, AppleTimedPronunciationHighlightPolicy.activeVariant(3_250L, listOf(word)))
+    }
+
+    @Test
+    fun `active word windows require ordered positive native clocks`() {
+        val monotone = listOf(
+            AppleTimedReadingUnit(0, 1, 1_000L, 1_500L),
+            AppleTimedReadingUnit(2, 3, 1_000L, 1_500L),
+            AppleTimedReadingUnit(4, 5, 1_400L, 1_800L),
+        )
+        assertEquals(0, AppleTimedPronunciationHighlightPolicy.activeVariant(
+            1_600L, listOf(monotone),
+        ))
+        val reversedBegin = monotone.toMutableList().apply {
+            this[2] = AppleTimedReadingUnit(4, 5, 900L, 1_800L)
+        }
+        val reversedEnd = monotone.toMutableList().apply {
+            this[2] = AppleTimedReadingUnit(4, 5, 1_400L, 1_450L)
+        }
+        val invalidDuration = monotone.toMutableList().apply {
+            this[1] = AppleTimedReadingUnit(2, 3, 1_100L, 1_100L)
+        }
+        for (invalid in listOf(reversedBegin, reversedEnd, invalidDuration)) {
+            assertEquals(null, AppleTimedPronunciationHighlightPolicy.activeVariant(
+                1_350L, listOf(invalid),
+            ))
+        }
+    }
+
+    @Test
     fun `gap between trusted native word clocks is not itself a playing interval`() {
         val units = listOf(
             AppleTimedReadingUnit(0, 1, 1_000L, 1_200L),
@@ -176,8 +429,8 @@ class AppleTimedPronunciationHighlightPolicyTest {
                 AppleTimedSourceWord("脳", 2000, 2400),
             ),
             phoneticSpans = listOf(
-                ApplePronunciationSourceToken(0, 2, "다메"),
-                ApplePronunciationSourceToken(2, 3, "노"),
+                ApplePronunciationSourceToken(0, 2, "다메", "駄目"),
+                ApplePronunciationSourceToken(2, 3, "노", "脳"),
             ),
         )
         assertEquals(listOf("다메", "노"), segments.map { "다메 노".substring(it.start, it.end) })
@@ -200,8 +453,8 @@ class AppleTimedPronunciationHighlightPolicyTest {
                 AppleTimedSourceWord("ベイビー", 1900, 2500),
             ),
             phoneticSpans = listOf(
-                ApplePronunciationSourceToken(0, 4, "다아린"),
-                ApplePronunciationSourceToken(4, 8, "베이비"),
+                ApplePronunciationSourceToken(0, 4, "다아린", "ダーリン"),
+                ApplePronunciationSourceToken(4, 8, "베이비", "ベイビー"),
             ),
         )
         assertEquals(2, segments.size)

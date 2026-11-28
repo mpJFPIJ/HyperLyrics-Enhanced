@@ -4,6 +4,22 @@ import com.juren233.hyperlyricsenhanced.common.lyric.RomanizationPolicy
 
 /** The original Japanese text is authoritative: locally derived readings beat unverified AI text. */
 internal object AiLyricComposition {
+    /** Local cache entries can predate the source-aware mixed-language guard.
+     * Never let an invalid legacy pronunciation override a repaired AI reading. */
+    fun validatedLocalReadings(
+        lines: List<String>,
+        readings: List<TranslationItem>,
+        chineseDominant: Boolean,
+    ): List<TranslationItem> = readings.mapNotNull { item ->
+        val original = lines.getOrNull(item.index) ?: return@mapNotNull null
+        if (!AIPronunciationPolicy.eligibleForeignLine(original, chineseDominant)) {
+            return@mapNotNull null
+        }
+        val valid = RomanizationPolicy.sanitizeHangulSupplement(original, item.roma)
+            ?: return@mapNotNull null
+        item.copy(roma = valid)
+    }
+
     fun merge(translations: List<TranslationItem>, localReadings: List<TranslationItem>): List<TranslationItem> {
         if (localReadings.isEmpty()) return translations
         val result = linkedMapOf<Int, TranslationItem>()

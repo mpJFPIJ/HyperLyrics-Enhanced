@@ -7,6 +7,38 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AiCachedSongCatalogTest {
+    @Test fun lyricRowBoundariesArePartOfTheCacheGroupIdentity() {
+        val combined = AiCachedSongCatalog.groupId("song", "artist", listOf("ありがとう\n1:사랑해"))
+        val split = AiCachedSongCatalog.groupId("song", "artist", listOf("ありがとう", "사랑해"))
+        assertNotEquals(combined, split)
+    }
+
+    @Test fun failedPhoneticsRepairUsesShortCooldownWithoutReleasingNewerVisit() {
+        val scope = AiCacheScope("song", setOf("phonetics-key"))
+        val ticket = AiCacheWriteTicket(scope, 0L, 1)
+        val attempts = AiPhoneticsRepairAttempts(10L * 60_000L)
+        assertTrue(attempts.claim("phonetics-key", ticket, 1_000L))
+        attempts.markFailed("phonetics-key", ticket, 1_000L)
+        assertFalse(attempts.claim("phonetics-key", ticket, 120_999L))
+        assertTrue(attempts.claim("phonetics-key", ticket, 121_000L))
+        attempts.markSucceeded("phonetics-key", ticket, 121_000L, 121_000L)
+        // A delayed failure callback from the first attempt cannot undo this claim.
+        attempts.markFailed("phonetics-key", ticket, 1_000L)
+        assertFalse(attempts.claim("phonetics-key", ticket, 121_001L))
+        assertTrue(attempts.claim("phonetics-key", ticket, 721_000L))
+    }
+
+    @Test fun phoneticsRepairRemainsSingleFlightUntilTheFirstAttemptFinishes() {
+        val scope = AiCacheScope("slow-song", setOf("phonetics"))
+        val ticket = AiCacheWriteTicket(scope, 0L, 2)
+        val attempts = AiPhoneticsRepairAttempts(10L * 60_000L)
+        assertTrue(attempts.claim("phonetics", ticket, 100L))
+        assertFalse(attempts.claim("phonetics", ticket, 11L * 60_000L))
+        attempts.markFailed("phonetics", ticket, 100L, 11L * 60_000L)
+        assertFalse(attempts.claim("phonetics", ticket, 13L * 60_000L - 1L))
+        assertTrue(attempts.claim("phonetics", ticket, 13L * 60_000L))
+    }
+
     @Test fun groupsTranslationAndPronunciationVariantsWithoutDeletingAnotherSong() {
         val groupA = AiCachedSongCatalog.groupId("My Song", "Singer", listOf("line one"))
         val groupB = AiCachedSongCatalog.groupId("Another Song", "Singer", listOf("line two"))
@@ -105,6 +137,7 @@ class AiCachedSongCatalogTest {
         val fresh = old.copy(epoch = epoch.current(scope))
 
         assertTrue(attempts.claim("enriched", fresh, 110L))
+        attempts.markSucceeded("enriched", fresh, 110L, 110L)
         assertFalse(attempts.claim("enriched", old, 120L))
         assertFalse(attempts.claim("enriched", fresh, 130L))
         assertTrue(attempts.claim("enriched", fresh, 1110L))

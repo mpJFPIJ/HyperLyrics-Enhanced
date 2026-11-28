@@ -11,6 +11,65 @@ import org.junit.Test
 
 class AIPronunciationPolicyTest {
 
+    @Test fun mixedJapaneseKoreanOriginalStillNeedsJapaneseReading() {
+        assertTrue(AIPronunciationPolicy.eligibleForeignLine("君の名は 사랑해"))
+        assertFalse(AIPronunciationPolicy.eligibleForeignLine("사랑해"))
+        assertTrue(AIPronunciationPolicy.missingReadingIndices(
+            listOf(TranslationRequestItem(0, "君の名は 사랑해")), emptyList(),
+        ) == setOf(0))
+    }
+
+    @Test fun invalidMixedLanguageReadingStillCountsAsMissingForRecovery() {
+        val input = listOf(TranslationRequestItem(0, "さよなら 사랑해"))
+        val cached = listOf(TranslationItem(0, "안녕, 사랑해", "사요나라"))
+        assertTrue(AIPronunciationPolicy.missingReadingIndices(input, cached) == setOf(0))
+        assertTrue(AIPronunciationPolicy.missingReadingIndices(input,
+            listOf(TranslationItem(0, "안녕, 사랑해", "사요나라 사랑해")),
+        ).isEmpty())
+    }
+
+    @Test fun chineseDominantSongDoesNotRequestJapaneseReadingsForChineseRows() {
+        val lines = listOf(
+            TranslationRequestItem(0, "感谢你曾来过"),
+            TranslationRequestItem(1, "君の名は"),
+            TranslationRequestItem(2, "oh"),
+        )
+        assertFalse(AIPronunciationPolicy.eligibleForeignLine("感谢你曾来过", chineseDominant = true))
+        assertTrue(AIPronunciationPolicy.eligibleForeignLine("君の名は", chineseDominant = true))
+        assertTrue(AIPronunciationPolicy.eligibleForeignLine("世界", chineseDominant = false))
+        assertTrue(AIPronunciationPolicy.missingReadingIndices(
+            lines, emptyList(), chineseDominant = true,
+        ) == setOf(1))
+    }
+
+    @Test fun multilingualPronunciationMetadataDoesNotIdentifyEveryHanRowAsJapanese() {
+        val mixed = Song(
+            metadata = lyricMetadataOf(
+                LyricMetadataKeys.APPLE_PRONUNCIATION_LANGUAGES to "zh-Latn,ja-Latn",
+            ),
+            lyrics = List(9) { RichLyricLine(text = "感谢你曾来过") } +
+                RichLyricLine(text = "君の名は"),
+        )
+        assertTrue(AIPronunciationPolicy.isChineseDominant(mixed))
+        assertFalse(AIPronunciationPolicy.hasJapaneseProvenance(mixed))
+        val hanOnlyJapanese = Song(
+            metadata = lyricMetadataOf(
+                LyricMetadataKeys.APPLE_PRONUNCIATION_LANGUAGES to "ja-Latn",
+            ),
+            lyrics = listOf(RichLyricLine(text = "世界")),
+        )
+        assertFalse(AIPronunciationPolicy.isChineseDominant(hanOnlyJapanese))
+        assertTrue(AIPronunciationPolicy.hasJapaneseProvenance(hanOnlyJapanese))
+    }
+
+    @Test fun englishAdlibsWithoutHanAreStillEligibleForHangulPronunciation() {
+        val english = song("Oh", "Yeah", "La la la")
+        assertTrue(AIPronunciationPolicy.shouldEnrich(english))
+        assertFalse(AIPronunciationPolicy.isChineseDominant(english))
+        assertTrue(AIPronunciationPolicy.eligibleForeignLine("La la la",
+            AIPronunciationPolicy.isChineseDominant(english)))
+    }
+
     @Test fun appleJapaneseLanguageIncludesKanjiOnlyLyricsWithoutTreatingChineseAsJapanese() {
         val tagged = Song(
             metadata = lyricMetadataOf(
@@ -19,7 +78,9 @@ class AIPronunciationPolicyTest {
             lyrics = listOf(RichLyricLine(text = "世界"), RichLyricLine(text = "未来")),
         )
         assertTrue(AIPronunciationPolicy.shouldEnrich(tagged))
+        assertFalse(AIPronunciationPolicy.isChineseDominant(tagged))
         assertFalse(AIPronunciationPolicy.shouldEnrich(song("你好", "世界")))
+        assertTrue(AIPronunciationPolicy.isChineseDominant(song("你好", "世界")))
     }
 
     private fun song(vararg texts: String): Song =

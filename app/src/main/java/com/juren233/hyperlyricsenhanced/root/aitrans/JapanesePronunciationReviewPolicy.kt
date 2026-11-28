@@ -1,6 +1,7 @@
 package com.juren233.hyperlyricsenhanced.root.aitrans
 
 import com.juren233.hyperlyricsenhanced.common.lyric.RomanizationPolicy
+import com.juren233.hyperlyricsenhanced.common.lyric.ChineseLyricsPolicy
 import kotlinx.serialization.Serializable
 
 /** One bounded second opinion for Japanese kanji readings, without rewriting translations. */
@@ -10,12 +11,17 @@ internal object JapanesePronunciationReviewPolicy {
     @Serializable
     data class ReviewLine(val index: Int, val original: String, val currentRoma: String)
 
-    fun candidates(lines: List<TranslationRequestItem>): List<TranslationRequestItem> {
+    fun candidates(
+        lines: List<TranslationRequestItem>,
+        chineseDominant: Boolean = false,
+        japaneseProvenance: Boolean = false,
+    ): List<TranslationRequestItem> {
         // A Han-only Chinese song must never be mistaken for a Japanese song.
-        if (lines.none { line -> line.text.codePoints().anyMatch(::isJapaneseKana) }) {
+        if (!japaneseProvenance && lines.none { line -> line.text.codePoints().anyMatch(::isJapaneseKana) }) {
             return emptyList()
         }
         return lines.filter { line ->
+            ChineseLyricsPolicy.permitsOnlineTranslation(line.text, chineseDominant) &&
             line.text.codePoints().anyMatch(::isHan) &&
                 line.text.codePoints().noneMatch(::isHangul)
         }.take(MAX_REVIEW_LINES)

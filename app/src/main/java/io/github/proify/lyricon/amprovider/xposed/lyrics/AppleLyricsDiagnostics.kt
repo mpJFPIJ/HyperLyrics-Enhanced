@@ -110,6 +110,7 @@ import android.content.SharedPreferences
 internal class AppleLyricsDiagnostics(
     private val runtime: AppleMusicProviderRuntime,
     private val currentSongId: () -> String?,
+    private val currentRevision: () -> Long,
     private val epoxyDataBindingFromHolderCallback: (Any?) -> Any?,
     private val bindingDiagnostic: (
         String,
@@ -535,6 +536,7 @@ internal class AppleLyricsDiagnostics(
                                 adapterIdentity = adapterIdentity,
                             ),
                             adapterInstance = adapter,
+                            presentationRevision = currentRevision(),
                         )
                         appleLyricsBindingDiagnosticContexts.push(context)
                         if (!context.nestedForSameHolder) {

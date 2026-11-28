@@ -2,6 +2,7 @@ package io.github.proify.lyricon.amprovider.xposed.hooks
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.Collections
@@ -11,6 +12,36 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 
 class ApplePlaybackClockEventGateTest {
+    @Test fun synchronousPlayerGetterMustDiscardValueFromBeforeAnAcceptedSeek() {
+        val gate = ApplePlaybackClockEventGate()
+        val ticket = gate.readTicket()
+        val staleValue = run {
+            gate.acceptSeek { /* a paused seek to 2000ms was accepted */ }
+            90_000L // the player getter returns its pre-seek sample late
+        }
+        assertNull(gate.readIfCurrent(ticket, stillCurrent = { true }) { staleValue })
+        assertEquals(2_000L, gate.readIfCurrent(gate.readTicket(), stillCurrent = { true }) {
+            2_000L // fresh accepted-seek fallback, not an invented sample
+        })
+    }
+
+    @Test fun synchronousPlayerGetterMustDiscardSampleAfterPlayerOrSongReplacement() {
+        val gate = ApplePlaybackClockEventGate()
+        val oldPlayer = Any()
+        val newPlayer = Any()
+        var sourcePlayer: Any = oldPlayer
+        var sourceSong = "old-song"
+        val ticket = gate.readTicket()
+        sourcePlayer = newPlayer
+        sourceSong = "new-song"
+        assertNull(gate.readIfCurrent(ticket, stillCurrent = {
+            sourcePlayer === oldPlayer && sourceSong == "old-song"
+        }) { 50_000L })
+        assertEquals(0L, gate.readIfCurrent(gate.readTicket(), stillCurrent = {
+            sourcePlayer === newPlayer && sourceSong == "new-song"
+        }) { 0L })
+    }
+
     @Test fun lateReadingStartedBeforeAPausedSeekNeverPublishesOldLyrics() {
         val gate = ApplePlaybackClockEventGate()
         val started = CountDownLatch(1)

@@ -50,6 +50,32 @@ class AppleSourceAnchorCoverageDiagnosticsTest {
         ).partial)
     }
 
+    @Test fun supplementaryHanMustBeFullyCoveredBeforeReportingCompleteSourceAnchors() {
+        val missingHan = RichLyricLine(
+            text = "𠮟あ", roma = "아",
+            pronunciationSpans = listOf(LyricPronunciationSpan(2, 3, "あ", "아")),
+        )
+        val splitSurrogate = RichLyricLine(
+            text = "𠮟あ", roma = "시아",
+            pronunciationSpans = listOf(
+                LyricPronunciationSpan(0, 1, "\uD842", "시"),
+                LyricPronunciationSpan(2, 3, "あ", "아"),
+            ),
+        )
+        val complete = RichLyricLine(
+            text = "𠮟あ", roma = "시카아",
+            pronunciationSpans = listOf(
+                LyricPronunciationSpan(0, 2, "𠮟", "시카"),
+                LyricPronunciationSpan(2, 3, "あ", "아"),
+            ),
+        )
+        val evidence = AppleSourceAnchorCoverageDiagnostics.summarize(listOf(
+            missingHan, splitSurrogate, complete,
+        ))
+        assertEquals(1, evidence.full)
+        assertEquals(2, evidence.partial)
+    }
+
     @Test fun provenanceMetricsAreNumbersAndNeverExposeLyricContent() {
         val stats = LyricBuildIdentity.safeStage("reading_finished", mapOf(
             "fullSourceSpanLines" to 2,

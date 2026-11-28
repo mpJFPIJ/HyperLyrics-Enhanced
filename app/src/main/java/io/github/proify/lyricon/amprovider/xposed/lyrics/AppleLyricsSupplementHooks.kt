@@ -284,12 +284,14 @@ internal class AppleLyricsSupplementHooks(
             playbackHooks = playbackHooks,
             currentFragment = { presentationBinding.fragment() },
             currentSongId = ::currentSongId,
+            currentRevision = { nativeOnlineTranslationStore.revision() },
         )
     }
     internal val diagnostics by lazy {
         AppleLyricsDiagnostics(
             runtime = runtime,
             currentSongId = ::currentSongId,
+            currentRevision = { nativeOnlineTranslationStore.revision() },
             epoxyDataBindingFromHolderCallback = epoxyDataBindingFromHolderCallback,
             bindingDiagnostic = { stage, context, details, dedupeKey -> logApplePronunciationBindingDiagnostic(stage, context, details, dedupeKey) },
             uiStateDiagnostic = { fragment, stage ->
@@ -322,8 +324,21 @@ internal class AppleLyricsSupplementHooks(
                 blurHooks.appleLyricsNativeActiveAdapterPositionsOrNull(adapter)
             }
         },
+        verifiedNativeTimedPosition = { recyclerView, nativeActive, positionMs ->
+            appleRecyclerAdapter(recyclerView)?.let { adapter ->
+                // Includes original timed rows even when their translated
+                // string is blank and they have no meaning foreground.
+                blurHooks.verifiedAdapterPositionForPlayback(adapter, positionMs, nativeActive)
+            }
+        },
         presentedSongId = { currentAppleLyricsSongId },
         presentedRevision = { nativeOnlineTranslationStore.revision() },
+        currentMeaningEligible = {
+            AppleNativeTranslationHighlightPolicy.eligibleKoreanMeaning(
+                translationVisible = requestedAppleLyricsRowVisibility().translation,
+                koreanTargetSelected = koreanTranslationTargetSelected(),
+            )
+        },
     )
     private val profiledNativeItemChanged by lazy {
         val point = AppleMusicHookPoint.RECYCLER_NOTIFY_ITEM_CHANGED
@@ -344,9 +359,9 @@ internal class AppleLyricsSupplementHooks(
      * next 400ms idle poll to discover a newly active reading. */
     internal fun onAcceptedPlaybackSeek(songId: String?) {
         if (songId.isNullOrBlank() || currentAppleLyricsSongId != songId) return
-        lineWidePronunciationRow.refreshVisibleForAcceptedSeek(
-            songId, nativeOnlineTranslationStore.revision(),
-        )
+        val revision = nativeOnlineTranslationStore.revision()
+        lineWidePronunciationRow.refreshVisibleForAcceptedSeek(songId, revision)
+        translationLineHighlight.refreshForAcceptedSeek(songId, revision)
     }
 
     internal fun installSourceSwitchPresentationPerformanceHook(

@@ -4,6 +4,18 @@ import com.juren233.hyperlyricsenhanced.common.extensions.md5
 import com.juren233.hyperlyricsenhanced.lyric.model.Song
 import com.juren233.hyperlyricsenhanced.lyric.style.AiTranslationConfigs
 
+/** One shared encoding for cache keys AND group identities. Ordinary rows keep
+ * their existing identity; only embedded line breaks require disambiguation. */
+internal fun StringBuilder.appendLyricRows(lines: List<String>) {
+    val hasEmbeddedLineBreaks = lines.any { '\n' in it || '\r' in it }
+    if (hasEmbeddedLineBreaks) appendLine("lyric-rows=length-prefixed-v2")
+    lines.forEachIndexed { index, line ->
+        append(index).append(':')
+        if (hasEmbeddedLineBreaks) append(line.length).append(':')
+        appendLine(line)
+    }
+}
+
 internal object AITranslationKey {
     private const val LEGACY_OFFLINE_READING_REVISION = "sudachi-v1-20260723-korean-phonetics-v1"
     private const val PREVIOUS_SOURCE_OFFSET_REVISION = "sudachi-v1-20260723-full-line-offsets-v2"
@@ -65,9 +77,7 @@ internal object AITranslationKey {
             if (GroqApiKeyPool.configured(configs).isNotEmpty()) appendLine("fallback=gpt-oss-120b-then-qwen-v2")
             append("title=").appendLine(song.name.orEmpty())
             append("artist=").appendLine(song.artist.orEmpty())
-            lines.forEachIndexed { index, line ->
-                append(index).append(':').appendLine(line)
-            }
+            appendLyricRows(lines)
         }.md5()
     }
 
@@ -80,7 +90,7 @@ internal object AITranslationKey {
         appendLine(policyRevision)
         append("title=").appendLine(song.name.orEmpty())
         append("artist=").appendLine(song.artist.orEmpty())
-        lines.forEachIndexed { index, line -> append(index).append(':').appendLine(line) }
+        appendLyricRows(lines)
     }.md5()
 }
 

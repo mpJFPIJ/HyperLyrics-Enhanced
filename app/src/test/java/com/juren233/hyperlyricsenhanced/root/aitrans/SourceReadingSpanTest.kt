@@ -6,6 +6,211 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SourceReadingSpanTest {
+    @Test fun omittedOrDetachedJapaneseVoicingMarkCannotBecomeACompleteDictionaryReading() {
+        for (source in listOf("か\u3099", "か\u309a", "か\u309b", "か\u309c", "ｶﾞ", "ﾊﾟ")) {
+            val missingMark = SourceReadingAssembler.assemble(source, listOf(
+                RawReadingToken(0, 1, "カ"),
+            ))
+            assertEquals("Missing mark in $source", LineReadingStatus.MISSING_UNSUPPORTED, missingMark.status)
+            assertNull(missingMark.text)
+
+            val detachedMark = SourceReadingAssembler.assemble(source, listOf(
+                RawReadingToken(0, 1, "カ"),
+                RawReadingToken(1, 2, "ア"),
+            ))
+            assertEquals("Detached mark in $source", LineReadingStatus.MISSING_UNSUPPORTED, detachedMark.status)
+        }
+
+        val voiced = SourceReadingAssembler.assemble("か\u3099愛", listOf(
+            RawReadingToken(0, 2, "ガ"), RawReadingToken(2, 3, "アイ"),
+        ))
+        assertEquals(LineReadingStatus.COMPLETE, voiced.status)
+        assertEquals("가아이", voiced.text)
+        assertEquals(listOf("か\u3099", "愛"), voiced.spans.map { it.sourceText })
+        assertEquals(listOf(0 to 2, 2 to 3),
+            voiced.spans.map { it.sourceStart to it.sourceEnd })
+
+        for (mark in listOf("\u3099", "\u309a", "\u309b", "\u309c", "ﾞ", "ﾟ")) {
+            val invented = SourceReadingAssembler.assemble(mark, listOf(
+                RawReadingToken(0, mark.length, "ガ"),
+            ))
+            assertEquals("Orphan mark $mark cannot sound", LineReadingStatus.MISSING_UNSUPPORTED, invented.status)
+        }
+    }
+
+    @Test fun nativeWordRefinementMustNotSkipOrBisectAJapaneseVoicingMark() {
+        val source = "か\u3099愛"
+        val coarse = SourceReadingAssembler.assemble(source, listOf(RawReadingToken(0, 3, "ガアイ")))
+        assertEquals(LineReadingStatus.COMPLETE, coarse.status)
+        val refined = SourceReadingAssembler.refineCoarseNativeWords(
+            source, listOf("か", "愛"), coarse,
+        ) { cell ->
+            SourceReadingAssembler.assemble(cell, listOf(RawReadingToken(0, cell.length, "アイ")))
+        }
+        assertEquals(coarse, refined)
+
+        val candidate = SourceReadingAssembler.retryModesForNativeWords(
+            source, listOf("か", "愛"), modeCount = 2,
+        ) { mode ->
+            if (mode == 0) listOf(RawReadingToken(0, 3, "ガアイ"))
+            else listOf(RawReadingToken(0, 2, "ガ"), RawReadingToken(2, 3, "アイ"))
+        }
+        // Apple's split か | 愛 omits the voicing mark; it cannot authorize
+        // independent clock boundaries even though dictionary tokens are sound.
+        assertEquals(listOf(0 to 3), candidate.spans.map { it.sourceStart to it.sourceEnd })
+
+        val intactNativeWords = SourceReadingAssembler.retryModesForNativeWords(
+            source, listOf("か\u3099", "愛"), modeCount = 2,
+        ) { mode ->
+            if (mode == 0) listOf(RawReadingToken(0, 3, "ガアイ"))
+            else listOf(RawReadingToken(0, 2, "ガ"), RawReadingToken(2, 3, "アイ"))
+        }
+        assertEquals(listOf(0 to 2, 2 to 3),
+            intactNativeWords.spans.map { it.sourceStart to it.sourceEnd })
+    }
+
+    @Test fun halfwidthDictionaryTokensKeepRawSourceOffsetsAndExtendStandaloneLengthMarks() {
+        val source = "ｶﾞﾅｰ"
+        val result = SourceReadingAssembler.assemble(source, listOf(
+            RawReadingToken(0, 2, "ガ"),
+            RawReadingToken(2, 3, "ﾅ"),
+            RawReadingToken(3, 4, "ｰ"),
+        ))
+        assertEquals(LineReadingStatus.COMPLETE, result.status)
+        assertEquals("가나", result.text)
+        assertEquals(listOf("ｶﾞ", "ﾅｰ"), result.spans.map { it.sourceText })
+        assertEquals(listOf(0 to 2, 2 to 4),
+            result.spans.map { it.sourceStart to it.sourceEnd })
+
+        val unknownReading = SourceReadingAssembler.assemble("ｶﾞ", listOf(
+            RawReadingToken(0, 2, "*"),
+        ))
+        assertEquals(LineReadingStatus.COMPLETE, unknownReading.status)
+        assertEquals("가", unknownReading.text)
+        assertEquals("ｶﾞ", unknownReading.spans.single().sourceText)
+
+        assertEquals(LineReadingStatus.MISSING_UNSUPPORTED,
+            SourceReadingAssembler.assemble("Iｰ", listOf(
+                RawReadingToken(0, 1, "I"),
+                RawReadingToken(1, 2, "ｰ"),
+            )).status)
+    }
+
+    @Test fun standaloneLongVowelMarkExtendsThePreviousVerifiedJapaneseToken() {
+        val katakana = SourceReadingAssembler.assemble("コー", listOf(
+            RawReadingToken(0, 1, "コ"),
+            RawReadingToken(1, 2, "ー"),
+        ))
+        assertEquals(LineReadingStatus.COMPLETE, katakana.status)
+        assertEquals("코", katakana.text)
+        assertEquals(listOf("コー"), katakana.spans.map { it.sourceText })
+        assertEquals(listOf(0 to 2), katakana.spans.map { it.sourceStart to it.sourceEnd })
+
+        val supplementary = SourceReadingAssembler.assemble("𠮟ー", listOf(
+            RawReadingToken(0, 2, "シツ"),
+            RawReadingToken(2, 3, "ー"),
+        ))
+        assertEquals(LineReadingStatus.COMPLETE, supplementary.status)
+        assertEquals("시츠", supplementary.text)
+        assertEquals(listOf("𠮟ー"), supplementary.spans.map { it.sourceText })
+        assertEquals(listOf(0 to 3), supplementary.spans.map { it.sourceStart to it.sourceEnd })
+        // An ASCII source token cannot claim a Japanese vowel mark merely
+        // because it immediately precedes it in the native tokenizer.
+        assertEquals(LineReadingStatus.MISSING_UNSUPPORTED,
+            SourceReadingAssembler.assemble("Iー", listOf(
+                RawReadingToken(0, 1, "I"),
+                RawReadingToken(1, 2, "ー"),
+            )).status)
+    }
+
+    @Test fun supplementaryHanIsPreservedAsOneJapaneseSourceToken() {
+        val source = "𠮟る"
+        val result = SourceReadingAssembler.assemble(source, listOf(
+            RawReadingToken(0, 2, "シツ"), RawReadingToken(2, 3, "ル"),
+        ))
+        assertEquals(LineReadingStatus.COMPLETE, result.status)
+        assertEquals("시츠루", result.text)
+        assertEquals(listOf("𠮟", "る"), result.spans.map { it.sourceText })
+        assertEquals(listOf(0 to 2, 2 to 3),
+            result.spans.map { it.sourceStart to it.sourceEnd })
+    }
+
+    @Test fun missingSupplementaryHanOrBisectedSurrogateCannotPassFullLineAnalysis() {
+        val source = "𠮟る"
+        val missing = SourceReadingAssembler.assemble(source, listOf(
+            RawReadingToken(2, 3, "ル"),
+        ))
+        assertEquals(LineReadingStatus.MISSING_UNSUPPORTED, missing.status)
+        assertNull(missing.text)
+
+        val trailing = SourceReadingAssembler.assemble("る𠮟", listOf(
+            RawReadingToken(0, 1, "ル"),
+        ))
+        assertEquals(LineReadingStatus.MISSING_UNSUPPORTED, trailing.status)
+        assertNull(trailing.text)
+
+        val bisected = SourceReadingAssembler.assemble(source, listOf(
+            RawReadingToken(0, 1, "シ"), RawReadingToken(1, 3, "ツル"),
+        ))
+        assertEquals(LineReadingStatus.MISSING_UNSUPPORTED, bisected.status)
+        assertNull(bisected.text)
+    }
+
+    @Test fun supplementaryHanCanBeRefinedOnlyWhenNativeCellsRejoinTheWholeSound() {
+        val source = "𠮟あ"
+        val coarse = SourceReadingAssembler.assemble(source, listOf(
+            RawReadingToken(0, 3, "シツア"),
+        ))
+        val refined = SourceReadingAssembler.refineCoarseNativeWords(
+            source, listOf("𠮟", "あ"), coarse,
+        ) { cell ->
+            when (cell) {
+                "𠮟" -> SourceReadingAssembler.assemble(cell, listOf(
+                    RawReadingToken(0, 2, "シツ"),
+                ))
+                "あ" -> SourceReadingAssembler.assemble(cell, listOf(
+                    RawReadingToken(0, 1, "ア"),
+                ))
+                else -> error("Unexpected native cell")
+            }
+        }
+        assertEquals("시츠아", refined.text)
+        assertEquals(listOf("𠮟", "あ"), refined.spans.map { it.sourceText })
+        assertEquals(listOf(0 to 2, 2 to 3),
+            refined.spans.map { it.sourceStart to it.sourceEnd })
+    }
+
+    @Test fun nativeWordOffsetsCannotSkipSupplementaryHanAndClaimFinerTiming() {
+        val result = SourceReadingAssembler.retryModesForNativeWords(
+            "𠮟あう", listOf("あ", "う"), modeCount = 2,
+        ) { mode ->
+            if (mode == 0) listOf(RawReadingToken(0, 4, "シツアウ"))
+            else listOf(
+                RawReadingToken(0, 2, "シツ"), RawReadingToken(2, 3, "ア"),
+                RawReadingToken(3, 4, "ウ"),
+            )
+        }
+        assertEquals(LineReadingStatus.COMPLETE, result.status)
+        // Incomplete Apple cells cannot select a different dictionary split.
+        assertEquals(listOf("𠮟あう"), result.spans.map { it.sourceText })
+    }
+
+    @Test fun potentialVisualLineRefinementCountsUnicodeGlyphsNotSurrogateHalves() {
+        val source = "𠮟あ"
+        val coarse = SourceReadingAssembler.assemble(source, listOf(
+            RawReadingToken(0, 3, "シツア"),
+        ))
+        val refined = SourceReadingAssembler.refinePotentialVisualLineBoundaries(
+            source, coarse,
+        ) { cell ->
+            val sound = if (cell == "𠮟") "シツ" else "ア"
+            SourceReadingAssembler.assemble(cell, listOf(RawReadingToken(0, cell.length, sound)))
+        }
+        assertEquals(listOf("시츠", "아"), refined.spans.map { it.hangul })
+        assertEquals(listOf(0 to 2, 2 to 3),
+            refined.spans.map { it.sourceStart to it.sourceEnd })
+    }
+
     @Test fun verifiedKanjiSyllableBoundariesAreAvailableEvenBeforeTheHostMeasuresItsWrap() {
         val source = "世界"
         val coarse = SourceReadingAssembler.assemble(

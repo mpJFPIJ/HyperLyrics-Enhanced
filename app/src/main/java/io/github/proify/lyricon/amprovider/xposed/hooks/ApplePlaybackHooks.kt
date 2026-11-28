@@ -287,36 +287,56 @@ internal class ApplePlaybackHooks(
 
     fun isPlaying(): Boolean = playing
 
+    /** BUFFERING remains a live session but does not advance Exo's lyric clock. */
+    fun isTimelineAdvancing(): Boolean = timelineAdvancing
+
     fun activePlayer(): Any? = activePlaybackPlayer
 
     fun currentPositionMs(): Long? {
-        val source = playbackPositionSource
-        val raw = runCatching { source?.readPosition() }.getOrNull()
-        val songId = currentLyricsSongId() ?: currentMetadataId()
-        val measured = lastTimingSample?.takeIf {
-            source != null && songId != null &&
-                it.songId == songId && it.sourcePlayer.get() === source.player
+        val source = playbackPositionSource ?: return null
+        val songAtReadStart = currentLyricsSongId() ?: currentMetadataId()
+        // The synchronous foreground getter can be slow too. A seek or a
+        // different Exo player may complete while it is reading the old
+        // clock, exactly as in the coroutine polling path below.
+        val ticket = clockEventGate.readTicket()
+        val raw = runCatching { source.readPosition() }.getOrNull()
+        val stillCurrent = {
+            playbackPositionSource === source &&
+                (currentLyricsSongId() ?: currentMetadataId()) == songAtReadStart
         }
-        val seek = lastAcceptedSeekClock?.takeIf {
-            source != null && songId != null &&
-                it.sample.songId == songId && it.sourcePlayer.get() === source.player
+        fun choose(currentMs: Long?): Long? {
+            val measured = lastTimingSample?.takeIf {
+                songAtReadStart != null &&
+                    it.songId == songAtReadStart && it.sourcePlayer.get() === source.player
+            }
+            val seek = lastAcceptedSeekClock?.takeIf {
+                songAtReadStart != null &&
+                    it.sample.songId == songAtReadStart && it.sourcePlayer.get() === source.player
+            }
+            val fallback = ApplePausedPlaybackClockPolicy.newestFallback(
+                measuredMs = measured?.positionMs,
+                measuredSequence = measured?.sequence,
+                acceptedSeekMs = seek?.sample?.positionMs,
+                acceptedSeekSequence = seek?.sequence,
+            )
+            val anchorAtMs = if (fallback.fromSeek) seek?.receivedAtMs else measured?.observedAtMs
+            val sampleAgeMs = anchorAtMs?.takeIf { it > 0L }
+                ?.let { SystemClock.elapsedRealtime() - it }
+            return ApplePausedPlaybackClockPolicy.select(
+                currentMs = currentMs,
+                lastValidMs = fallback.positionMs,
+                timelineAdvancing = timelineAdvancing,
+                explicitSeekToZero = fallback.fromSeek && fallback.positionMs == 0L,
+                lastValidAgeMs = sampleAgeMs,
+                fallbackFromAcceptedSeek = fallback.fromSeek,
+            )
         }
-        val fallback = ApplePausedPlaybackClockPolicy.newestFallback(
-            measuredMs = measured?.positionMs,
-            measuredSequence = measured?.sequence,
-            acceptedSeekMs = seek?.sample?.positionMs,
-            acceptedSeekSequence = seek?.sequence,
-        )
-        val anchorAtMs = if (fallback.fromSeek) seek?.receivedAtMs else measured?.observedAtMs
-        val sampleAgeMs = anchorAtMs?.takeIf { it > 0L }
-            ?.let { SystemClock.elapsedRealtime() - it }
-        return ApplePausedPlaybackClockPolicy.select(
-            currentMs = raw,
-            lastValidMs = fallback.positionMs,
-            timelineAdvancing = timelineAdvancing,
-            explicitSeekToZero = fallback.fromSeek && fallback.positionMs == 0L,
-            lastValidAgeMs = sampleAgeMs,
-        )
+        return clockEventGate.readIfCurrent(ticket, stillCurrent) { choose(raw) }
+            // If an accepted seek invalidated the slow getter, reselect the
+            // *new* confirmed seek/measurement without trusting that sample.
+            ?: clockEventGate.readIfCurrent(clockEventGate.readTicket(), stillCurrent) {
+                choose(null)
+            }
     }
 
     private fun startSyncAction() {

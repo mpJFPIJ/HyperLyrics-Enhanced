@@ -21,6 +21,44 @@ class ApplePausedPlaybackClockPolicyTest {
             timelineAdvancing = false, explicitSeekToZero = false,
             lastValidAgeMs = 2_000L,
         ))
+        assertNull(ApplePausedPlaybackClockPolicy.select(
+            currentMs = null, lastValidMs = 21_370L,
+            timelineAdvancing = true, explicitSeekToZero = false,
+            lastValidAgeMs = null,
+        ))
+    }
+
+    @Test fun `unmeasured accepted seek target can never become an advancing lyric clock`() {
+        for (seekTarget in listOf(0L, 77_000L)) {
+            val fallback = ApplePausedPlaybackClockPolicy.newestFallback(
+                measuredMs = 21_370L, measuredSequence = 1L,
+                acceptedSeekMs = seekTarget, acceptedSeekSequence = 2L,
+            )
+            assertEquals(seekTarget, fallback.positionMs)
+            assertEquals(true, fallback.fromSeek)
+            assertNull(ApplePausedPlaybackClockPolicy.select(
+                currentMs = null, lastValidMs = fallback.positionMs,
+                timelineAdvancing = true,
+                explicitSeekToZero = seekTarget == 0L,
+                lastValidAgeMs = 100L,
+                fallbackFromAcceptedSeek = fallback.fromSeek,
+            ))
+            // Paused playback still pins a requested seek target until Exo
+            // reports its measured/clamped position; no moving sweep occurs.
+            assertEquals(seekTarget, ApplePausedPlaybackClockPolicy.select(
+                currentMs = null, lastValidMs = fallback.positionMs,
+                timelineAdvancing = false,
+                explicitSeekToZero = seekTarget == 0L,
+                lastValidAgeMs = 10_000L,
+                fallbackFromAcceptedSeek = fallback.fromSeek,
+            ))
+        }
+        // A real sampled Exo position is authoritative even after a seek.
+        assertEquals(75_500L, ApplePausedPlaybackClockPolicy.select(
+            currentMs = 75_500L, lastValidMs = 77_000L,
+            timelineAdvancing = true, explicitSeekToZero = false,
+            lastValidAgeMs = 100L, fallbackFromAcceptedSeek = true,
+        ))
     }
     @Test fun releaseBuildPreservesLastPositionAfterPlayerTemporarilyStopsReporting() {
         assertEquals(21_370L, ApplePausedPlaybackClockPolicy.select(
@@ -169,6 +207,17 @@ class ApplePausedPlaybackClockPolicyTest {
             timelineAdvancing = false,
             explicitSeekToZero = selected.fromSeek && selected.positionMs == 0L,
             lastValidAgeMs = 9_000L,
+        ))
+    }
+
+    @Test fun `nonzero native getter remains authoritative even if accepted seek target differs`() {
+        // Apple's seek target can be clamped; a different nonzero getter is
+        // not proof of a stale value. The fallback reading polls briefly
+        // after seek, but the policy must never fabricate the target clock.
+        assertEquals(21_370L, ApplePausedPlaybackClockPolicy.select(
+            currentMs = 21_370L, lastValidMs = 77_000L,
+            timelineAdvancing = false, explicitSeekToZero = false,
+            lastValidAgeMs = 100L,
         ))
     }
 }

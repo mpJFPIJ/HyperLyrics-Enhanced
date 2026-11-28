@@ -12,6 +12,7 @@ internal object AITranslationApplicator {
         forceOverride: Boolean = false
     ): Song {
         var appliedCount = 0
+        val chineseDominant = AIPronunciationPolicy.isChineseDominant(song)
         val translationsByIndex = transItems.associateBy { it.index }
         val newLyrics = song.lyrics?.mapIndexed { index, line ->
             val transText = translationsByIndex[index]?.trans?.trim()
@@ -22,9 +23,11 @@ internal object AITranslationApplicator {
             // Preserve an original reading in the source model, but display
             // newly requested Korean phonetics instead of Latin romaji.
             // Invalid AI output never replaces a valid existing pronunciation.
-            val hangulPronunciation = RomanizationPolicy.sanitizeHangulSupplement(
-                line.text, translationsByIndex[index]?.roma,
-            )
+            val hangulPronunciation = if (AIPronunciationPolicy.eligibleForeignLine(
+                    line.text.orEmpty(), chineseDominant,
+                )) RomanizationPolicy.sanitizeHangulSupplement(
+                    line.text, translationsByIndex[index]?.roma,
+                ) else null
             val preferredPronunciation = hangulPronunciation
                 ?: line.roma?.takeIf(String::isNotBlank)
             val provenance = if (hangulPronunciation != null)

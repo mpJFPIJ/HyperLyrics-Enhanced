@@ -28,10 +28,25 @@ internal object AppleMusicSourcePhonetics {
             // explicitly unverified fallback on mixed Japanese/kana text,
             // including a single-kana-plus-kanji line. Entirely unknown
             // kanji (e.g. 未知語 -> invented 키코) still fail closed.
-            val kanaCount = sourceText.count { it in '\u3040'..'\u30ff' }
+            // Halfwidth voiced marks join the preceding Kana under NFKC;
+            // counting them as extra syllabic source characters would make
+            // the conservative AI fallback length gate reject valid text.
+            val kanaCount = sourceText.count { character ->
+                JapaneseToHangul.isLiteralKanaCodePoint(character.code) &&
+                    character !in '\uFF9E'..'\uFF9F'
+            }
+            val containsJapaneseOrKorean = sourceText.codePoints().anyMatch { codePoint ->
+                JapaneseToHangul.isLiteralKanaCodePoint(codePoint) ||
+                    when (Character.UnicodeScript.of(codePoint)) {
+                        Character.UnicodeScript.HAN,
+                        Character.UnicodeScript.HIRAGANA,
+                        Character.UnicodeScript.KATAKANA,
+                        Character.UnicodeScript.HANGUL -> true
+                        else -> false
+                    }
+            }
             val englishOnly = sourceText.any { it in 'a'..'z' || it in 'A'..'Z' } &&
-                sourceText.none { it in '\u3040'..'\u30ff' || it in '\u3400'..'\u9fff' ||
-                    it in '가'..'힣' }
+                !containsJapaneseOrKorean
             val previousReading = RomanizationPolicy.sanitizeHangulSupplement(
                 sourceText, line.roma,
             )?.takeIf { candidate ->

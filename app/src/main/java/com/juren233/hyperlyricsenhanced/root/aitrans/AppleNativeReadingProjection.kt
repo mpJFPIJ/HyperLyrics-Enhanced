@@ -22,15 +22,23 @@ internal object AppleNativeReadingProjection {
 
     /** Kotlin Char checks see neither half of a supplementary Han glyph as
      * a letter. Such a glyph is not an ignorable gap between Apple cells. */
-    private fun containsSourceLetters(value: String): Boolean {
+    private fun containsSourceContent(value: String): Boolean {
         var offset = 0
         while (offset < value.length) {
             val codePoint = Character.codePointAt(value, offset)
-            if (Character.isLetterOrDigit(codePoint)) return true
+            if (JapaneseToHangul.isLyricSourceContent(codePoint)) return true
             offset += Character.charCount(codePoint)
         }
         return false
     }
+
+    private fun sourceTokenBoundary(source: String, offset: Int): Boolean =
+        offset in 0..source.length && !(offset > 0 && offset < source.length &&
+            Character.isHighSurrogate(source[offset - 1]) &&
+            Character.isLowSurrogate(source[offset])) &&
+            (offset == source.length || !JapaneseToHangul.isJapaneseVoicingMark(
+                Character.codePointAt(source, offset),
+            ))
 
     /**
      * Prefer the native lyric word renderer so a wrapped line never becomes
@@ -49,7 +57,9 @@ internal object AppleNativeReadingProjection {
         spans: List<SourceReadingSpan>,
         pronunciation: String,
     ): Result? {
-        if (appleWords.none(::containsSourceLetters)) return null
+        if (appleWords.none(::containsSourceContent) ||
+            !JapaneseToHangul.onlyHangulSoundLetters(pronunciation)
+        ) return null
         // Do not discard orphan jamo or unexpected script characters when
         // looking up an exact sound anchor: normalization is not verification.
         if (spans.any { !validVerifiedSpan(it) }) return null
@@ -76,7 +86,7 @@ internal object AppleNativeReadingProjection {
         // cannot claim a timing proof when part of its sound was inferred from
         // a partial dictionary anchor. More than one native word retains the
         // legacy single-cell-gap inference, never a cross-word syllable split.
-        if (appleWords.count(::containsSourceLetters) == 1 &&
+        if (appleWords.count(::containsSourceContent) == 1 &&
             projected.approximate
         ) return null
         return projected
@@ -95,7 +105,12 @@ internal object AppleNativeReadingProjection {
     ): Boolean {
         if (start < 0 || end <= start || end > original.length) return false
         val source = original.substring(start, end)
-        if (source.any { it !in '\u3040'..'\u30ff' || it == 'は' || it == 'へ' }) {
+        if (source.any { it == 'は' || it == 'へ' } ||
+            source.codePoints().anyMatch { cp ->
+                !JapaneseToHangul.isLiteralKanaCodePoint(cp) &&
+                    JapaneseToHangul.isLyricSourceContent(cp)
+            }
+        ) {
             return false
         }
         fun sound(value: String): String = JapaneseToHangul.fromKana(value)
@@ -105,9 +120,11 @@ internal object AppleNativeReadingProjection {
             return false
         }
         var left = start
-        while (left > 0 && original[left - 1] in '\u3040'..'\u30ff') left--
+        while (left > 0 && JapaneseToHangul.isLiteralKanaCodePoint(original[left - 1].code)) left--
         var right = end
-        while (right < original.length && original[right] in '\u3040'..'\u30ff') right++
+        while (right < original.length &&
+            JapaneseToHangul.isLiteralKanaCodePoint(original[right].code)
+        ) right++
         val contextual = JapaneseToHangul.fromKana(original.substring(left, right))
             ?.filter { it in '가'..'힣' } ?: return false
         val separate = sound(original.substring(left, start)) + ownSound +
@@ -129,13 +146,13 @@ internal object AppleNativeReadingProjection {
             val word = native.trim()
             if (word.isEmpty()) continue
             val sourceStart = original.indexOf(word, sourceCursor)
-            if (sourceStart < 0 || containsSourceLetters(
+            if (sourceStart < 0 || containsSourceContent(
                     original.substring(sourceCursor, sourceStart),
                 )
             ) return emptyList()
             sourceCursor = sourceStart + word.length
-            if (word.any { it !in '\u3040'..'\u30ff' } ||
-                word.all { it == '\u30fc' || it == '\u30fb' }
+            if (word.any { !JapaneseToHangul.isLiteralKanaCodePoint(it.code) } ||
+                word.all { it == '\u30fc' || it == '\u30fb' || it == 'ｰ' }
             ) continue
             val kanaReading = JapaneseToHangul.fromKana(word) ?: continue
             val hangul = kanaReading.filter { it in '가'..'힣' }
@@ -180,6 +197,7 @@ internal object AppleNativeReadingProjection {
     ): Result? {
         if (spans.isEmpty() || appleWords.isEmpty() ||
             spans.any { !validVerifiedSpan(it) } ||
+            !JapaneseToHangul.onlyHangulSoundLetters(pronunciation) ||
             com.juren233.hyperlyricsenhanced.common.lyric.RomanizationPolicy
                 .sanitizeHangulSupplement(original, pronunciation) == null
         ) return null
@@ -194,12 +212,14 @@ internal object AppleNativeReadingProjection {
             if (token.isEmpty()) return null
             val start = original.indexOf(token, sourceCursor)
             if (start < sourceCursor || start < 0 ||
-                containsSourceLetters(original.substring(sourceCursor, start))
+                containsSourceContent(original.substring(sourceCursor, start)) ||
+                !sourceTokenBoundary(original, start) ||
+                !sourceTokenBoundary(original, start + token.length)
             ) return null
             ranges += start until start + token.length
             sourceCursor = start + token.length
         }
-        if (containsSourceLetters(original.substring(sourceCursor))) return null
+        if (containsSourceContent(original.substring(sourceCursor))) return null
         data class Piece(val start: Int, val end: Int, val reading: String,
             val independentlyVerified: Boolean)
         val pieces = mutableListOf<Piece>()
@@ -209,7 +229,9 @@ internal object AppleNativeReadingProjection {
             if (span.sourceStart < sourceOffset || span.sourceEnd > original.length ||
                 span.sourceEnd <= span.sourceStart ||
                 original.substring(span.sourceStart, span.sourceEnd) != span.sourceText ||
-                !containsSourceLetters(span.sourceText)
+                !JapaneseToHangul.containsSpokenSourceBase(span.sourceText) ||
+                !sourceTokenBoundary(original, span.sourceStart) ||
+                !sourceTokenBoundary(original, span.sourceEnd)
             ) return null
             val anchor = span.hangul.filter { it in '가'..'힣' }
             if (anchor.isEmpty()) return null
@@ -240,7 +262,7 @@ internal object AppleNativeReadingProjection {
 
         // A standalone length mark may be genuinely silent, but only when
         // independently converting the WHOLE kana line confirms its sound.
-        val kanaSound = if (original.all { it in '\u3040'..'\u30ff' ||
+        val kanaSound = if (original.all { JapaneseToHangul.isLiteralKanaCodePoint(it.code) ||
                     it.isWhitespace()
             }) JapaneseToHangul.fromKana(original)?.filter { it in '가'..'힣' }
             else null
@@ -254,7 +276,7 @@ internal object AppleNativeReadingProjection {
                 if (right > left) index to (left until right) else null
             }
             val fragment = original.substring(piece.start, piece.end)
-            val soundedSource = containsSourceLetters(fragment)
+            val soundedSource = containsSourceContent(fragment)
             // A punctuation-only gap is silent. A complete but inconsistent
             // AI sentence cannot turn an exclamation mark into a sung word.
             if (piece.reading.isNotEmpty() && !soundedSource) return null
@@ -262,9 +284,15 @@ internal object AppleNativeReadingProjection {
             // Do not label e.g. こ as 카 merely because one native clock is
             // left between two verified anchors. Context-dependent particles
             // and non-additive kana fail closed if the literal read disagrees.
+            // A native source can omit punctuation/space between two cells.
+            // Leading separators in the unanchored gap must not turn its
+            // otherwise literal kana into an arbitrary Kanji-like residual.
+            val readableKanaWithSeparators = fragment.codePoints().allMatch { cp ->
+                JapaneseToHangul.isLiteralKanaCodePoint(cp) ||
+                    !JapaneseToHangul.isLyricSourceContent(cp)
+            }
             val literalKanaGap = !piece.independentlyVerified &&
-                piece.reading.isNotEmpty() &&
-                soundedSource && fragment.all { it in '\u3040'..'\u30ff' }
+                piece.reading.isNotEmpty() && soundedSource && readableKanaWithSeparators
             if (literalKanaGap && !hasContextIndependentKanaSound(
                     original, piece.start, piece.end, piece.reading,
                 )
@@ -273,13 +301,13 @@ internal object AppleNativeReadingProjection {
             if (overlaps.isEmpty()) {
                 // Apple's word vector may omit punctuation/whitespace, never
                 // a source letter or a phonetic syllable.
-                if (piece.reading.isNotEmpty() || containsSourceLetters(fragment))
+                if (piece.reading.isNotEmpty() || containsSourceContent(fragment))
                     return null
                 continue
             }
             if (piece.reading.isEmpty()) {
-                if (containsSourceLetters(fragment) &&
-                    !(verifiedSilentKana && fragment.all { it == 'ー' })
+                if (containsSourceContent(fragment) &&
+                    !(verifiedSilentKana && fragment.all { it == 'ー' || it == 'ｰ' })
                 ) return null
                 continue
             }
@@ -320,7 +348,9 @@ internal object AppleNativeReadingProjection {
         spans: List<SourceReadingSpan>,
         expectedHangul: String,
     ): Result? {
-        if (spans.any { !validVerifiedSpan(it) }) return null
+        if (spans.any { !validVerifiedSpan(it) } ||
+            !JapaneseToHangul.onlyHangulSoundLetters(expectedHangul)
+        ) return null
         val verified = AppleWordReadingAlignment.align(
             original, appleWords, spans, expectedHangul,
         ) as? WordAlignmentResult.Verified ?: return null
@@ -334,7 +364,7 @@ internal object AppleNativeReadingProjection {
                 // The alignment has already proved source AND sound offsets.
                 // Only punctuation cells may remain silent; keep Apple from
                 // rendering their original glyph as a pronunciation fallback.
-                if (containsSourceLetters(word.source)) return null
+                if (containsSourceContent(word.source)) return null
                 word.copy(hangul = EMPTY_PRONUNCIATION_CELL)
             }
         }

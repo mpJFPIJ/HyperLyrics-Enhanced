@@ -1,6 +1,7 @@
 package io.github.proify.lyricon.amprovider.xposed
 
 import io.github.proify.lyricon.amprovider.xposed.internal.WeakIdentityMap
+import java.lang.ref.WeakReference
 
 /** One original lyric occurrence; its translation shares this native line clock. */
 internal data class AppleTranslationLineContext(
@@ -17,14 +18,37 @@ internal data class AppleTranslationLineContext(
 
 /** A renderer can bind the same holder more than once before it is recycled. */
 internal class AppleTranslationLineContextStore {
-    private val contexts = WeakIdentityMap<Any, AppleTranslationLineContext>()
+    private data class Entry(
+        val context: AppleTranslationLineContext,
+        val adapterOwner: WeakReference<Any>?,
+        val adapterPosition: Int?,
+    )
+    private val contexts = WeakIdentityMap<Any, Entry>()
 
-    fun remember(holder: Any?, context: AppleTranslationLineContext) {
-        holder?.let { contexts[it] = context }
+    fun remember(
+        holder: Any?, context: AppleTranslationLineContext,
+        adapterOwner: Any? = null, adapterPosition: Int? = null,
+    ) {
+        holder?.let {
+            contexts[it] = Entry(
+                context, adapterOwner?.let { owner -> WeakReference(owner) },
+                adapterPosition?.takeIf { position -> position >= 0 },
+            )
+        }
     }
 
-    fun forHolder(holder: Any?): AppleTranslationLineContext? =
-        holder?.let { contexts[it] }
+    fun forHolder(
+        holder: Any?, adapterOwner: Any? = null, adapterPosition: Int? = null,
+    ): AppleTranslationLineContext? {
+        val entry = holder?.let { contexts[it] } ?: return null
+        if (adapterOwner != null && entry.adapterOwner != null &&
+            entry.adapterOwner.get() !== adapterOwner
+        ) return null
+        if (adapterPosition != null && entry.adapterPosition != null &&
+            entry.adapterPosition != adapterPosition
+        ) return null
+        return entry.context
+    }
 
     fun clear(holder: Any?) {
         holder?.let(contexts::remove)

@@ -12,7 +12,7 @@ internal object DiagnosticPrivacyPolicy {
         "read_timeout_ms", "duration_ms", "max_tokens", "cooldown_ms", "remaining_ms",
         "originalLines", "translationLines", "readingLines", "alignedLines", "lineWideLines",
         "missingLines", "rowBound", "rowOverflow", "holderWidth", "holderHeight",
-        "holderChildren", "holderGroup", "position",
+        "holderChildren", "holderGroup", "position", "activeCount", "visibleCount",
         // Bounded, content-free layout measurements for visual bugs.
         "sample", "hostW", "hostH", "flexW", "readingW", "readingH",
         "readingTop", "readingLines", "firstInkTop", "lastInkBottom",
@@ -25,13 +25,24 @@ internal object DiagnosticPrivacyPolicy {
         "fullSourceSpanLines", "partialSourceSpanLines", "missingSourceSpanLines",
         "alignedWordRows",
         "nativeWrappedCells", "verifiedProjection", "rawCellValid", "geometryPending",
-        "crossRowSweepFragments",
+        "fallbackGate",
+        "flexRows", "nativeSingleLineWords", "multiWordCells",
+        "wrappedSourceChildren", "wrappedWithPeers", "wrappedMultiWordChildren",
+        "additionalNativeSoftLines", "nativeHardBreakLines",
+        "crossRowSweepFragments", "terminalWrappedCell",
         "nativeInkOverTop", "nativeInkOverBottom", "nativeHolderOverTop",
         "nativeHolderOverBottom", "nativeTopClippedCount",
         "nativeBottomClippedCount", "nativeShaderCells", "nativeSourceWordCount",
+        "canvasBeforeTop", "canvasBeforeBottom", "canvasAfterTop", "canvasAfterBottom",
+        "inkTop", "inkBottom", "manualLostTop", "manualLostBottom",
+        "transformedAncestors",
+        "nativeWordMinPm", "nativeWordMaxPm", "flexToHolderPm",
+        "overlayWordMinPm", "overlayWordMaxPm", "sharedAlphaLayers", "alphaPathValid",
     )
     private val signedGeometryFields = setOf(
         "flexW", "readingTop", "firstInkTop", "lastInkBottom", "sourceTopSpan",
+        "canvasBeforeTop", "canvasBeforeBottom", "canvasAfterTop", "canvasAfterBottom",
+        "inkTop", "inkBottom",
     )
     private val signedNumberPattern = Regex("-?[0-9]{1,6}")
     // The first twelve safe fields survive the bounded diagnostic snapshot.
@@ -40,6 +51,27 @@ internal object DiagnosticPrivacyPolicy {
         "build", "sample", "hostH", "readingTop", "readingH", "firstInkTop",
         "lastInkBottom", "readingLines", "wrappedSourceViews", "maxSourceLines",
         "sourceWords", "sourceTopSpan",
+    )
+    private val fallbackFieldPriority = listOf(
+        "build", "sample", "sourceCells", "flexRows", "nativeSingleLineWords",
+        "nativeWrappedCells", "multiWordCells", "sourcePhoneticSpans",
+        "verifiedProjection", "rawCellValid", "geometryPending", "fallbackGate",
+    )
+    private val multiWrapFieldPriority = listOf(
+        "build", "sample", "sourceCells", "sourceWords", "flexRows",
+        "nativeWrappedCells", "wrappedSourceChildren", "wrappedWithPeers",
+        "wrappedMultiWordChildren", "additionalNativeSoftLines",
+        "nativeHardBreakLines", "sourcePhoneticSpans",
+    )
+    private val overlayClipFieldPriority = listOf(
+        "build", "sample", "hostH", "canvasBeforeTop", "canvasBeforeBottom",
+        "canvasAfterTop", "canvasAfterBottom", "inkTop", "inkBottom",
+        "manualLostTop", "manualLostBottom", "transformedAncestors",
+    )
+    private val alphaPathFieldPriority = listOf(
+        "build", "sample", "sourceWords", "nativeWordMinPm", "nativeWordMaxPm",
+        "flexToHolderPm", "overlayWordMinPm", "overlayWordMaxPm",
+        "sharedAlphaLayers", "alphaPathValid",
     )
     private val safeType = Regex("[A-Za-z][A-Za-z0-9]{0,45}(?:Exception|Error)")
     private val safeReasons = setOf(
@@ -82,10 +114,18 @@ internal object DiagnosticPrivacyPolicy {
             }
             sanitized?.let { key to it }
         }.toList()
-        val prioritized = if (stage == "linewide_measured_geometry") {
-            layoutFieldPriority.mapNotNull { key -> safeFields.firstOrNull { it.first == key } } +
-                safeFields.filter { it.first !in layoutFieldPriority }
-        } else safeFields
+        val priority = when (stage) {
+            "linewide_measured_geometry" -> layoutFieldPriority
+            "linewide_fallback_geometry" -> fallbackFieldPriority
+            "linewide_multiwrap_geometry" -> multiWrapFieldPriority
+            "linewide_alpha_path" -> alphaPathFieldPriority
+            "linewide_paint_clip" -> overlayClipFieldPriority
+            "meaning_paint_clip" -> overlayClipFieldPriority
+            "softwrap_paint_clip" -> overlayClipFieldPriority
+            else -> emptyList()
+        }
+        val prioritized = priority.mapNotNull { key -> safeFields.firstOrNull { it.first == key } } +
+            safeFields.filter { it.first !in priority }
         val extras = prioritized.take(12).joinToString(" ") { it.second }
         return "stage=$stage" + if (extras.isEmpty()) "" else " $extras"
     }

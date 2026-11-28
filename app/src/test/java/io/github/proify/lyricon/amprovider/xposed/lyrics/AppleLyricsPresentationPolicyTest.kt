@@ -209,6 +209,43 @@ class AppleLyricsPresentationPolicyTest {
     }
 
     @Test
+    fun `restore anchor follows verified native clock during overlapping active rows`() {
+        assertEquals(
+            AppleLyricsRestoreAnchor(position = 17, offset = 182, activePosition = 17),
+            selectAppleLyricsRestoreAnchor(
+                savedPosition = 10, savedOffset = -354,
+                savedActivePosition = 21, savedActiveOffset = 182,
+                currentActivePositions = setOf(17, 18), itemCount = 61,
+                playbackMappedPosition = 17,
+            ),
+        )
+        assertEquals(
+            AppleLyricsRestoreAnchor(position = 18, offset = 182, activePosition = 18),
+            selectAppleLyricsRestoreAnchor(
+                savedPosition = 10, savedOffset = -354,
+                savedActivePosition = 21, savedActiveOffset = 182,
+                currentActivePositions = setOf(17, 18), itemCount = 61,
+                playbackMappedPosition = 18,
+            ),
+        )
+    }
+
+    @Test
+    fun `ambiguous or unrelated overlap mapping preserves saved viewport instead of guessing`() {
+        for (mapped in listOf(null, 19)) {
+            assertEquals(
+                AppleLyricsRestoreAnchor(position = 10, offset = -354, activePosition = null),
+                selectAppleLyricsRestoreAnchor(
+                    savedPosition = 10, savedOffset = -354,
+                    savedActivePosition = 21, savedActiveOffset = 182,
+                    currentActivePositions = setOf(17, 18), itemCount = 61,
+                    playbackMappedPosition = mapped,
+                ),
+            )
+        }
+    }
+
+    @Test
     fun `restore anchor clamps saved first row when active adapter row is unavailable`() {
         assertEquals(
             AppleLyricsRestoreAnchor(position = 3, offset = -354, activePosition = null),

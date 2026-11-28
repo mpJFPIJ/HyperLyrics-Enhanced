@@ -16,6 +16,7 @@ import android.widget.TextView
 import android.view.ViewGroup
 import kotlin.math.abs
 import kotlin.math.ceil
+import kotlin.math.floor
 
 /** Immutable native text geometry from before the soft-wrap painter reserves gaps.
  * Matching only lineCount is unsafe: a recycled word can keep two visual lines
@@ -38,6 +39,60 @@ internal data class AppleSoftWrapResumeGeometry(
 internal enum class AppleSoftWrapResumeDecision { RESUME, WAIT, REBIND }
 
 internal object AppleSoftWrapResumePolicy {
+    /** Resolve non-measured states before constructing an expensive current
+     * source snapshot. A stale owner wins over even a pending layout. */
+    fun preflight(
+        readingAttached: Boolean,
+        sourceAttached: Boolean,
+        holderAttached: Boolean,
+        layoutPending: Boolean,
+        ownerCurrent: Boolean,
+    ): AppleSoftWrapResumeDecision? = when {
+        !ownerCurrent -> AppleSoftWrapResumeDecision.REBIND
+        !readingAttached || !sourceAttached || !holderAttached || layoutPending ->
+            AppleSoftWrapResumeDecision.WAIT
+        else -> null
+    }
+
+    /** The active karaoke pulse may run every 16 ms. A settled, installed
+     * overlay can compare its live source without allocating a String and
+     * List<Pair> geometry snapshot on every frame. Detach, pending layout or
+     * revoked holder ownership must use the full WAIT/REBIND state machine. */
+    inline fun fastInstalled(
+        installed: Boolean,
+        readingAttached: Boolean,
+        sourceAttached: Boolean,
+        holderAttached: Boolean,
+        layoutPending: Boolean,
+        ownerCurrent: Boolean,
+        unchangedSource: () -> Boolean,
+    ): Boolean = installed && readingAttached && sourceAttached && holderAttached &&
+        !layoutPending && ownerCurrent && unchangedSource()
+
+    /** A ViewOverlay can be drawn synchronously by the host after TextView
+     * content changes, before our next scheduled ownership/layout pulse.
+     * Check the live UTF-16 content and line offsets with no per-frame String,
+     * Pair or List allocations before drawing old Hangul beneath new text. */
+    inline fun sameSourceAndLines(
+        savedText: String,
+        currentText: CharSequence,
+        savedLineBounds: List<Pair<Int, Int>>,
+        currentLineCount: Int,
+        getLineStart: (Int) -> Int,
+        getLineEnd: (Int) -> Int,
+    ): Boolean {
+        if (savedText.length != currentText.length ||
+            savedText.indices.any { savedText[it] != currentText[it] } ||
+            savedLineBounds.size != currentLineCount
+        ) return false
+        for (index in savedLineBounds.indices) {
+            if (savedLineBounds[index].first != getLineStart(index) ||
+                savedLineBounds[index].second != getLineEnd(index)
+            ) return false
+        }
+        return true
+    }
+
     /** WAIT is a transient detach/layout; REBIND is a settled stale owner or geometry. */
     fun decision(
         saved: AppleSoftWrapResumeGeometry,
@@ -48,10 +103,9 @@ internal object AppleSoftWrapResumePolicy {
         layoutPending: Boolean,
         ownerCurrent: Boolean,
     ): AppleSoftWrapResumeDecision {
-        if (!ownerCurrent) return AppleSoftWrapResumeDecision.REBIND
-        if (!readingAttached || !sourceAttached || !holderAttached || layoutPending ||
-            current == null
-        ) return AppleSoftWrapResumeDecision.WAIT
+        preflight(readingAttached, sourceAttached, holderAttached, layoutPending, ownerCurrent)
+            ?.let { return it }
+        if (current == null) return AppleSoftWrapResumeDecision.WAIT
         return if (saved.text == current.text && saved.width > 0 &&
             saved.width == current.width && saved.contentWidth > 0 &&
             saved.contentWidth == current.contentWidth &&
@@ -138,9 +192,44 @@ internal class AppleNativeSoftWrapReadingOverlay(
     private val originalGeometry = requireNotNull(currentGeometry()) {
         "Native soft-wrap reading requires a measured source layout"
     }
+    /** Same source + exact UTF-16 Layout boundaries as the slow snapshot
+     * comparison, but reads current properties directly without allocating. */
+    private fun matchesInstalledGeometry(native: Layout): Boolean =
+        native.lineCount == rows.size &&
+            source.width == originalGeometry.width &&
+            (source.width - source.compoundPaddingLeft - source.compoundPaddingRight)
+                .coerceAtLeast(0) == originalGeometry.contentWidth &&
+            source.compoundPaddingLeft == originalGeometry.compoundPaddingLeft &&
+            source.compoundPaddingRight == originalGeometry.compoundPaddingRight &&
+            source.typeface == originalGeometry.typefaceIdentity &&
+            abs(source.textSize - originalGeometry.textSizePx) < 0.5f &&
+            abs(source.letterSpacing - originalGeometry.letterSpacing) < 0.001f &&
+            abs(source.textScaleX - originalGeometry.textScaleX) < 0.001f &&
+            abs(source.lineSpacingExtra -
+                (originalLineSpacingExtra + reservedGapPx)) < 0.5f &&
+            abs(source.lineSpacingMultiplier - originalLineSpacingMultiplier) < 0.01f &&
+            AppleSoftWrapResumePolicy.sameSourceAndLines(
+                savedText = originalGeometry.text,
+                currentText = source.text,
+                savedLineBounds = originalGeometry.lineBounds,
+                currentLineCount = native.lineCount,
+                getLineStart = { native.getLineStart(it) },
+                getLineEnd = { native.getLineEnd(it) },
+            )
     private val paintedRows: List<PaintedRow>
     private val reservedGapPx: Int
+    private val ownership = AppleOverlayPaintOwnership()
+    private val sourceRect = Rect()
+    private val visibleSourceRect = Rect()
+    private val inheritedClip = Rect()
+    private val appliedClip = Rect()
+    private var sampledClip = false
     private var installed = false
+
+    fun bindOwner(check: () -> Boolean) {
+        ownership.bind(check)
+        if (installed) invalidateSelf()
+    }
 
     init {
         require(rows.size > 1 && rows.indices.all { rows[it].insertAfterSourceCell == it })
@@ -218,6 +307,35 @@ internal class AppleNativeSoftWrapReadingOverlay(
             clear()
             return AppleSoftWrapResumeDecision.REBIND
         }
+        // No snapshot comparison is possible during a host layout pass.
+        // The previous path allocated a String and line-bound Pair list on
+        // every active 16-ms pulse just to return WAIT from decision().
+        val preflight = AppleSoftWrapResumePolicy.preflight(
+            readingAttached = readingAttached,
+            sourceAttached = source.isAttachedToWindow,
+            holderAttached = holderRoot.isAttachedToWindow &&
+                holderRoot.width > 0 && holderRoot.height > 0,
+            layoutPending = source.isLayoutRequested || holderRoot.isLayoutRequested,
+            ownerCurrent = ownerCurrent,
+        )
+        if (preflight != null) {
+            if (preflight == AppleSoftWrapResumeDecision.REBIND ||
+                !readingAttached || !source.isAttachedToWindow ||
+                !holderRoot.isAttachedToWindow
+            ) clear()
+            return preflight
+        }
+        if (AppleSoftWrapResumePolicy.fastInstalled(
+                installed = installed,
+                readingAttached = readingAttached,
+                sourceAttached = source.isAttachedToWindow,
+                holderAttached = holderRoot.isAttachedToWindow &&
+                    holderRoot.width > 0 && holderRoot.height > 0,
+                layoutPending = source.isLayoutRequested || holderRoot.isLayoutRequested,
+                ownerCurrent = ownerCurrent,
+        ) {
+                source.layout?.let { matchesInstalledGeometry(it) } == true
+        }) return AppleSoftWrapResumeDecision.RESUME
         // An installed overlay owns an extra line-spacing slot. Compare with
         // that expected spacing, not the pre-install value from the snapshot.
         val expected = if (installed) originalGeometry.copy(
@@ -270,10 +388,19 @@ internal class AppleNativeSoftWrapReadingOverlay(
     /** The last inserted reading child may be below the viewport even while
      * an earlier, internally wrapped Japanese visual row is on screen. */
     fun isSourceVisibleOnScreen(): Boolean = installed && source.isAttachedToWindow &&
-        source.isShown && source.getGlobalVisibleRect(Rect())
+        ownership.isCurrent() && source.isShown &&
+        source.getGlobalVisibleRect(visibleSourceRect)
+
+    /** Shared final-fragment draw gate. The earlier inline fragments already
+     * check these exact live raw UTF-16 characters and native Layout lines;
+     * the last Hangul foreground must not keep drawing an older lyric while
+     * the same holder awaits its posted replacement bind. No snapshots. */
+    fun sourceGeometryCurrentForPaint(): Boolean = installed && ownership.isCurrent() &&
+        !source.isLayoutRequested &&
+        source.layout?.let(::matchesInstalledGeometry) == true
 
     fun refresh(positionMs: Long?) {
-        if (!installed) return
+        if (!installed || !ownership.isCurrent()) return
         val variant = positionMs?.let {
             AppleTimedPronunciationHighlightPolicy.activeVariant(it, timedVariants)
         }
@@ -303,7 +430,10 @@ internal class AppleNativeSoftWrapReadingOverlay(
                     } ?: 0f
                 }
             } ?: 0f
-            val brightness = (if (variant == null) 0.52f else 1f) * nativeOpacity
+            val brightness = AppleHangulReadingPaintPolicy.timedGlyphBrightness(
+                activeVariant = variant != null,
+                glyphHasTimingOwner = owner != null,
+            )
             if (style.measured != geometry ||
                 style.coarseLineClock != (owner?.unit?.isWholeLine == true)
             ) {
@@ -312,10 +442,12 @@ internal class AppleNativeSoftWrapReadingOverlay(
                 changed = true
             }
             if (abs(style.progress - progress) > 0.01f ||
-                abs(style.brightness - brightness) > 0.01f
+                abs(style.brightness - brightness) > 0.01f ||
+                abs(style.opacity - nativeOpacity) > 0.01f
             ) {
                 style.progress = progress
                 style.brightness = brightness
+                style.opacity = nativeOpacity
                 changed = true
             }
         }
@@ -323,29 +455,73 @@ internal class AppleNativeSoftWrapReadingOverlay(
     }
 
     override fun draw(canvas: Canvas) {
-        if (!installed || source.isLayoutRequested || !source.isAttachedToWindow || !source.isShown ||
+        if (!installed || !ownership.isCurrent() || source.isLayoutRequested ||
+            !source.isAttachedToWindow || !source.isShown ||
             !holderRoot.isAttachedToWindow || holderRoot.width <= 0 || holderRoot.height <= 0
         ) return
         val native = source.layout ?: return
-        if (native.lineCount != rows.size) return
-        val rect = Rect(0, 0, source.width, source.height)
+        if (!matchesInstalledGeometry(native)) return
+        val rect = sourceRect.apply { set(0, 0, source.width, source.height) }
         if (runCatching { holderRoot.offsetDescendantRectToMyCoords(source, rect) }.isFailure)
             return
         if (bounds.width() != holderRoot.width || bounds.height() != holderRoot.height)
             setBounds(0, 0, holderRoot.width, holderRoot.height)
+        val inheritedClipVisible = !sampledClip && canvas.getClipBounds(inheritedClip)
         val clipped = canvas.save()
         canvas.clipRect(0, 0, holderRoot.width, holderRoot.height)
+        val sampleAll = inheritedClipVisible && canvas.getClipBounds(appliedClip)
+        var firstInkTop = Int.MAX_VALUE
+        var lastInkBottom = Int.MIN_VALUE
         for (row in paintedRows) {
             val sourceBaseline = native.getLineBaseline(row.visualLine) +
-                rect.top + source.totalPaddingTop - source.scrollY
+                AppleOverlayMappedTextOrigin.top(rect.top, source.totalPaddingTop)
             val inkBottom = sourceBaseline + source.paint.fontMetrics.descent
-            val x = rect.left + source.compoundPaddingLeft - source.scrollX +
+            val x = AppleOverlayMappedTextOrigin.left(rect.left, source.compoundPaddingLeft) +
                 native.getLineLeft(row.visualLine)
             val y = inkBottom + readingTextPx * 0.12f
+            if (sampleAll && row.layout.lineCount > 0) {
+                val metrics = row.layout.paint.fontMetricsInt
+                firstInkTop = minOf(firstInkTop, floor(
+                    y + row.layout.getLineBaseline(0) + metrics.top,
+                ).toInt())
+                lastInkBottom = maxOf(lastInkBottom, ceil(
+                    y + row.layout.getLineBaseline(row.layout.lineCount - 1) + metrics.bottom,
+                ).toInt())
+            }
             val saved = canvas.save()
             canvas.translate(x, y)
             row.layout.draw(canvas)
             canvas.restoreToCount(saved)
+        }
+        if (sampleAll && firstInkTop != Int.MAX_VALUE && lastInkBottom != Int.MIN_VALUE) {
+            sampledClip = true
+            val added = AppleOverlayClipPolicy.addedInkLoss(
+                firstInkTop, lastInkBottom,
+                inheritedClip.top, inheritedClip.bottom,
+                appliedClip.top, appliedClip.bottom,
+            )
+            var transformedAncestors = 0
+            var ancestor: View? = source
+            while (ancestor != null && ancestor !== holderRoot) {
+                if (abs(ancestor.translationX) > 0.01f ||
+                    abs(ancestor.translationY) > 0.01f ||
+                    abs(ancestor.scaleX - 1f) > 0.01f ||
+                    abs(ancestor.scaleY - 1f) > 0.01f ||
+                    abs(ancestor.rotation) > 0.01f
+                ) transformedAncestors++
+                ancestor = ancestor.parent as? View
+            }
+            val summary = "hostH=${holderRoot.height} " +
+                "canvasBeforeTop=${inheritedClip.top} " +
+                "canvasBeforeBottom=${inheritedClip.bottom} " +
+                "canvasAfterTop=${appliedClip.top} " +
+                "canvasAfterBottom=${appliedClip.bottom} " +
+                "inkTop=$firstInkTop inkBottom=$lastInkBottom " +
+                "manualLostTop=${added.topPx} manualLostBottom=${added.bottomPx} " +
+                "transformedAncestors=$transformedAncestors"
+            holderRoot.post {
+                AppleLyricUiRuntimeProbe.record("softwrap_paint_clip", summary, holderRoot)
+            }
         }
         canvas.restoreToCount(clipped)
     }

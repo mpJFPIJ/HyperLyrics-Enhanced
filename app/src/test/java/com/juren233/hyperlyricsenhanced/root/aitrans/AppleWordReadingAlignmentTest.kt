@@ -13,6 +13,106 @@ class AppleWordReadingAlignmentTest {
     private fun span(start: Int, end: Int, text: String, hangul: String) =
         SourceReadingSpan(start, end, text, text, hangul)
 
+    @Test fun supplementaryHanNativeWordRetainsItsVerifiedReadingAndUtf16Offsets() {
+        val result = AppleWordReadingAlignment.align(
+            "𠮟あ", listOf("𠮟", "あ"), listOf(
+                span(0, 2, "𠮟", "시츠"), span(2, 3, "あ", "아"),
+            ), expectedHangul = "시츠아",
+        )
+        assertTrue(result is WordAlignmentResult.Verified)
+        assertEquals(listOf("시츠", "아"),
+            (result as WordAlignmentResult.Verified).words.map { it.hangul })
+    }
+
+    @Test fun missingSupplementaryHanCannotBecomeAnEmptyVerifiedNativeWord() {
+        assertEquals(WordAlignmentResult.LineWide(AlignmentFailure.INVALID_SPANS),
+            AppleWordReadingAlignment.align(
+                "𠮟あ", listOf("𠮟", "あ"), listOf(span(2, 3, "あ", "아")),
+                expectedHangul = "아",
+            ))
+    }
+
+    @Test fun nativeProjectionCannotSkipVoicingMarkBetweenAppleWordCells() {
+        for (mark in listOf("\u3099", "\u309A", "\u309B", "\u309C", "\uFF9E", "\uFF9F")) {
+            val original = "か${mark}て"
+            assertNull(AppleNativeReadingProjection.projectForNativeKaraoke(
+                original = original, appleWords = listOf("か", "て"),
+                spans = listOf(
+                    span(0, 1 + mark.length, "か${mark}", "가"),
+                    span(1 + mark.length, original.length, "て", "테"),
+                ), pronunciation = "가테",
+            ))
+        }
+    }
+
+    @Test fun nativeAlignmentRejectsUncoveredVoicingMarkAndMalformedKoreanSound() {
+        for (mark in listOf("\u3099", "\u309A", "\u309B", "\u309C", "\uFF9E", "\uFF9F")) {
+            val original = "か${mark}"
+            assertEquals(WordAlignmentResult.LineWide(AlignmentFailure.INVALID_SPANS),
+                AppleWordReadingAlignment.align(
+                    original, listOf(original), listOf(span(0, 1, "か", "카")), "카",
+                ))
+            assertTrue(AppleWordReadingAlignment.align(
+                original, listOf(original), listOf(
+                    span(0, original.length, original, "가"),
+                ), "가${mark}",
+            ) is WordAlignmentResult.LineWide)
+            assertNull(AppleNativeReadingProjection.projectForNativeKaraoke(
+                original = original, appleWords = listOf(original),
+                spans = listOf(span(0, original.length, original, "가")),
+                pronunciation = "가${mark}",
+            ))
+        }
+    }
+
+    @Test fun genuineVoicedNativeWordKeepsItsExactAnchoredSound() {
+        for ((original, firstEnd) in listOf("か\u3099て" to 2, "ｶﾞて" to 2)) {
+            val first = original.substring(0, firstEnd)
+            val native = AppleNativeReadingProjection.projectForNativeKaraoke(
+                original = original, appleWords = listOf(first, "て"),
+                spans = listOf(
+                    span(0, firstEnd, first, "가"),
+                    span(firstEnd, original.length, "て", "테"),
+                ), pronunciation = "가테",
+            )
+            assertEquals(listOf("가", "테"), native?.words?.map { it.hangul })
+            assertEquals(false, native?.approximate)
+        }
+    }
+
+    @Test fun separatorCannotHideWrongResidualKanaOnNativeWordClock() {
+        for (source in listOf("あ こ", "あ、こ", "あ！こ")) {
+            assertNull(AppleNativeReadingProjection.projectForNativeKaraoke(
+                original = source, appleWords = listOf("あ", "こ"),
+                spans = emptyList(), pronunciation = "아카",
+            ))
+            val correct = AppleNativeReadingProjection.projectForNativeKaraoke(
+                original = source, appleWords = listOf("あ", "こ"),
+                spans = emptyList(), pronunciation = "아코",
+            )
+            assertEquals(listOf("아", "코"), correct?.words?.map { it.hangul })
+            assertEquals(false, correct?.approximate)
+        }
+        // A Kanji-only residual occupying one actual native word can still
+        // inherit its indivisible word window without a fabricated split.
+        val unknown = AppleNativeReadingProjection.projectForNativeKaraoke(
+            original = "愛 こ", appleWords = listOf("愛", "こ"),
+            spans = emptyList(), pronunciation = "아이코",
+        )
+        assertEquals(listOf("아이", "코"), unknown?.words?.map { it.hangul })
+        assertEquals(true, unknown?.approximate)
+    }
+
+    @Test fun nativeOrPronunciationSpanCannotBisectASupplementaryHan() {
+        val source = "𠮟あ"
+        val half = source.substring(0, 1)
+        assertEquals(WordAlignmentResult.LineWide(AlignmentFailure.SOURCE_MISMATCH),
+            AppleWordReadingAlignment.align(source, listOf(half, source.substring(1)),
+                listOf(span(0, 2, "𠮟", "시츠"), span(2, 3, "あ", "아")),
+                expectedHangul = "시츠아",
+            ))
+    }
+
     @Test fun exactlyContainedSpansFollowNativeWordBoundariesWithoutTimingGuess() {
         val result = AppleWordReadingAlignment.align(
             "駄目駄目脳みそ", listOf("駄目", "駄目", "脳", "みそ"),

@@ -18,6 +18,96 @@ class LocalJapanesePronunciationTest {
         assertNull(LocalJapanesePronunciation.generateLine("未知語") { failed }.text)
     }
 
+    @Test fun dictionaryFailureCannotGuessTheGrammarOfHiraganaHaOrHe() {
+        val failed = LineReadingResult(null, emptyList(), LineReadingStatus.MISSING_UNSUPPORTED)
+        for (source in listOf("きみへ", "きみは", "きみ へ！", "こんばんは", "はる", "へや")) {
+            val result = LocalJapanesePronunciation.generateLine(source) { failed }
+            assertEquals("Without morphology $source has an ambiguous は/へ", failed.status, result.status)
+            assertNull(result.text)
+        }
+        // A narrowly recognized lexical greeting has an independently known
+        // pronunciation; unambiguous kana and Katakana remain available.
+        assertEquals("콘니치와", LocalJapanesePronunciation.generateLine("こんにちは！") { failed }.text)
+        assertEquals("키미", LocalJapanesePronunciation.generateLine("きみ") { failed }.text)
+        assertEquals("하로", LocalJapanesePronunciation.generateLine("ハロー") { failed }.text)
+
+        val context = SourceReadingAssembler.assemble("きみへ", listOf(
+            RawReadingToken(0, 2, "キミ"), RawReadingToken(2, 3, "エ", isParticle = true),
+        ))
+        assertEquals(LineReadingStatus.COMPLETE, context.status)
+        assertEquals("키미에", LocalJapanesePronunciation.generateLine("きみへ") { context }.text)
+    }
+
+    @Test fun halfwidthKanaFallbackPreservesTheOriginalSourceAndUtf16Offsets() {
+        val source = "ﾊﾛｰ ｶﾞ!"
+        val observed = mutableListOf<String>()
+        val failed = LineReadingResult(null, emptyList(), LineReadingStatus.MISSING_UNSUPPORTED)
+        val result = LocalJapanesePronunciation.generateLine(source) { original ->
+            observed += original
+            failed
+        }
+        assertEquals(listOf(source), observed)
+        assertEquals(LineReadingStatus.COMPLETE, result.status)
+        assertEquals("하로 가", result.text)
+        assertEquals(listOf("ﾊﾛｰ", "ｶﾞ"), result.spans.map { it.sourceText })
+        assertEquals(listOf(0 to 3, 4 to 6),
+            result.spans.map { it.sourceStart to it.sourceEnd })
+    }
+
+    @Test fun halfwidthKanaPunctuationSeparatesFallbackWordsWithoutInventingKanji() {
+        val failed = LineReadingResult(null, emptyList(), LineReadingStatus.MISSING_UNSUPPORTED)
+        assertEquals("가 하로",
+            LocalJapanesePronunciation.generateLine("ｶﾞ･ﾊﾛｰ") { failed }.text)
+        val unreadable = LocalJapanesePronunciation.generateLine("ｶﾞ未知") { failed }
+        assertEquals(LineReadingStatus.MISSING_UNSUPPORTED, unreadable.status)
+        assertNull(unreadable.text)
+    }
+
+    @Test fun `kana-only fallback cannot silently skip supplementary Han when dictionary fails`() {
+        val failed = LineReadingResult(null, emptyList(), LineReadingStatus.MISSING_UNSUPPORTED)
+        val mixed = LocalJapanesePronunciation.generateLine("𠮟かな") { failed }
+        assertEquals(LineReadingStatus.MISSING_UNSUPPORTED, mixed.status)
+        assertNull(mixed.text)
+        assertTrue(mixed.spans.isEmpty())
+        val prefixed = LocalJapanesePronunciation.generateLine("かな𠮟") { failed }
+        assertEquals(LineReadingStatus.MISSING_UNSUPPORTED, prefixed.status)
+        assertNull(prefixed.text)
+    }
+
+    @Test fun `supplementary Han is passed intact to the full-line Japanese analyzer`() {
+        val observed = mutableListOf<String>()
+        val source = "𠮟"
+        val result = LocalJapanesePronunciation.generateLine(source) { whole ->
+            observed += whole
+            LineReadingResult(
+                text = "시카",
+                spans = listOf(SourceReadingSpan(0, source.length, source, "シカ", "시카")),
+                status = LineReadingStatus.COMPLETE,
+            )
+        }
+        assertEquals(listOf(source), observed)
+        assertEquals(LineReadingStatus.COMPLETE, result.status)
+        assertEquals("시카", result.text)
+        assertEquals(0 to 2, result.spans.single().let { it.sourceStart to it.sourceEnd })
+    }
+
+    @Test fun `legacy Japanese reading does not drop supplementary Han beside English words`() {
+        val analyzer: (String) -> String? = { when (it) {
+            "𠮟" -> "シカ"
+            else -> null
+        } }
+        assertEquals("시카", LocalJapanesePronunciation.generate(listOf("𠮟"), analyzer)
+            .single().roma)
+        assertEquals("시카 아이 러브 유", LocalJapanesePronunciation.generate(
+            listOf("𠮟 I love you"), analyzer,
+        ).single().roma)
+        // If the source glyph is unknown, the English words may not be
+        // presented as a complete pronunciation of this Japanese lyric.
+        assertTrue(LocalJapanesePronunciation.generate(
+            listOf("𠮟 I love you"), { null },
+        ).isEmpty())
+    }
+
     @Test fun canonicalReadingAnalyzesJapaneseOriginalOnceNotEachWord() {
         val source = "駄目駄目脳みその中から"
         val observed = mutableListOf<String>()

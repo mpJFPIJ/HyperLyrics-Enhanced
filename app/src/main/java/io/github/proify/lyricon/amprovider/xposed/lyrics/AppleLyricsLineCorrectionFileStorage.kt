@@ -10,6 +10,14 @@ import android.util.AtomicFile
 import java.io.File
 import java.io.IOException
 
+/** Android's legacy AtomicFile backup is a recoverable owner, not a missing song. */
+internal object AppleLyricsAtomicBackupPolicy {
+    fun readableSource(base: File): File? {
+        val backup = File(base.path + ".bak")
+        return backup.takeIf(File::exists) ?: base.takeIf(File::exists)
+    }
+}
+
 /** Private host-side persistence; Context.noBackupFilesDir is excluded from Auto Backup. */
 internal class AppleLyricsLineCorrectionFileStorage(application: Application) :
     AppleLyricsLineCorrectionStore.Storage {
@@ -18,8 +26,20 @@ internal class AppleLyricsLineCorrectionFileStorage(application: Application) :
 
     override fun read(key: String): String? {
         val file = target(key)
-        if (!file.exists() || file.length() > MAX_STORED_BYTES) return null
-        return AtomicFile(file).readFully().toString(Charsets.UTF_8)
+        // Android AtomicFile may restore its legacy .bak even if the base
+        // file is absent. Checking only base.exists() would mistake that
+        // recoverable user data for an empty song and overwrite it.
+        val readableFile = AppleLyricsAtomicBackupPolicy.readableSource(file) ?: return null
+        // Oversized existing data is damaged/unsupported, not a nonexistent
+        // song. Returning null would let the next edit overwrite it as empty.
+        if (readableFile.length() > MAX_STORED_BYTES) {
+            throw IOException("Existing lyric correction exceeds private storage limit")
+        }
+        val contents = AtomicFile(file).readFully()
+        if (contents.size > MAX_STORED_BYTES) {
+            throw IOException("Restored lyric correction exceeds private storage limit")
+        }
+        return contents.toString(Charsets.UTF_8)
     }
 
     override fun write(key: String, content: String?) {

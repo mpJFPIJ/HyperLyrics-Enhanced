@@ -6,10 +6,14 @@ import android.graphics.Paint
 import android.graphics.PixelFormat
 import android.graphics.Rect
 import android.graphics.drawable.Drawable
+import android.graphics.text.LineBreakConfig
+import android.graphics.text.LineBreaker
+import android.os.LocaleList
 import android.text.Layout
 import android.text.SpannableString
 import android.text.Spanned
 import android.text.StaticLayout
+import android.text.TextDirectionHeuristics
 import android.text.TextPaint
 import android.view.View
 import android.widget.TextView
@@ -34,7 +38,38 @@ internal data class AppleSoftWrapResumeGeometry(
     val compoundPaddingRight: Int = 0,
     val letterSpacing: Float = 0f,
     val textScaleX: Float = 1f,
+    val textLocaleTags: String = "",
+    val fontFeatureSettings: String? = null,
+    val fontVariationSettings: String? = null,
+    val includeFontPadding: Boolean = true,
+    val elegantTextHeight: Boolean = false,
+    val breakStrategy: Int = LineBreaker.BREAK_STRATEGY_SIMPLE,
+    val hyphenationFrequency: Int = Layout.HYPHENATION_FREQUENCY_NONE,
+    val justificationMode: Int = Layout.JUSTIFICATION_MODE_NONE,
+    val textDirection: Int = View.TEXT_DIRECTION_INHERIT,
+    val lineBreakStyle: Int = LineBreakConfig.LINE_BREAK_STYLE_NONE,
+    val lineBreakWordStyle: Int = LineBreakConfig.LINE_BREAK_WORD_STYLE_NONE,
 )
+
+/** Keep the internal StaticLayout identical to the visible ReadingView's
+ * Korean typography and paragraph-breaking contract. */
+internal object AppleSoftWrapReadingLayoutPolicy {
+    const val READING_LOCALE_TAG = "ko-KR"
+    const val INCLUDE_FONT_PADDING = true
+    const val USE_FALLBACK_LINE_SPACING = true
+    const val BREAK_STRATEGY = LineBreaker.BREAK_STRATEGY_HIGH_QUALITY
+    const val HYPHENATION_FREQUENCY = Layout.HYPHENATION_FREQUENCY_NONE
+    const val LINE_BREAK_WORD_STYLE = LineBreakConfig.LINE_BREAK_WORD_STYLE_PHRASE
+
+    fun readingTop(
+        sourceLineBottomWithReservedGap: Int,
+        reservedGapPx: Int,
+        topMarginPx: Int,
+    ): Int {
+        require(reservedGapPx >= 0 && topMarginPx >= 0)
+        return sourceLineBottomWithReservedGap - reservedGapPx + topMarginPx
+    }
+}
 
 internal enum class AppleSoftWrapResumeDecision { RESUME, WAIT, REBIND }
 
@@ -117,7 +152,18 @@ internal object AppleSoftWrapResumePolicy {
             abs(saved.lineSpacingExtra - current.lineSpacingExtra) < 0.5f &&
             abs(saved.lineSpacingMultiplier - current.lineSpacingMultiplier) < 0.01f &&
             abs(saved.letterSpacing - current.letterSpacing) < 0.001f &&
-            abs(saved.textScaleX - current.textScaleX) < 0.001f
+            abs(saved.textScaleX - current.textScaleX) < 0.001f &&
+            saved.textLocaleTags == current.textLocaleTags &&
+            saved.fontFeatureSettings == current.fontFeatureSettings &&
+            saved.fontVariationSettings == current.fontVariationSettings &&
+            saved.includeFontPadding == current.includeFontPadding &&
+            saved.elegantTextHeight == current.elegantTextHeight &&
+            saved.breakStrategy == current.breakStrategy &&
+            saved.hyphenationFrequency == current.hyphenationFrequency &&
+            saved.justificationMode == current.justificationMode &&
+            saved.textDirection == current.textDirection &&
+            saved.lineBreakStyle == current.lineBreakStyle &&
+            saved.lineBreakWordStyle == current.lineBreakWordStyle
         ) AppleSoftWrapResumeDecision.RESUME else AppleSoftWrapResumeDecision.REBIND
     }
 
@@ -164,6 +210,12 @@ internal class AppleNativeSoftWrapReadingOverlay(
     private val paint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
         textSize = readingTextPx
         typeface = source.typeface
+        // The reading is Korean even when Apple's source TextView uses a
+        // Japanese locale. Make fallback selection and its line metrics
+        // deterministic for every injected pronunciation row.
+        setTextLocales(LocaleList.forLanguageTags(
+            AppleSoftWrapReadingLayoutPolicy.READING_LOCALE_TAG,
+        ))
         color = android.graphics.Color.rgb(110, 110, 110)
     }
     private val measuredWidth = (source.width - source.compoundPaddingLeft -
@@ -186,6 +238,17 @@ internal class AppleNativeSoftWrapReadingOverlay(
             compoundPaddingRight = source.compoundPaddingRight,
             letterSpacing = source.letterSpacing,
             textScaleX = source.textScaleX,
+            textLocaleTags = source.textLocales.toLanguageTags(),
+            fontFeatureSettings = source.fontFeatureSettings,
+            fontVariationSettings = source.fontVariationSettings,
+            includeFontPadding = source.includeFontPadding,
+            elegantTextHeight = source.elegantTextHeight,
+            breakStrategy = source.breakStrategy,
+            hyphenationFrequency = source.hyphenationFrequency,
+            justificationMode = source.justificationMode,
+            textDirection = source.textDirection,
+            lineBreakStyle = source.lineBreakStyle,
+            lineBreakWordStyle = source.lineBreakWordStyle,
         )
     }
 
@@ -208,6 +271,17 @@ internal class AppleNativeSoftWrapReadingOverlay(
             abs(source.lineSpacingExtra -
                 (originalLineSpacingExtra + reservedGapPx)) < 0.5f &&
             abs(source.lineSpacingMultiplier - originalLineSpacingMultiplier) < 0.01f &&
+            source.textLocales.toLanguageTags() == originalGeometry.textLocaleTags &&
+            source.fontFeatureSettings == originalGeometry.fontFeatureSettings &&
+            source.fontVariationSettings == originalGeometry.fontVariationSettings &&
+            source.includeFontPadding == originalGeometry.includeFontPadding &&
+            source.elegantTextHeight == originalGeometry.elegantTextHeight &&
+            source.breakStrategy == originalGeometry.breakStrategy &&
+            source.hyphenationFrequency == originalGeometry.hyphenationFrequency &&
+            source.justificationMode == originalGeometry.justificationMode &&
+            source.textDirection == originalGeometry.textDirection &&
+            source.lineBreakStyle == originalGeometry.lineBreakStyle &&
+            source.lineBreakWordStyle == originalGeometry.lineBreakWordStyle &&
             AppleSoftWrapResumePolicy.sameSourceAndLines(
                 savedText = originalGeometry.text,
                 currentText = source.text,
@@ -249,7 +323,24 @@ internal class AppleNativeSoftWrapReadingOverlay(
                 text, 0, text.length, TextPaint(paint), measuredWidth,
             )
                 .setAlignment(Layout.Alignment.ALIGN_NORMAL)
-                .setIncludePad(false)
+                // Match ReadingView: include font padding, high-quality breaks,
+                // no hyphenation, Korean locale and phrase-aware word breaks.
+                .setIncludePad(AppleSoftWrapReadingLayoutPolicy.INCLUDE_FONT_PADDING)
+                .setBreakStrategy(AppleSoftWrapReadingLayoutPolicy.BREAK_STRATEGY)
+                .setHyphenationFrequency(
+                    AppleSoftWrapReadingLayoutPolicy.HYPHENATION_FREQUENCY,
+                )
+                .setUseLineSpacingFromFallbacks(
+                    AppleSoftWrapReadingLayoutPolicy.USE_FALLBACK_LINE_SPACING,
+                )
+                .setTextDirection(TextDirectionHeuristics.FIRSTSTRONG_LTR)
+                .setLineBreakConfig(
+                    LineBreakConfig.Builder()
+                        .setLineBreakWordStyle(
+                            AppleSoftWrapReadingLayoutPolicy.LINE_BREAK_WORD_STYLE,
+                        )
+                        .build(),
+                )
                 .build()
             PaintedRow(
                 visualLine = row.insertAfterSourceCell,
@@ -466,66 +557,92 @@ internal class AppleNativeSoftWrapReadingOverlay(
             return
         if (bounds.width() != holderRoot.width || bounds.height() != holderRoot.height)
             setBounds(0, 0, holderRoot.width, holderRoot.height)
+
         val inheritedClipVisible = !sampledClip && canvas.getClipBounds(inheritedClip)
         val clipped = canvas.save()
-        canvas.clipRect(0, 0, holderRoot.width, holderRoot.height)
-        val sampleAll = inheritedClipVisible && canvas.getClipBounds(appliedClip)
-        var firstInkTop = Int.MAX_VALUE
-        var lastInkBottom = Int.MIN_VALUE
-        for (row in paintedRows) {
-            val sourceBaseline = native.getLineBaseline(row.visualLine) +
-                AppleOverlayMappedTextOrigin.top(rect.top, source.totalPaddingTop)
-            val inkBottom = sourceBaseline + source.paint.fontMetrics.descent
-            val x = AppleOverlayMappedTextOrigin.left(rect.left, source.compoundPaddingLeft) +
-                native.getLineLeft(row.visualLine)
-            val y = inkBottom + readingTextPx * 0.12f
-            if (sampleAll && row.layout.lineCount > 0) {
-                val metrics = row.layout.paint.fontMetricsInt
-                firstInkTop = minOf(firstInkTop, floor(
-                    y + row.layout.getLineBaseline(0) + metrics.top,
-                ).toInt())
-                lastInkBottom = maxOf(lastInkBottom, ceil(
-                    y + row.layout.getLineBaseline(row.layout.lineCount - 1) + metrics.bottom,
-                ).toInt())
-            }
-            val saved = canvas.save()
-            canvas.translate(x, y)
-            row.layout.draw(canvas)
-            canvas.restoreToCount(saved)
-        }
-        if (sampleAll && firstInkTop != Int.MAX_VALUE && lastInkBottom != Int.MIN_VALUE) {
-            sampledClip = true
-            val added = AppleOverlayClipPolicy.addedInkLoss(
-                firstInkTop, lastInkBottom,
-                inheritedClip.top, inheritedClip.bottom,
-                appliedClip.top, appliedClip.bottom,
+        try {
+            canvas.clipRect(0, 0, holderRoot.width, holderRoot.height)
+            val sampleAll = inheritedClipVisible && canvas.getClipBounds(appliedClip)
+            var firstInkTop = Int.MAX_VALUE
+            var lastInkBottom = Int.MIN_VALUE
+            val sourceTop = AppleOverlayMappedTextOrigin.top(
+                rect.top, source.totalPaddingTop,
             )
-            var transformedAncestors = 0
-            var ancestor: View? = source
-            while (ancestor != null && ancestor !== holderRoot) {
-                if (abs(ancestor.translationX) > 0.01f ||
-                    abs(ancestor.translationY) > 0.01f ||
-                    abs(ancestor.scaleX - 1f) > 0.01f ||
-                    abs(ancestor.scaleY - 1f) > 0.01f ||
-                    abs(ancestor.rotation) > 0.01f
-                ) transformedAncestors++
-                ancestor = ancestor.parent as? View
+            for (row in paintedRows) {
+                // getLineBottom reflects the source Layout's real line box,
+                // including fallback-font ascent/descent and its original
+                // line-spacing policy. setLineSpacing added reservedGapPx to
+                // this boundary, so remove exactly that reservation before
+                // placing the Korean row underneath the native Japanese line.
+                val sourceLineBottom = native.getLineBottom(row.visualLine) + sourceTop
+                val y = AppleSoftWrapReadingLayoutPolicy.readingTop(
+                    sourceLineBottomWithReservedGap = sourceLineBottom,
+                    reservedGapPx = reservedGapPx,
+                    topMarginPx = ceil(readingTextPx * 0.12f).toInt(),
+                ).toFloat()
+                val x = AppleOverlayMappedTextOrigin.left(
+                    rect.left, source.compoundPaddingLeft,
+                ) + native.getLineLeft(row.visualLine)
+                if (sampleAll && row.layout.lineCount > 0) {
+                    firstInkTop = minOf(
+                        firstInkTop,
+                        floor(y + row.layout.getLineTop(0)).toInt(),
+                    )
+                    lastInkBottom = maxOf(
+                        lastInkBottom,
+                        ceil(y + row.layout.getLineBottom(
+                            row.layout.lineCount - 1,
+                        )).toInt(),
+                    )
+                }
+                val saved = canvas.save()
+                try {
+                    canvas.translate(x, y)
+                    row.layout.draw(canvas)
+                } finally {
+                    canvas.restoreToCount(saved)
+                }
             }
-            val summary = "hostH=${holderRoot.height} " +
-                "canvasBeforeTop=${inheritedClip.top} " +
-                "canvasBeforeBottom=${inheritedClip.bottom} " +
-                "canvasAfterTop=${appliedClip.top} " +
-                "canvasAfterBottom=${appliedClip.bottom} " +
-                "inkTop=$firstInkTop inkBottom=$lastInkBottom " +
-                "manualLostTop=${added.topPx} manualLostBottom=${added.bottomPx} " +
-                "transformedAncestors=$transformedAncestors"
-            holderRoot.post {
-                AppleLyricUiRuntimeProbe.record("softwrap_paint_clip", summary, holderRoot)
+            if (sampleAll && firstInkTop != Int.MAX_VALUE &&
+                lastInkBottom != Int.MIN_VALUE
+            ) {
+                sampledClip = true
+                val added = AppleOverlayClipPolicy.addedInkLoss(
+                    firstInkTop, lastInkBottom,
+                    inheritedClip.top, inheritedClip.bottom,
+                    appliedClip.top, appliedClip.bottom,
+                )
+                var transformedAncestors = 0
+                var ancestor: View? = source
+                while (ancestor != null && ancestor !== holderRoot) {
+                    if (abs(ancestor.translationX) > 0.01f ||
+                        abs(ancestor.translationY) > 0.01f ||
+                        abs(ancestor.scaleX - 1f) > 0.01f ||
+                        abs(ancestor.scaleY - 1f) > 0.01f ||
+                        abs(ancestor.rotation) > 0.01f
+                    ) transformedAncestors++
+                    ancestor = ancestor.parent as? View
+                }
+                val summary = "hostH=${holderRoot.height} " +
+                    "canvasBeforeTop=${inheritedClip.top} " +
+                    "canvasBeforeBottom=${inheritedClip.bottom} " +
+                    "canvasAfterTop=${appliedClip.top} " +
+                    "canvasAfterBottom=${appliedClip.bottom} " +
+                    "inkTop=$firstInkTop inkBottom=$lastInkBottom " +
+                    "manualLostTop=${added.topPx} manualLostBottom=${added.bottomPx} " +
+                    "transformedAncestors=$transformedAncestors"
+                holderRoot.post {
+                    AppleLyricUiRuntimeProbe.record(
+                        "softwrap_paint_clip", summary, holderRoot,
+                    )
+                }
             }
+        } finally {
+            // A failed glyph draw must never leak a translation or clip into
+            // Apple's subsequent native word/translation drawing operations.
+            canvas.restoreToCount(clipped)
         }
-        canvas.restoreToCount(clipped)
     }
-
     override fun setAlpha(alpha: Int) = Unit
     override fun setColorFilter(colorFilter: ColorFilter?) = Unit
     @Suppress("DEPRECATION")
